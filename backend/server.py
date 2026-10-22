@@ -1,0 +1,1525 @@
+from dotenv import load_dotenv
+from pathlib import Path
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+import os
+import logging
+import uuid
+import hmac
+import json
+import re
+import bcrypt
+import jwt as pyjwt
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Any, Dict
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, Header, BackgroundTasks
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
+from pydantic import BaseModel, Field, EmailStr
+import stripe
+
+# ------------------------------------------------------------
+# Setup
+# ------------------------------------------------------------
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
+JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me')
+JWT_ALGO = 'HS256'
+MAX_LOGO = 700_000  # ~500KB binary -> ~700KB base64
+
+APP_ENV = os.environ.get('APP_ENV', 'prod')
+IS_PROD = APP_ENV == 'prod'
+
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        'ALLOWED_ORIGINS',
+        'http://localhost:3000,http://127.0.0.1:3000'
+    ).split(',') if o.strip()
+]
+
+app = FastAPI(title="OMNIREPMAX API")
+api = APIRouter(prefix="/api")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("omnirepmax")
+
+@app.get("/health")
+async def health_root():
+    return {"status": "ok"}
+
+@app.get("/api/health")
+async def health_api():
+    return {"status": "ok"}
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+MESES_PT = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
+}
+MESES_ABR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+             "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+def iso(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None: return None
+    if isinstance(dt, str): return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+def new_id() -> str:
+    return str(uuid.uuid4())
+
+def hash_pw(p: str) -> str:
+    return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+
+def verify_pw(p: str, h: str) -> bool:
+    try: return bcrypt.checkpw(p.encode(), h.encode())
+    except Exception: return False
+
+def make_token(user: dict) -> str:
+    payload = {"sub": user["id"], "email": user["email"],
+               "role": user.get("role", "representante"),
+               "tenant_id": user.get("tenant_id", user["id"]),
+               "exp": now_utc() + timedelta(days=7), "type": "access"}
+    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
+
+def clean_doc(doc: dict) -> dict:
+    if doc and "_id" in doc: doc.pop("_id", None)
+    return doc
+
+def tid_of(current: dict) -> str:
+    return current.get("tenant_id") or current["id"]
+
+def _parse_date(s):
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d
+    except Exception:
+        return None
+
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("access_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "): token = auth[7:]
+    if not token: raise HTTPException(401, "Não autenticado")
+    try: payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+    except pyjwt.ExpiredSignatureError: raise HTTPException(401, "Token expirado")
+    except pyjwt.InvalidTokenError: raise HTTPException(401, "Token inválido")
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    if not user: raise HTTPException(401, "Usuário não encontrado")
+    user["tenant_id"] = user.get("tenant_id") or user["id"]
+    return user
+
+async def t_list(name: str, current: dict, filters: Optional[dict] = None,
+                 sort_key: str = "created_at", limit: int = 1000):
+    q: Dict[str, Any] = {"tenant_id": tid_of(current)}
+    if filters: q.update(filters)
+    cursor = db[name].find(q, {"_id": 0}).sort(sort_key, -1).limit(limit)
+    return [clean_doc(d) async for d in cursor]
+
+async def t_insert(name: str, current: dict, data: dict) -> dict:
+    data["id"] = new_id()
+    data["tenant_id"] = tid_of(current)
+    data["created_at"] = iso(now_utc())
+    data["updated_at"] = iso(now_utc())
+    await db[name].insert_one(data)
+    return {k: v for k, v in data.items() if k != "_id"}
+
+async def t_update(name: str, current: dict, id_: str, updates: dict) -> dict:
+    tid = tid_of(current)
+    updates["updated_at"] = iso(now_utc())
+    res = await db[name].update_one({"id": id_, "tenant_id": tid}, {"$set": updates})
+    if res.matched_count == 0: raise HTTPException(404, "Não encontrado")
+    doc = await db[name].find_one({"id": id_, "tenant_id": tid}, {"_id": 0})
+    return doc
+
+async def t_delete(name: str, current: dict, id_: str):
+    res = await db[name].delete_one({"id": id_, "tenant_id": tid_of(current)})
+    if res.deleted_count == 0: raise HTTPException(404, "Não encontrado")
+    return {"ok": True}
+
+async def next_numero(tid: str, prefix: str, name: str) -> str:
+    res = await db.counters.find_one_and_update(
+        {"tenant_id": tid, "name": name},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return f"{prefix}-{int(res['seq']):05d}"
+
+# ------------------------------------------------------------
+# Models
+# ------------------------------------------------------------
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class SignupIn(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+    empresa: Optional[str] = ""
+    telefone: Optional[str] = ""
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    logo: Optional[str] = None
+    empresa: Optional[str] = None
+    telefone: Optional[str] = None
+
+class RepresentadaIn(BaseModel):
+    razao_social: str
+    nome_fantasia: Optional[str] = ""
+    cnpj: Optional[str] = ""
+    inscricao_estadual: Optional[str] = ""
+    segmento: Optional[str] = ""
+    endereco: Optional[str] = ""
+    cidade: Optional[str] = ""
+    estado: Optional[str] = ""
+    cep: Optional[str] = ""
+    telefone: Optional[str] = ""
+    whatsapp: Optional[str] = ""
+    email: Optional[str] = ""
+    site: Optional[str] = ""
+    contato_nome: Optional[str] = ""
+    contato_cargo: Optional[str] = ""
+    comissao_padrao: float = 5.0
+    prazo_pagamento: Optional[str] = "30 dias"
+    logo: Optional[str] = ""
+    observacoes: Optional[str] = ""
+
+class ClienteIn(BaseModel):
+    razao_social: str
+    nome_fantasia: Optional[str] = ""
+    cnpj_cpf: Optional[str] = ""
+    inscricao_estadual: Optional[str] = ""
+    segmento: Optional[str] = ""
+    grupo_economico: Optional[str] = ""
+    endereco: Optional[str] = ""
+    cidade: Optional[str] = ""
+    estado: Optional[str] = ""
+    cep: Optional[str] = ""
+    telefone: Optional[str] = ""
+    whatsapp: Optional[str] = ""
+    email: Optional[str] = ""
+    site: Optional[str] = ""
+    responsavel: Optional[str] = ""
+    cargo: Optional[str] = ""
+    origem: Optional[str] = ""
+    status: str = "ativo"
+    potencial: Optional[str] = "medio"
+    representadas: List[str] = []
+    observacoes: Optional[str] = ""
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+class ProdutoIn(BaseModel):
+    nome: str
+    codigo: Optional[str] = ""
+    ean: Optional[str] = ""
+    sku: Optional[str] = ""
+    descricao: Optional[str] = ""
+    categoria: Optional[str] = ""
+    subcategoria: Optional[str] = ""
+    marca: Optional[str] = ""
+    representada_id: Optional[str] = ""
+    preco_tabela: float = 0.0
+    preco_sugerido: float = 0.0
+    custo: float = 0.0
+    comissao: Optional[float] = None
+    ncm: Optional[str] = ""
+    unidade: Optional[str] = "UN"
+    embalagem: Optional[str] = ""
+    qtd_por_caixa: Optional[int] = 1
+    peso: Optional[float] = 0.0
+    dimensoes: Optional[str] = ""
+    status: str = "ativo"
+    imagem: Optional[str] = ""
+    observacoes: Optional[str] = ""
+
+class PedidoItemIn(BaseModel):
+    produto_id: str
+    nome: str
+    descricao: Optional[str] = ""
+    quantidade: float
+    preco_unitario: float
+    desconto: float = 0.0
+
+class PedidoIn(BaseModel):
+    cliente_id: str
+    representada_id: str
+    condicao_pagamento: Optional[str] = "30 dias"
+    prazo_entrega: Optional[str] = ""
+    transportadora: Optional[str] = ""
+    frete: float = 0.0
+    desconto_geral: float = 0.0
+    observacoes: Optional[str] = ""
+    itens: List[PedidoItemIn]
+    status: str = "rascunho"
+
+class OportunidadeIn(BaseModel):
+    titulo: str
+    cliente_id: str
+    representada_id: Optional[str] = ""
+    valor_estimado: float = 0.0
+    probabilidade: int = 50
+    data_prevista: Optional[str] = ""
+    estagio: str = "prospeccao"
+    proxima_acao: Optional[str] = ""
+    observacoes: Optional[str] = ""
+
+class VisitaIn(BaseModel):
+    cliente_id: str
+    representada_id: Optional[str] = ""
+    tipo: str = "visita"
+    data: str
+    horario: Optional[str] = ""
+    objetivo: Optional[str] = ""
+    resultado: Optional[str] = ""
+    proxima_acao: Optional[str] = ""
+    observacoes: Optional[str] = ""
+    status: str = "agendada"
+
+class ARIn(BaseModel):
+    cliente_id: Optional[str] = ""
+    representada_id: Optional[str] = ""
+    pedido_id: Optional[str] = ""
+    numero_documento: Optional[str] = ""
+    valor: float
+    vencimento: str
+    data_recebimento: Optional[str] = ""
+    status: str = "aberto"
+    forma_pagamento: Optional[str] = ""
+    observacoes: Optional[str] = ""
+
+class APIn(BaseModel):
+    descricao: str
+    categoria: str
+    fornecedor: Optional[str] = ""
+    valor: float
+    vencimento: str
+    data_pagamento: Optional[str] = ""
+    forma_pagamento: Optional[str] = ""
+    status: str = "aberto"
+    observacoes: Optional[str] = ""
+
+class ComissaoUpdate(BaseModel):
+    status: Optional[str] = None
+    data_pagamento: Optional[str] = None
+    valor_recebido: Optional[float] = None
+
+class ChatIn(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, str]]] = []
+
+# ------------------------------------------------------------
+# Auth
+# ------------------------------------------------------------
+def set_cookies(response: Response, token: str):
+    response.set_cookie(
+        "access_token", token,
+        httponly=True,
+        secure=IS_PROD,
+        samesite="none" if IS_PROD else "lax",
+        max_age=604800,
+        path="/",
+    )
+
+@api.post("/auth/signup")
+async def signup(body: SignupIn, response: Response):
+    if len(body.password) < 8:
+        raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
+    email = body.email.lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(400, "E-mail já cadastrado")
+    uid = new_id()
+    user = {
+        "id": uid,
+        "tenant_id": uid,
+        "email": email,
+        "name": body.name,
+        "empresa": body.empresa or "",
+        "telefone": body.telefone or "",
+        "role": "admin",
+        "plan": "trial",
+        "trial_ends_at": iso(now_utc() + timedelta(days=7)),
+        "password_hash": hash_pw(body.password),
+        "created_at": iso(now_utc()),
+    }
+    await db.users.insert_one(user)
+    token = make_token(user)
+    set_cookies(response, token)
+    return {"user": {k: v for k, v in user.items() if k not in ("password_hash", "_id")}, "token": token}
+
+@api.post("/auth/login")
+async def login(body: LoginIn, response: Response):
+    email = body.email.lower()
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_pw(body.password, user["password_hash"]):
+        raise HTTPException(401, "Credenciais inválidas")
+    token = make_token(user)
+    set_cookies(response, token)
+    user = clean_doc(user); user.pop("password_hash", None)
+    user["tenant_id"] = user.get("tenant_id") or user["id"]
+    return {"user": user, "token": token}
+
+@api.get("/auth/me")
+async def me(current=Depends(get_current_user)):
+    return current
+
+@api.patch("/auth/me")
+async def update_me(body: UserProfileUpdate, current=Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "logo" in updates and updates["logo"] and len(updates["logo"]) > MAX_LOGO:
+        raise HTTPException(413, "Logo muito grande. Máximo ~500KB.")
+    if not updates: return current
+    await db.users.update_one({"id": current["id"]}, {"$set": updates})
+    doc = await db.users.find_one({"id": current["id"]}, {"_id": 0, "password_hash": 0})
+    doc["tenant_id"] = doc.get("tenant_id") or doc["id"]
+    return doc
+
+@api.post("/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie("access_token", path="/")
+    return {"ok": True}
+
+@api.post("/auth/forgot-password")
+async def forgot(body: dict):
+    email = (body.get("email") or "").lower()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        return {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
+    token = new_id()
+    await db.password_resets.insert_one({
+        "token": token, "user_id": user["id"],
+        "expires_at": iso(now_utc() + timedelta(hours=1)),
+        "used": False,
+    })
+    if not IS_PROD:
+        return {"ok": True, "token": token,
+                "message": "DEV: use este token para testar."}
+    return {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
+
+@api.post("/auth/reset-password")
+async def reset_pw(body: dict):
+    token = body.get("token"); new_password = body.get("password")
+    if not token or not new_password or len(new_password) < 8:
+        raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
+    rec = await db.password_resets.find_one({"token": token, "used": False})
+    if not rec: raise HTTPException(400, "Token inválido ou já usado")
+    exp = _parse_date(rec.get("expires_at"))
+    if not exp or exp < now_utc():
+        raise HTTPException(400, "Token expirado")
+    await db.users.update_one({"id": rec["user_id"]}, {"$set": {"password_hash": hash_pw(new_password)}})
+    await db.password_resets.update_one({"token": token}, {"$set": {"used": True}})
+    return {"ok": True}
+
+# ------------------------------------------------------------
+# Representadas
+# ------------------------------------------------------------
+@api.get("/representadas")
+async def get_representadas(current=Depends(get_current_user)):
+    return await t_list("representadas", current)
+
+@api.post("/representadas")
+async def create_representada(body: RepresentadaIn, current=Depends(get_current_user)):
+    data = body.model_dump()
+    if data.get("logo") and len(data["logo"]) > MAX_LOGO:
+        raise HTTPException(413, "Logo muito grande.")
+    return await t_insert("representadas", current, data)
+
+@api.put("/representadas/{rid}")
+async def update_representada(rid: str, body: RepresentadaIn, current=Depends(get_current_user)):
+    data = body.model_dump()
+    if data.get("logo") and len(data["logo"]) > MAX_LOGO:
+        raise HTTPException(413, "Logo muito grande.")
+    return await t_update("representadas", current, rid, data)
+
+@api.delete("/representadas/{rid}")
+async def del_representada(rid: str, current=Depends(get_current_user)):
+    return await t_delete("representadas", current, rid)
+
+# ------------------------------------------------------------
+# Clientes
+# ------------------------------------------------------------
+@api.get("/clientes")
+async def get_clientes(status: Optional[str] = None, representada_id: Optional[str] = None,
+                       current=Depends(get_current_user)):
+    f: Dict[str, Any] = {}
+    if status: f["status"] = status
+    if representada_id: f["representadas"] = representada_id
+    return await t_list("clientes", current, f)
+
+@api.post("/clientes")
+async def create_cliente(body: ClienteIn, current=Depends(get_current_user)):
+    return await t_insert("clientes", current, body.model_dump())
+
+@api.put("/clientes/{cid}")
+async def update_cliente(cid: str, body: ClienteIn, current=Depends(get_current_user)):
+    return await t_update("clientes", current, cid, body.model_dump())
+
+@api.delete("/clientes/{cid}")
+async def del_cliente(cid: str, current=Depends(get_current_user)):
+    return await t_delete("clientes", current, cid)
+
+# ------------------------------------------------------------
+# Produtos
+# ------------------------------------------------------------
+@api.get("/produtos")
+async def get_produtos(representada_id: Optional[str] = None, categoria: Optional[str] = None,
+                       current=Depends(get_current_user)):
+    f: Dict[str, Any] = {}
+    if representada_id: f["representada_id"] = representada_id
+    if categoria: f["categoria"] = categoria
+    return await t_list("produtos", current, f)
+
+@api.post("/produtos")
+async def create_produto(body: ProdutoIn, current=Depends(get_current_user)):
+    return await t_insert("produtos", current, body.model_dump())
+
+@api.put("/produtos/{pid}")
+async def update_produto(pid: str, body: ProdutoIn, current=Depends(get_current_user)):
+    return await t_update("produtos", current, pid, body.model_dump())
+
+@api.delete("/produtos/{pid}")
+async def del_produto(pid: str, current=Depends(get_current_user)):
+    return await t_delete("produtos", current, pid)
+
+# ------------------------------------------------------------
+# Pedidos
+# ------------------------------------------------------------
+def calc_pedido_totals(data: dict, repr_comissao: float) -> dict:
+    subtotal = 0.0
+    for it in data.get("itens", []):
+        sub = it["quantidade"] * it["preco_unitario"]
+        sub -= sub * (it.get("desconto", 0) / 100.0)
+        it["subtotal"] = round(sub, 2)
+        subtotal += sub
+    desc_geral = data.get("desconto_geral", 0.0)
+    frete = data.get("frete", 0.0)
+    total = subtotal - (subtotal * desc_geral / 100.0) + frete
+    data["subtotal"] = round(subtotal, 2)
+    data["total"] = round(total, 2)
+    data["comissao_percentual"] = repr_comissao
+    data["comissao_valor"] = round(total * repr_comissao / 100.0, 2)
+    return data
+
+@api.get("/pedidos")
+async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = None,
+                      representada_id: Optional[str] = None, current=Depends(get_current_user)):
+    f: Dict[str, Any] = {}
+    if status: f["status"] = status
+    if cliente_id: f["cliente_id"] = cliente_id
+    if representada_id: f["representada_id"] = representada_id
+    return await t_list("pedidos", current, f)
+
+@api.post("/pedidos")
+async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    data = body.model_dump()
+    rep = await db.representadas.find_one({"id": data["representada_id"], "tenant_id": tid}, {"_id": 0})
+    if not rep:
+        raise HTTPException(404, "Representada não encontrada")
+    cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
+    if not cli:
+        raise HTTPException(404, "Cliente não encontrado")
+    comm = rep.get("comissao_padrao", 5.0)
+    data = calc_pedido_totals(data, comm)
+    data["numero"] = await next_numero(tid, "PED", "pedidos")
+    data["data_pedido"] = iso(now_utc())
+    return await t_insert("pedidos", current, data)
+
+@api.put("/pedidos/{pid}")
+async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    data = body.model_dump()
+    rep = await db.representadas.find_one({"id": data["representada_id"], "tenant_id": tid}, {"_id": 0})
+    if not rep:
+        raise HTTPException(404, "Representada não encontrada")
+    cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
+    if not cli:
+        raise HTTPException(404, "Cliente não encontrado")
+    comm = rep.get("comissao_padrao", 5.0)
+    data = calc_pedido_totals(data, comm)
+    return await t_update("pedidos", current, pid, data)
+
+@api.patch("/pedidos/{pid}/status")
+async def status_pedido(pid: str, body: dict, current=Depends(get_current_user)):
+    novo = body.get("status")
+    if not novo: raise HTTPException(400, "status obrigatório")
+    ped = await t_update("pedidos", current, pid, {"status": novo})
+    if novo == "faturado":
+        exists = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid_of(current)})
+        if not exists:
+            await t_insert("comissoes", current, {
+                "pedido_id": pid, "pedido_numero": ped.get("numero"),
+                "cliente_id": ped.get("cliente_id"), "representada_id": ped.get("representada_id"),
+                "valor_faturado": ped.get("total", 0),
+                "percentual": ped.get("comissao_percentual", 0),
+                "valor": ped.get("comissao_valor", 0),
+                "status": "prevista",
+                "data_prevista": iso(now_utc() + timedelta(days=30)),
+                "data_pagamento": None,
+            })
+        exists_ar = await db.contas_receber.find_one({"pedido_id": pid, "tenant_id": tid_of(current)})
+        if not exists_ar:
+            await t_insert("contas_receber", current, {
+                "cliente_id": ped.get("cliente_id"), "representada_id": ped.get("representada_id"),
+                "pedido_id": pid, "numero_documento": ped.get("numero"),
+                "valor": ped.get("total", 0),
+                "vencimento": iso(now_utc() + timedelta(days=30)),
+                "status": "aberto", "forma_pagamento": "Boleto",
+            })
+    return ped
+
+@api.delete("/pedidos/{pid}")
+async def del_pedido(pid: str, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    paga = await db.comissoes.find_one({"tenant_id": tid, "pedido_id": pid, "status": "paga"})
+    if paga:
+        raise HTTPException(400, "Pedido possui comissão já paga. Estorne o pagamento antes de excluir.")
+    await db.comissoes.delete_many({"tenant_id": tid, "pedido_id": pid})
+    await db.contas_receber.delete_many({"tenant_id": tid, "pedido_id": pid})
+    return await t_delete("pedidos", current, pid)
+
+# ------------------------------------------------------------
+# Oportunidades / Visitas
+# ------------------------------------------------------------
+@api.get("/oportunidades")
+async def get_ops(current=Depends(get_current_user)):
+    return await t_list("oportunidades", current)
+
+@api.post("/oportunidades")
+async def create_op(body: OportunidadeIn, current=Depends(get_current_user)):
+    return await t_insert("oportunidades", current, body.model_dump())
+
+@api.put("/oportunidades/{oid}")
+async def update_op(oid: str, body: OportunidadeIn, current=Depends(get_current_user)):
+    return await t_update("oportunidades", current, oid, body.model_dump())
+
+@api.patch("/oportunidades/{oid}/estagio")
+async def move_op(oid: str, body: dict, current=Depends(get_current_user)):
+    return await t_update("oportunidades", current, oid, {"estagio": body.get("estagio")})
+
+@api.delete("/oportunidades/{oid}")
+async def del_op(oid: str, current=Depends(get_current_user)):
+    return await t_delete("oportunidades", current, oid)
+
+@api.get("/visitas")
+async def get_visitas(current=Depends(get_current_user)):
+    return await t_list("visitas", current, sort_key="data")
+
+@api.post("/visitas")
+async def create_visita(body: VisitaIn, current=Depends(get_current_user)):
+    return await t_insert("visitas", current, body.model_dump())
+
+@api.put("/visitas/{vid}")
+async def update_visita(vid: str, body: VisitaIn, current=Depends(get_current_user)):
+    return await t_update("visitas", current, vid, body.model_dump())
+
+@api.delete("/visitas/{vid}")
+async def del_visita(vid: str, current=Depends(get_current_user)):
+    return await t_delete("visitas", current, vid)
+
+# ------------------------------------------------------------
+# Comissões / Contas
+# ------------------------------------------------------------
+@api.get("/comissoes")
+async def get_comissoes(status: Optional[str] = None, representada_id: Optional[str] = None,
+                        current=Depends(get_current_user)):
+    f: Dict[str, Any] = {}
+    if status: f["status"] = status
+    if representada_id: f["representada_id"] = representada_id
+    return await t_list("comissoes", current, f)
+
+@api.patch("/comissoes/{cid}")
+async def update_comissao(cid: str, body: ComissaoUpdate, current=Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    return await t_update("comissoes", current, cid, updates)
+
+@api.delete("/comissoes/{cid}")
+async def del_comissao(cid: str, current=Depends(get_current_user)):
+    doc = await db.comissoes.find_one({"id": cid, "tenant_id": tid_of(current)})
+    if not doc:
+        raise HTTPException(404, "Comissão não encontrada")
+    if doc.get("status") == "paga":
+        raise HTTPException(400, "Comissões já pagas não podem ser excluídas. Para corrigir, estorne o pagamento.")
+    return await t_delete("comissoes", current, cid)
+
+@api.get("/contas-receber")
+async def get_ar(current=Depends(get_current_user)):
+    return await t_list("contas_receber", current, sort_key="vencimento")
+
+@api.post("/contas-receber")
+async def create_ar(body: ARIn, current=Depends(get_current_user)):
+    return await t_insert("contas_receber", current, body.model_dump())
+
+@api.put("/contas-receber/{rid}")
+async def update_ar(rid: str, body: ARIn, current=Depends(get_current_user)):
+    return await t_update("contas_receber", current, rid, body.model_dump())
+
+@api.delete("/contas-receber/{rid}")
+async def del_ar(rid: str, current=Depends(get_current_user)):
+    return await t_delete("contas_receber", current, rid)
+
+@api.get("/contas-pagar")
+async def get_ap(current=Depends(get_current_user)):
+    return await t_list("contas_pagar", current, sort_key="vencimento")
+
+@api.post("/contas-pagar")
+async def create_ap(body: APIn, current=Depends(get_current_user)):
+    return await t_insert("contas_pagar", current, body.model_dump())
+
+@api.put("/contas-pagar/{pid}")
+async def update_ap(pid: str, body: APIn, current=Depends(get_current_user)):
+    return await t_update("contas_pagar", current, pid, body.model_dump())
+
+@api.delete("/contas-pagar/{pid}")
+async def del_ap(pid: str, current=Depends(get_current_user)):
+    return await t_delete("contas_pagar", current, pid)
+
+# ------------------------------------------------------------
+# Dashboard
+# ------------------------------------------------------------
+def _in_month(s, y, m):
+    d = _parse_date(s); return bool(d and d.year == y and d.month == m)
+
+def _in_year(s, y):
+    d = _parse_date(s); return bool(d and d.year == y)
+
+@api.get("/dashboard")
+async def dashboard(current=Depends(get_current_user)):
+    pedidos = await t_list("pedidos", current)
+    faturados = [p for p in pedidos if p.get("status") == "faturado"]
+    now = now_utc(); mes = now.month; ano = now.year
+    fat_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
+    fat_ano = sum(p.get("total", 0) for p in faturados if _in_year(p.get("data_pedido"), ano))
+    reps = await t_list("representadas", current)
+    fat_por_rep = []
+    for r in reps:
+        v = sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"])
+        fat_por_rep.append({"nome": r.get("nome_fantasia") or r.get("razao_social"), "valor": round(v, 2)})
+    comissoes = await t_list("comissoes", current)
+    com_recebidas = sum(c.get("valor", 0) for c in comissoes if c.get("status") == "paga")
+    com_abertas = sum(c.get("valor", 0) for c in comissoes if c.get("status") in ("prevista", "faturada"))
+    ap = await t_list("contas_pagar", current)
+    ar = await t_list("contas_receber", current)
+    ap_abertas = sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto")
+    ar_abertas = sum(a.get("valor", 0) for a in ar if a.get("status") == "aberto")
+    despesas_mes = sum(a.get("valor", 0) for a in ap if a.get("status") == "pago" and _in_month(a.get("vencimento"), ano, mes))
+    saldo_mes = fat_mes - despesas_mes
+    em_atraso_valor = 0.0; em_atraso_count = 0
+    for a in ap + ar:
+        if a.get("status") in ("aberto", "vencido"):
+            d = _parse_date(a.get("vencimento"))
+            if d and d < now:
+                em_atraso_valor += a.get("valor", 0); em_atraso_count += 1
+    projecao_valor = sum(p.get("total", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
+    projecao_comissao = sum(p.get("comissao_valor", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
+    clientes = await t_list("clientes", current)
+    clientes_ativos = sum(1 for c in clientes if c.get("status") == "ativo")
+    novos = sum(1 for c in clientes if _in_month(c.get("created_at"), ano, mes))
+    pedidos_abertos = sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado"))
+    pedidos_faturados = len(faturados)
+    visitas = await t_list("visitas", current)
+    visitas_realizadas = sum(1 for v in visitas if v.get("status") == "realizada")
+    ops = await t_list("oportunidades", current)
+    propostas_neg = sum(1 for o in ops if o.get("estagio") in ("proposta", "negociacao"))
+    serie = []
+    for i in range(5, -1, -1):
+        d = (now.replace(day=1) - timedelta(days=30 * i))
+        val = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), d.year, d.month))
+        serie.append({"mes": f"{MESES_ABR[d.month-1]}/{d.strftime('%y')}", "valor": round(val, 2)})
+    prod_total: Dict[str, float] = {}
+    for p in faturados:
+        for it in p.get("itens", []):
+            k = it.get("nome", ""); prod_total[k] = prod_total.get(k, 0) + it.get("subtotal", 0)
+    top_produtos = sorted([{"nome": k, "valor": round(v, 2)} for k, v in prod_total.items()], key=lambda x: -x["valor"])[:5]
+    cat_total: Dict[str, float] = {}
+    for a in ap:
+        c = a.get("categoria", "Outros"); cat_total[c] = cat_total.get(c, 0) + a.get("valor", 0)
+    gastos_por_categoria = sorted([{"categoria": k, "valor": round(v, 2)} for k, v in cat_total.items()], key=lambda x: -x["valor"])
+    if fat_mes <= 0:
+        saude = 50
+    else:
+        margem = max(0.0, min(1.0, (fat_mes - despesas_mes) / fat_mes))
+        pen_atraso = min(0.4, em_atraso_valor / max(1.0, fat_mes))
+        saude = int(round(max(0, min(100, (margem * 0.7 + 0.3) * 100 - pen_atraso * 100))))
+    saude_label = "Excelente" if saude >= 80 else ("Boa" if saude >= 60 else ("Regular" if saude >= 40 else "Ruim"))
+    avisos = []
+    cmap = {c["id"]: c for c in clientes}
+    for a in ap + ar:
+        if a.get("status") in ("aberto", "vencido"):
+            d = _parse_date(a.get("vencimento"))
+            if d and d < now:
+                dias = (now - d).days
+                nome = a.get("descricao") or (cmap.get(a.get("cliente_id"), {}).get("nome_fantasia") if a.get("cliente_id") else "") or a.get("numero_documento", "Título")
+                avisos.append({"tipo": "atraso", "titulo": f'"{nome}" está vencida há {dias} dias', "valor": a.get("valor", 0)})
+    for c in comissoes:
+        if c.get("status") in ("prevista", "faturada"):
+            d = _parse_date(c.get("data_prevista"))
+            if d and 0 <= (d - now).days <= 7:
+                nome = cmap.get(c.get("cliente_id"), {}).get("nome_fantasia", "cliente")
+                avisos.append({"tipo": "comissao", "titulo": f'Comissão de {nome} vence em {(d - now).days} dias', "valor": c.get("valor", 0)})
+    avisos = avisos[:5]
+    return {
+        "mes_atual": f"{MESES_PT[mes]} de {ano}",
+        "faturamento_mes": round(fat_mes, 2), "faturamento_ano": round(fat_ano, 2),
+        "faturamento_por_representada": fat_por_rep,
+        "comissoes_previstas": round(com_abertas, 2), "comissoes_recebidas": round(com_recebidas, 2),
+        "comissoes_abertas": round(com_abertas, 2),
+        "contas_pagar_abertas": round(ap_abertas, 2), "contas_receber_abertas": round(ar_abertas, 2),
+        "despesas_mes": round(despesas_mes, 2), "saldo_mes": round(saldo_mes, 2),
+        "em_atraso": round(em_atraso_valor, 2), "em_atraso_count": em_atraso_count,
+        "projecao_valor": round(projecao_valor, 2), "projecao_comissao": round(projecao_comissao, 2),
+        "pedidos_abertos": pedidos_abertos, "pedidos_faturados": pedidos_faturados,
+        "clientes_ativos": clientes_ativos, "novos_clientes": novos,
+        "visitas_realizadas": visitas_realizadas, "propostas_negociacao": propostas_neg,
+        "serie_faturamento": serie, "top_produtos": top_produtos,
+        "gastos_por_categoria": gastos_por_categoria,
+        "saude_financeira": saude, "saude_label": saude_label, "avisos": avisos,
+    }
+
+# ------------------------------------------------------------
+# Insights
+# ------------------------------------------------------------
+@api.get("/insights/regras")
+async def insights_regras(current=Depends(get_current_user)):
+    now = now_utc()
+    clientes = await t_list("clientes", current)
+    pedidos = await t_list("pedidos", current)
+    insights = []
+    for c in clientes:
+        if c.get("status") != "ativo": continue
+        pc = [p for p in pedidos if p.get("cliente_id") == c["id"]]
+        if not pc:
+            insights.append({"tipo": "alerta", "titulo": "Cliente sem compras",
+                             "descricao": f"{c.get('nome_fantasia') or c.get('razao_social')} ainda não realizou pedidos.",
+                             "cliente_id": c["id"]}); continue
+        ultimo = max((_parse_date(p.get("data_pedido")) or now for p in pc))
+        dias = (now - ultimo).days
+        if dias >= 60:
+            insights.append({"tipo": "alerta", "titulo": f"Cliente sem compra há {dias} dias",
+                             "descricao": f"{c.get('nome_fantasia') or c.get('razao_social')} sem pedidos recentes.",
+                             "cliente_id": c["id"]})
+    reps = await t_list("representadas", current)
+    for r in reps:
+        pr = [p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"]
+        if len(pr) >= 2:
+            total = sum(p.get("total", 0) for p in pr)
+            insights.append({"tipo": "oportunidade", "titulo": f"Boa performance: {r.get('nome_fantasia') or r.get('razao_social')}",
+                             "descricao": f"Total faturado: R$ {total:,.2f}."})
+    return insights[:15]
+
+# ------------------------------------------------------------
+# MAX AI (Agora com Groq Gratuito)
+# ------------------------------------------------------------
+async def _build_ai_context(current: dict) -> str:
+    clientes = await t_list("clientes", current)
+    pedidos = await t_list("pedidos", current)
+    reps = await t_list("representadas", current)
+    comissoes = await t_list("comissoes", current)
+    ap = await t_list("contas_pagar", current)
+    ar = await t_list("contas_receber", current)
+    now = now_utc()
+
+    top_c = sorted(clientes, key=lambda c: sum(p.get("total", 0) for p in pedidos if p.get("cliente_id") == c["id"]), reverse=True)[:10]
+    top_clientes = []
+    for c in top_c:
+        fat = sum(p.get("total", 0) for p in pedidos if p.get("cliente_id") == c["id"] and p.get("status") == "faturado")
+        ult_data = max((_parse_date(p.get("data_pedido")) or now for p in pedidos if p.get("cliente_id") == c["id"]), default=None)
+        dias = (now - ult_data).days if ult_data else None
+        top_clientes.append({"nome": c.get("nome_fantasia") or c.get("razao_social"),
+                             "status": c.get("status"), "cidade": c.get("cidade"),
+                             "faturamento": round(fat, 2), "dias_ultima_compra": dias})
+
+    inativos = []
+    for c in clientes[:30]:
+        pc = [p for p in pedidos if p.get("cliente_id") == c["id"]]
+        nome = c.get("nome_fantasia") or c.get("razao_social")
+        if not pc:
+            inativos.append(nome); continue
+        datas = [d for d in (_parse_date(p.get("data_pedido")) for p in pc) if d]
+        if not datas or (now - max(datas)).days > 30:
+            inativos.append(nome)
+    inativos = inativos[:10]
+
+    por_rep = []
+    for r in reps:
+        pr = [p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"]
+        por_rep.append({"representada": r.get("nome_fantasia") or r.get("razao_social"),
+                        "comissao_padrao": r.get("comissao_padrao"),
+                        "total_faturado": round(sum(p.get("total", 0) for p in pr), 2),
+                        "pedidos_faturados": len(pr)})
+
+    ctx = {
+        "data_de_hoje": now.strftime("%Y-%m-%d"),
+        "resumo": {
+            "clientes_total": len(clientes),
+            "clientes_ativos": sum(1 for c in clientes if c.get("status") == "ativo"),
+            "clientes_prospect": sum(1 for c in clientes if c.get("status") == "prospect"),
+            "clientes_inativos": sum(1 for c in clientes if c.get("status") == "inativo"),
+            "pedidos_total": len(pedidos),
+            "pedidos_faturados": sum(1 for p in pedidos if p.get("status") == "faturado"),
+            "pedidos_em_aberto": sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")),
+            "faturamento_total": round(sum(p.get("total", 0) for p in pedidos if p.get("status") == "faturado"), 2),
+            "comissoes_a_receber": round(sum(c.get("valor", 0) for c in comissoes if c.get("status") in ("prevista", "faturada")), 2),
+            "comissoes_recebidas": round(sum(c.get("valor", 0) for c in comissoes if c.get("status") == "paga"), 2),
+            "contas_a_pagar_aberto": round(sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto"), 2),
+            "contas_a_receber_aberto": round(sum(a.get("valor", 0) for a in ar if a.get("status") == "aberto"), 2),
+        },
+        "representadas": por_rep,
+        "top_10_clientes": top_clientes,
+        "clientes_sem_compra_30d_ou_mais": inativos,
+    }
+    return json.dumps(ctx, ensure_ascii=False, default=str)
+
+@api.post("/max-ai/chat")
+async def max_ai(body: ChatIn, current=Depends(get_current_user)):
+    try:
+        from groq import Groq
+    except ImportError:
+        return {"reply": "Módulo 'groq' não instalado. Rode: pip install groq", "error": True}
+
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        return {"reply": "GROQ_API_KEY não configurada no arquivo .env.", "error": True}
+
+    context = await _build_ai_context(current)
+    system = (
+        "Você é o MAX AI, assistente comercial do OMNIREPMAX — plataforma de gestão para representantes comerciais brasileiros. "
+        "Responda SEMPRE em português do Brasil, de forma objetiva, direta e profissional, usando os dados do usuário fornecidos como JSON abaixo. "
+        "Use R$ para valores (ex: R$ 1.234,56), destaque números relevantes com **negrito markdown** e organize em listas quando fizer sentido. "
+        "NUNCA invente clientes ou valores que não estejam nos dados. Se a resposta exigir informação ausente, diga que não consta no sistema. "
+        "Quando sugerir ações, seja prático e aplicado ao dia a dia do representante.\n\n"
+        f"DADOS DO USUÁRIO (JSON):\n{context}"
+    )
+
+    msg_text = body.message.strip()
+    if body.history:
+        tail = body.history[-4:]
+        msg_text = "\n\n".join([f"[{h.get('role','user')}]: {h.get('content','')}" for h in tail]) + f"\n\n[user]: {msg_text}"
+
+    try:
+        client = Groq(api_key=key)
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": msg_text}
+            ],
+            model="openai/gpt-oss-120b", # Modelo via Groq
+        )
+        reply = chat_completion.choices[0].message.content
+        return {"reply": reply}
+    except Exception as e:
+        return {"reply": f"Erro na Groq: {e}", "error": True}
+
+# ------------------------------------------------------------
+# Busca global / XML / Backups / Insights IA
+# ------------------------------------------------------------
+@api.get("/search")
+async def global_search(q: str = Query(..., min_length=1), current=Depends(get_current_user)):
+    q = q.strip()
+    if not q:
+        raise HTTPException(400, "Query vazia")
+    ql = q.lower()
+    def m(d, keys): return any(d.get(k) and ql in str(d.get(k)).lower() for k in keys)
+    return {
+        "clientes": [c for c in await t_list("clientes", current) if m(c, ["razao_social", "nome_fantasia", "cnpj_cpf", "cidade"])][:10],
+        "produtos": [p for p in await t_list("produtos", current) if m(p, ["nome", "codigo", "sku", "ean", "marca"])][:10],
+        "representadas": [r for r in await t_list("representadas", current) if m(r, ["razao_social", "nome_fantasia", "cnpj"])][:10],
+        "pedidos": [p for p in await t_list("pedidos", current) if m(p, ["numero"])][:10],
+    }
+
+class XMLImportIn(BaseModel):
+    xml_content: str
+    filename: Optional[str] = ""
+    create_pedido: bool = True
+    representada_id: Optional[str] = None
+    cliente_id: Optional[str] = None
+
+def _only_digits(s: Optional[str]) -> str:
+    return re.sub(r"\D", "", s or "")
+
+def _parse_nfe(x: str) -> dict:
+    def f(pat, default=""):
+        m = re.search(pat, x, re.S); return (m.group(1) if m else default).strip()
+    itens = []
+    for m in re.finditer(r"<det[^>]*>(.*?)</det>", x, re.S):
+        seg = m.group(1)
+        itens.append({
+            "codigo": re.search(r"<cProd>(.*?)</cProd>", seg).group(1) if re.search(r"<cProd>(.*?)</cProd>", seg) else "",
+            "ean": re.search(r"<cEAN>(.*?)</cEAN>", seg).group(1) if re.search(r"<cEAN>(.*?)</cEAN>", seg) else "",
+            "nome": re.search(r"<xProd>(.*?)</xProd>", seg).group(1) if re.search(r"<xProd>(.*?)</xProd>", seg) else "",
+            "quantidade": float(re.search(r"<qCom>(.*?)</qCom>", seg).group(1)) if re.search(r"<qCom>(.*?)</qCom>", seg) else 0,
+            "preco": float(re.search(r"<vUnCom>(.*?)</vUnCom>", seg).group(1)) if re.search(r"<vUnCom>(.*?)</vUnCom>", seg) else 0,
+            "total": float(re.search(r"<vProd>(.*?)</vProd>", seg).group(1)) if re.search(r"<vProd>(.*?)</vProd>", seg) else 0,
+        })
+    return {
+        "emitente": {"cnpj": f(r"<emit>.*?<CNPJ>(.*?)</CNPJ>"), "nome": f(r"<emit>.*?<xNome>(.*?)</xNome>")},
+        "destinatario": {"cnpj": f(r"<dest>.*?<CNPJ>(.*?)</CNPJ>") or f(r"<dest>.*?<CPF>(.*?)</CPF>"), "nome": f(r"<dest>.*?<xNome>(.*?)</xNome>")},
+        "numero": f(r"<nNF>(.*?)</nNF>"), "serie": f(r"<serie>(.*?)</serie>"),
+        "data_emissao": f(r"<dhEmi>(.*?)</dhEmi>"),
+        "valor_total": float(f(r"<vNF>(.*?)</vNF>", "0") or 0),
+        "itens": itens,
+    }
+
+async def _match_or_create_pedido(current: dict, parsed: dict,
+                                   representada_id: Optional[str],
+                                   cliente_id: Optional[str]) -> dict:
+    tid = tid_of(current)
+    emit_digits = _only_digits(parsed.get("emitente", {}).get("cnpj"))
+    dest_digits = _only_digits(parsed.get("destinatario", {}).get("cnpj"))
+    reps = await t_list("representadas", current)
+    clis = await t_list("clientes", current)
+    rep_match = None; cli_match = None
+    if representada_id:
+        rep_match = next((r for r in reps if r["id"] == representada_id), None)
+    else:
+        rep_match = next((r for r in reps if _only_digits(r.get("cnpj")) == emit_digits and emit_digits), None)
+    if cliente_id:
+        cli_match = next((c for c in clis if c["id"] == cliente_id), None)
+    else:
+        cli_match = next((c for c in clis if _only_digits(c.get("cnpj_cpf")) == dest_digits and dest_digits), None)
+    result = {
+        "representada_match": rep_match,
+        "cliente_match": cli_match,
+        "representada_sugestoes": [{"id": r["id"], "nome": r.get("nome_fantasia") or r.get("razao_social"), "cnpj": r.get("cnpj")} for r in reps],
+        "cliente_sugestoes": [{"id": c["id"], "nome": c.get("nome_fantasia") or c.get("razao_social"), "cnpj": c.get("cnpj_cpf")} for c in clis],
+        "pedido_criado": None,
+        "pedido_erro": None,
+    }
+    if not rep_match or not cli_match:
+        result["pedido_erro"] = "match_pendente"
+        return result
+    nf_num = parsed.get("numero")
+    if nf_num:
+        existing = await db.pedidos.find_one({"tenant_id": tid, "representada_id": rep_match["id"], "nf_numero": nf_num}, {"_id": 0})
+        if existing:
+            result["pedido_criado"] = existing
+            result["pedido_erro"] = "duplicado_reutilizado"
+            return result
+    produtos = await t_list("produtos", current, {"representada_id": rep_match["id"]})
+    itens_pedido = []
+    for it in parsed.get("itens", []):
+        ean = (it.get("ean") or "").strip()
+        cod = (it.get("codigo") or "").strip()
+        prod = None
+        if ean and ean.lower() not in ("", "sem gtin"):
+            prod = next((p for p in produtos if (p.get("ean") or "").strip() == ean), None)
+        if not prod and cod:
+            prod = next((p for p in produtos if (p.get("codigo") or "").strip() == cod), None)
+        if not prod:
+            prod = await t_insert("produtos", current, {
+                "nome": it.get("nome") or f"Produto {cod or ean}",
+                "codigo": cod, "ean": ean, "sku": cod,
+                "representada_id": rep_match["id"],
+                "preco_tabela": it.get("preco") or 0, "preco_sugerido": it.get("preco") or 0,
+                "custo": 0, "unidade": "UN", "qtd_por_caixa": 1, "status": "ativo",
+                "marca": rep_match.get("nome_fantasia", ""),
+            })
+            produtos.append(prod)
+        itens_pedido.append({"produto_id": prod["id"], "nome": prod.get("nome") or it.get("nome", ""),
+                             "quantidade": it.get("quantidade", 0), "preco_unitario": it.get("preco", 0),
+                             "desconto": 0.0, "subtotal": round(it.get("total", 0), 2)})
+    comm = rep_match.get("comissao_padrao", 5.0)
+    subtotal = sum(i["subtotal"] for i in itens_pedido)
+    total = parsed.get("valor_total") or subtotal
+    numero = await next_numero(tid, "PED", "pedidos")
+    pedido_data = {
+        "numero": numero,
+        "cliente_id": cli_match["id"],
+        "representada_id": rep_match["id"],
+        "condicao_pagamento": rep_match.get("prazo_pagamento") or "30 dias",
+        "itens": itens_pedido,
+        "subtotal": round(subtotal, 2),
+        "desconto_geral": 0.0,
+        "frete": 0.0,
+        "total": round(total, 2),
+        "comissao_percentual": comm,
+        "comissao_valor": round(total * comm / 100.0, 2),
+        "status": "faturado",
+        "data_pedido": parsed.get("data_emissao") or iso(now_utc()),
+        "observacoes": f"Importado de NF-e nº {parsed.get('numero')} ({parsed.get('filename','')})",
+        "nf_numero": parsed.get("numero"),
+        "nf_serie": parsed.get("serie"),
+    }
+    pedido = await t_insert("pedidos", current, pedido_data)
+    await t_insert("comissoes", current, {
+        "pedido_id": pedido["id"], "pedido_numero": pedido["numero"],
+        "cliente_id": cli_match["id"], "representada_id": rep_match["id"],
+        "valor_faturado": total, "percentual": comm, "valor": pedido_data["comissao_valor"],
+        "status": "prevista", "data_prevista": iso(now_utc() + timedelta(days=30)),
+        "data_pagamento": None,
+    })
+    await t_insert("contas_receber", current, {
+        "cliente_id": cli_match["id"], "representada_id": rep_match["id"],
+        "pedido_id": pedido["id"], "numero_documento": pedido["numero"],
+        "valor": total, "vencimento": iso(now_utc() + timedelta(days=30)),
+        "status": "aberto", "forma_pagamento": "Boleto",
+    })
+    result["pedido_criado"] = pedido
+    return result
+
+@api.post("/xml/import")
+async def import_xml(body: XMLImportIn, current=Depends(get_current_user)):
+    if not body.xml_content or "<" not in body.xml_content:
+        raise HTTPException(400, "Conteúdo XML inválido ou vazio")
+    parsed = _parse_nfe(body.xml_content)
+    parsed["filename"] = body.filename
+    if not parsed.get("numero") and not parsed.get("itens"):
+        raise HTTPException(400, "Não foi possível identificar NF-e no arquivo. Verifique o XML.")
+    match_info = {}
+    if body.create_pedido:
+        try:
+            match_info = await _match_or_create_pedido(current, parsed, body.representada_id, body.cliente_id)
+        except Exception as e:
+            logger.exception("falha ao criar pedido a partir do XML")
+            match_info = {"pedido_erro": f"erro ao criar pedido: {e}"}
+    historico = {**parsed, "pedido_id": (match_info.get("pedido_criado") or {}).get("id"),
+                 "representada_id": (match_info.get("representada_match") or {}).get("id"),
+                 "cliente_id": (match_info.get("cliente_match") or {}).get("id")}
+    await t_insert("xml_files", current, historico)
+    return {**parsed, **match_info}
+
+@api.get("/xml/historico")
+async def xml_historico(current=Depends(get_current_user)):
+    return await t_list("xml_files", current)
+
+@api.post("/insights/ai")
+async def insights_ai(current=Depends(get_current_user)):
+    try:
+        from groq import Groq
+    except ImportError:
+        return {"insights": [], "erro": "Módulo 'groq' não instalado. Rode: pip install groq"}
+
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        return {"insights": [], "erro": "GROQ_API_KEY não configurada no arquivo .env."}
+
+    ctx = await _build_ai_context(current)
+    try:
+        client = Groq(api_key=key)
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "Você é um analista comercial. Retorne APENAS um JSON array com 4-6 objetos {tipo:'oportunidade|alerta|dica',titulo:'',descricao:''}. Sem markdown, sem texto extra antes ou depois."},
+                {"role": "user", "content": f"Dados: {ctx}"}
+            ],
+            model="openai/gpt-oss-120b", # Modelo via Groq
+        )
+        raw = chat_completion.choices[0].message.content
+        m = re.search(r"\[.*\]", raw.strip(), re.S)
+        arr = json.loads(m.group(0)) if m else []
+        return {"insights": arr}
+    except Exception as e:
+        return {"insights": [], "erro": str(e)}
+
+# ------------------------------------------------------------
+# Backup Cron
+# ------------------------------------------------------------
+async def _run_backup(run_id: str):
+    if await db.backups.find_one({"run_id": run_id}):
+        logger.info(f"Backup {run_id} já existe, ignorando.")
+        return
+    snapshot: Dict[str, Any] = {"id": new_id(), "run_id": run_id,
+                                "created_at": iso(now_utc()), "collections": {}}
+    total = 0
+    for name in ["users", "representadas", "clientes", "produtos", "pedidos",
+                 "oportunidades", "visitas", "comissoes", "contas_receber",
+                 "contas_pagar", "xml_files"]:
+        docs = [clean_doc(d) async for d in db[name].find({}, {"_id": 0})]
+        if name == "users":
+            for u in docs: u.pop("password_hash", None)
+        snapshot["collections"][name] = docs; total += len(docs)
+    snapshot["total_documents"] = total
+    await db.backups.insert_one(snapshot)
+    old = db.backups.find({}, {"id": 1, "created_at": 1}).sort("created_at", -1).skip(14)
+    to_del = [d["id"] async for d in old if d.get("id")]
+    if to_del: await db.backups.delete_many({"id": {"$in": to_del}})
+    logger.info(f"Backup {run_id}: {total} docs")
+
+@api.post("/cron/backup")
+async def cron_backup(background: BackgroundTasks,
+                      authorization: Optional[str] = Header(None),
+                      x_webhook_id: Optional[str] = Header(None, alias="X-Webhook-Id")):
+    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
+    if not secret or not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Unauthorized")
+    if not hmac.compare_digest(authorization[7:], secret):
+        raise HTTPException(401, "Unauthorized")
+    run_id = x_webhook_id or new_id()
+    if await db.backups.find_one({"run_id": run_id}):
+        return {"status": "duplicate", "run_id": run_id}
+    background.add_task(_run_backup_wrapper, run_id)
+    return {"status": "accepted", "run_id": run_id}
+
+async def _run_backup_wrapper(run_id: str):
+    try: await _run_backup(run_id)
+    except Exception as e: logger.error(f"Backup {run_id} falhou: {e}")
+
+@api.get("/backups")
+async def list_backups(current=Depends(get_current_user)):
+    if current.get("role") != "admin":
+        raise HTTPException(403, "Apenas administradores")
+    docs = await db.backups.find({}, {"_id": 0, "collections": 0}).sort("created_at", -1).to_list(50)
+    return docs
+
+@api.post("/backups/run")
+async def run_backup_now(background: BackgroundTasks, current=Depends(get_current_user)):
+    if current.get("role") != "admin":
+        raise HTTPException(403, "Apenas administradores")
+    run_id = new_id()
+    background.add_task(_run_backup_wrapper, run_id)
+    return {"status": "accepted", "run_id": run_id}
+
+# ------------------------------------------------------------
+# Planos & Assinatura (Stripe)
+# ------------------------------------------------------------
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY") or "sk_test_emergent"
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+PLANS = [
+    {"id": "solo", "name": "Solo", "lookup_key": "omnirepmax_solo_monthly", "price_brl": 69,
+     "features": ["Até 2 representadas", "Clientes e produtos ilimitados", "Funil Kanban",
+                  "Pedidos e comissões", "1 usuário", "Suporte por e-mail"]},
+    {"id": "pro", "name": "Profissional", "lookup_key": "omnirepmax_pro_monthly", "price_brl": 99,
+     "featured": True,
+     "features": ["Representadas ilimitadas", "MAX AI ilimitado", "Importação XML NF-e",
+                  "Contas a pagar/receber", "Até 5 usuários", "Backup diário automático",
+                  "Suporte prioritário"]},
+    {"id": "equipe", "name": "Equipe", "lookup_key": "omnirepmax_equipe_monthly", "price_brl": 129,
+     "features": ["Tudo do Profissional", "Usuários ilimitados",
+                  "Perfis Admin/Supervisor/Financeiro", "Relatórios exportáveis",
+                  "API para integração", "Onboarding assistido", "Suporte por WhatsApp"]},
+]
+
+@api.get("/plans")
+async def get_plans():
+    return {"plans": PLANS, "trial_days": 7}
+
+@api.get("/subscriptions/me")
+async def my_subscription(current=Depends(get_current_user)):
+    user = await db.users.find_one({"id": current["id"]}, {"_id": 0, "password_hash": 0})
+    now = now_utc()
+    trial_ends = user.get("trial_ends_at")
+    plan = user.get("plan", "trial")
+    trial_days_left = None
+    is_trial = plan == "trial" and bool(trial_ends)
+    if trial_ends and is_trial:
+        te = _parse_date(trial_ends)
+        trial_days_left = max(0, (te - now).days) if te else 0
+    return {
+        "plan": plan,
+        "subscription_status": user.get("subscription_status"),
+        "trial_ends_at": trial_ends,
+        "trial_days_left": trial_days_left,
+        "is_trial": is_trial,
+        "stripe_customer_id": user.get("stripe_customer_id"),
+        "stripe_subscription_id": user.get("stripe_subscription_id"),
+    }
+
+class CheckoutIn(BaseModel):
+    lookup_key: str
+    origin_url: str
+
+_TAX_MODE_CACHE: Dict[str, Optional[str]] = {"mode": None}
+
+def _tax_mode() -> str:
+    if _TAX_MODE_CACHE["mode"]:
+        return _TAX_MODE_CACHE["mode"]
+    try:
+        country = (stripe.Account.retrieve().get("country") or "").upper()
+    except Exception:
+        country = ""
+    smp = {"AU","AT","BE","BG","CA","HR","CY","CZ","DK","EE","FI","FR","DE",
+           "GI","GR","HK","HU","IE","IT","JP","LV","LI","LT","LU","MT","NL",
+           "NO","PL","PT","RO","SG","SK","SI","ES","SE","CH","GB","US"}
+    mode = "full" if country in smp else "calc_only"
+    _TAX_MODE_CACHE["mode"] = mode
+    return mode
+
+@api.post("/payments/checkout")
+async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
+    prices = stripe.Price.list(lookup_keys=[req.lookup_key], active=True, limit=1).data
+    if not prices:
+        raise HTTPException(400, f"Plano não encontrado: {req.lookup_key}")
+    price = prices[0]
+    plan_id = req.lookup_key.replace("omnirepmax_", "").replace("_monthly", "")
+    kwargs = dict(
+        line_items=[{"price": price.id, "quantity": 1}],
+        mode="subscription" if price.recurring else "payment",
+        success_url=f"{req.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{req.origin_url}/planos",
+        metadata={"user_id": current["id"], "tenant_id": tid_of(current),
+                  "lookup_key": req.lookup_key, "plan_id": plan_id},
+        customer_email=current["email"],
+        allow_promotion_codes=True,
+    )
+    mode = _tax_mode()
+    try:
+        if mode == "full":
+            session = stripe.checkout.Session.create(**kwargs, managed_payments={"enabled": True})
+        else:
+            session = stripe.checkout.Session.create(**kwargs, automatic_tax={"enabled": True}, billing_address_collection="required")
+    except stripe.error.InvalidRequestError as e:
+        msg = (getattr(e, "user_message", "") or "").lower()
+        if "managed payments" in msg or "ineligible" in msg or "tax" in msg:
+            session = stripe.checkout.Session.create(**kwargs)
+        else:
+            raise HTTPException(400, str(e))
+    await db.payment_transactions.insert_one({
+        "session_id": session.id, "user_id": current["id"], "tenant_id": tid_of(current),
+        "lookup_key": req.lookup_key, "plan_id": plan_id,
+        "amount": (price.unit_amount or 0), "currency": price.currency,
+        "status": "initiated", "payment_status": "pending",
+        "created_at": iso(now_utc()), "updated_at": iso(now_utc()),
+    })
+    return {"checkout_url": session.url, "session_id": session.id}
+
+async def _mark_session_paid(session_id: str, obj: dict):
+    tx = await db.payment_transactions.find_one({"session_id": session_id})
+    if not tx or tx.get("payment_status") == "paid":
+        return
+    await db.payment_transactions.update_one(
+        {"session_id": session_id, "payment_status": {"$ne": "paid"}},
+        {"$set": {"status": "completed", "payment_status": "paid",
+                  "stripe_subscription_id": obj.get("subscription"),
+                  "stripe_payment_intent_id": obj.get("payment_intent"),
+                  "stripe_customer_id": obj.get("customer"),
+                  "updated_at": iso(now_utc())}}
+    )
+    user_id = tx.get("user_id") or (obj.get("metadata") or {}).get("user_id")
+    plan_id = tx.get("plan_id") or (obj.get("metadata") or {}).get("plan_id")
+    if plan_id not in {"solo", "pro", "equipe"}:
+        plan_id = "pro"
+    if user_id:
+        await db.users.update_one({"id": user_id}, {"$set": {
+            "plan": plan_id,
+            "subscription_status": "active",
+            "stripe_customer_id": obj.get("customer"),
+            "stripe_subscription_id": obj.get("subscription"),
+            "subscription_updated_at": iso(now_utc()),
+        }})
+
+@api.get("/payments/status/{session_id}")
+async def payment_status(session_id: str, current=Depends(get_current_user)):
+    tx = await db.payment_transactions.find_one(
+        {"session_id": session_id, "user_id": current["id"]}, {"_id": 0}
+    )
+    if not tx:
+        raise HTTPException(404, "Sessão não encontrada")
+    if tx.get("payment_status") != "paid":
+        try:
+            s = stripe.checkout.Session.retrieve(session_id)
+            if s.payment_status == "paid" or s.status == "complete":
+                await _mark_session_paid(session_id, {
+                    "subscription": s.subscription, "payment_intent": s.payment_intent,
+                    "customer": s.customer, "metadata": s.metadata or {},
+                })
+                tx = await db.payment_transactions.find_one(
+                    {"session_id": session_id, "user_id": current["id"]}, {"_id": 0}
+                )
+        except stripe.error.StripeError:
+            pass
+    return {"session_id": tx["session_id"], "status": tx["status"],
+            "payment_status": tx["payment_status"], "plan_id": tx.get("plan_id")}
+
+@api.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(500, "STRIPE_WEBHOOK_SECRET não configurado")
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(400, "Assinatura inválida")
+    obj, t = event["data"]["object"], event["type"]
+    if t == "checkout.session.completed":
+        await _mark_session_paid(obj["id"], obj)
+    elif t == "checkout.session.async_payment_succeeded":
+        await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"payment_status": "paid", "updated_at": iso(now_utc())}})
+    elif t == "checkout.session.async_payment_failed":
+        await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"status": "failed", "payment_status": "failed", "updated_at": iso(now_utc())}})
+    elif t == "customer.subscription.deleted":
+        await db.users.update_one({"stripe_subscription_id": obj.get("id")}, {"$set": {"subscription_status": "canceled", "plan": "canceled"}})
+    return {"status": "ok"}
+
+# ------------------------------------------------------------
+# System Reset
+# ------------------------------------------------------------
+RESET_COLLECTIONS = [
+    "clientes", "representadas", "produtos", "pedidos",
+    "oportunidades", "visitas", "comissoes",
+    "contas_receber", "contas_pagar",
+    "xml_files",
+    "insights_ai", "max_ai_messages",
+]
+
+class SystemResetIn(BaseModel):
+    motivo: str
+    confirmacao: str
+
+@api.get("/system/reset/preview")
+async def system_reset_preview(current=Depends(get_current_user)):
+    if current.get("role") != "admin":
+        raise HTTPException(403, "Apenas administradores podem resetar o sistema")
+    tid = tid_of(current)
+    counts = {}
+    for col in RESET_COLLECTIONS:
+        try:
+            counts[col] = await db[col].count_documents({"tenant_id": tid})
+        except Exception:
+            counts[col] = 0
+    return {"tenant_id": tid, "counts": counts, "total": sum(counts.values())}
+
+@api.post("/system/reset")
+async def system_reset(body: SystemResetIn, current=Depends(get_current_user)):
+    if current.get("role") != "admin":
+        raise HTTPException(403, "Apenas administradores podem resetar o sistema")
+    motivo = (body.motivo or "").strip()
+    if len(motivo) < 10:
+        raise HTTPException(400, "Informe um motivo com pelo menos 10 caracteres")
+    if (body.confirmacao or "").strip().upper() != "RESETAR":
+        raise HTTPException(400, "Confirmação inválida. Digite 'RESETAR' para prosseguir.")
+    tid = tid_of(current)
+    started_at = iso(now_utc())
+    deleted_by_collection: dict = {}
+    errors: list = []
+    for col in RESET_COLLECTIONS:
+        try:
+            res = await db[col].delete_many({"tenant_id": tid})
+            deleted_by_collection[col] = int(res.deleted_count or 0)
+        except Exception as e:
+            errors.append({"collection": col, "error": str(e)})
+            deleted_by_collection[col] = 0
+    total_deleted = sum(deleted_by_collection.values())
+    status = "success" if not errors else "partial"
+    audit_doc = {
+        "id": new_id(),
+        "tenant_id": tid,
+        "user_id": current["id"],
+        "user_email": current.get("email"),
+        "action": "system_reset",
+        "motivo": motivo,
+        "scope": RESET_COLLECTIONS,
+        "deleted_by_collection": deleted_by_collection,
+        "total_deleted": total_deleted,
+        "status": status,
+        "errors": errors,
+        "started_at": started_at,
+        "finished_at": iso(now_utc()),
+    }
+    try:
+        await db.audit_log.insert_one(audit_doc)
+    except Exception as e:
+        logger.error(f"Failed to write audit log for reset: {e}")
+    return {
+        "status": status,
+        "total_deleted": total_deleted,
+        "deleted_by_collection": deleted_by_collection,
+        "errors": errors,
+        "motivo": motivo,
+        "finished_at": audit_doc["finished_at"],
+    }
+
+@api.get("/system/reset/history")
+async def system_reset_history(current=Depends(get_current_user), limit: int = 10):
+    if current.get("role") != "admin":
+        raise HTTPException(403, "Apenas administradores podem consultar o histórico")
+    tid = tid_of(current)
+    cur = db.audit_log.find({"tenant_id": tid, "action": "system_reset"}).sort("finished_at", -1).limit(max(1, min(limit, 50)))
+    out = []
+    async for d in cur:
+        d.pop("_id", None)
+        out.append(d)
+    return out
+
+# ------------------------------------------------------------
+# Register + startup
+# ------------------------------------------------------------
+app.include_router(api)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup():
+    await db.users.create_index("email", unique=True)
+
+    try:
+        await db.counters.create_index([("tenant_id", 1), ("name", 1)], unique=True)
+    except Exception:
+        pass
+    try:
+        await db.backups.create_index("run_id", unique=True, sparse=True)
+    except Exception:
+        pass
+
+    for col in ["users", "representadas", "clientes", "produtos", "pedidos",
+                "oportunidades", "visitas", "comissoes", "contas_receber",
+                "contas_pagar", "xml_files"]:
+        try: await db[col].create_index("id")
+        except Exception: pass
+        try: await db[col].create_index("tenant_id")
+        except Exception: pass
+
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    existing = await db.users.find_one({"email": admin_email})
+    if existing is None:
+        uid = new_id()
+        await db.users.insert_one({
+            "id": uid, "tenant_id": uid, "email": admin_email,
+            "password_hash": hash_pw(admin_password), "name": "Álvaro",
+            "role": "admin", "plan": "pro", "created_at": iso(now_utc()),
+        })
+        logger.info(f"Admin seeded: {admin_email}")
+        existing = await db.users.find_one({"email": admin_email})
+    else:
+        patch = {}
+        if not verify_pw(admin_password, existing["password_hash"]):
+            patch["password_hash"] = hash_pw(admin_password)
+        if not existing.get("tenant_id"):
+            patch["tenant_id"] = existing["id"]
+        if existing.get("plan") != "pro":
+            patch["plan"] = "pro"
+        if existing.get("subscription_status") != "active":
+            patch["subscription_status"] = "active"
+        if existing.get("trial_ends_at"):
+            patch["trial_ends_at"] = None
+        if patch:
+            await db.users.update_one({"email": admin_email}, {"$set": patch})
+    admin_tid = (existing.get("tenant_id") or existing["id"])
+
+    from seed import seed_demo
+    await seed_demo(db)
+
+    for col in ["representadas", "clientes", "produtos", "pedidos",
+                "oportunidades", "visitas", "comissoes", "contas_receber",
+                "contas_pagar", "xml_files"]:
+        await db[col].update_many({"tenant_id": {"$exists": False}}, {"$set": {"tenant_id": admin_tid}})
+
+@app.on_event("shutdown")
+async def shutdown():
+    client.close()

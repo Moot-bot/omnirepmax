@@ -1,0 +1,26 @@
+{
+  "summary": "RETEST confirmed: both fixes are in place and working. Ran test_pedidos_fixes.py (6 tests) against external REACT_APP_BACKEND_URL (https://sales-hub-pro-44.preview.emergentagent.com). ALL 6 PASSED in 3.20s. Iteration 8 was indeed a false negative.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_pedidos_fixes.py",
+    "/app/test_reports/pytest/pedidos_fixes_retest.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "test_credentials": "alvarofilho39@gmail.com / admin123 (admin)",
+  "seed_data_creation": "Tests create ephemeral pedidos + a signup tenant for cross-tenant isolation; pedidos are deleted at end.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Confirmed fixes: (1) PedidoItemIn.descricao Optional defaults to '' and persists on POST/PUT; (2) DELETE /api/pedidos cascades delete_many to comissoes + contas_receber (verified via create->PATCH faturado->DELETE->GET empty). Also validated 404 for nonexistent and cross-tenant isolation. XML import regression also OK (creates faturado pedido with commission+AR, and cascade works on xml-created pedidos too).",
+  "test_results": {
+    "TestItemDescricaoPersistence::test_post_persists_descricao_per_item": "PASSED",
+    "TestItemDescricaoPersistence::test_put_updates_descricao": "PASSED",
+    "TestDeleteCascade::test_delete_faturado_cascades_comissao_and_ar": "PASSED",
+    "TestDeleteCascade::test_delete_nonexistent_404": "PASSED",
+    "TestDeleteCascade::test_delete_other_tenant_404": "PASSED",
+    "TestXmlRegressionCascade::test_xml_import_creates_pedido_with_comissao_and_ar": "PASSED"
+  }
+}

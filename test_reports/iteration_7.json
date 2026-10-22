@@ -1,0 +1,38 @@
+{
+  "summary": "Validação do CRUD de /api/pedidos com desconto por item + DELETE + isolamento multi-tenant + regressão. Criado /app/backend/tests/test_pedidos_crud.py com 10 testes — TODOS PASSARAM (10/10). Também re-rodado test_xml_import.py (15/15 verde). Cobertura: (1) POST /api/pedidos com itens [{qtd:10,preco:100,desc:10%},{qtd:5,preco:50,desc:0}] → subtotais 900 e 250, subtotal=total=1150, comissao_percentual=comissao_padrao da Bella Moda (6.5%), comissao_valor=74.75, numero PED-XXXXX gerado; (2) GET /api/pedidos lista o pedido com todos os campos de item (nome, quantidade, preco_unitario, desconto, subtotal) persistidos — tela de visualização consegue renderizar; (3) PUT /api/pedidos/{id} com descontos 20% e 50% recalcula para 800+125=925, comissao recalculada, numero preservado; (4) DELETE /api/pedidos/{id} retorna 200 {ok:true}, pedido some do GET; (5) DELETE id inexistente → 404; (6) DELETE pedido de outro tenant → 404 (criado tenant efêmero via /api/auth/signup e tentado deletar pedido do admin — bloqueado corretamente); (7) Regressão: /api/plans público retorna 3 planos (sob chave 'plans'), /api/subscriptions/me admin plan='pro', /api/max-ai/chat 200 com resposta, /api/cron/backup sem auth 401.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST/PUT /api/pedidos", "issue": "PedidoItemIn (server.py L205-210) NÃO declara campo 'descricao' por item. O usuário mencionou ter adicionado 'campo descrição por item' no front, mas Pydantic descarta campos extras por default — então 'descricao' enviado pelo front É SILENCIOSAMENTE PERDIDO e nunca persiste no Mongo. Confirmar no front se o campo está sendo enviado; se sim, adicionar 'descricao: Optional[str] = \"\"' em PedidoItemIn para persistir."},
+      {"endpoint": "DELETE /api/pedidos/{id}", "issue": "Deleta pedido sem cascata: comissões e contas a receber vinculadas (pedido_id) permanecem órfãs no banco. Reutilizando iteração 6 — mesmo problema do histórico XML."},
+      {"endpoint": "PUT /api/pedidos/{id}", "issue": "Quando status já é 'faturado' e o pedido tinha comissão/AR geradas (via PATCH /status), o PUT recalcula total/comissao_valor no pedido mas NÃO atualiza o documento em 'comissoes' nem em 'contas_receber' — fica dessincronizado."},
+      {"endpoint": "POST /api/pedidos", "issue": "numero PED-{count+1:05d} usa count_documents sem lock — mesma observação da iter 6 para XML. Em alta concorrência pode duplicar."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_pedidos_crud.py",
+    "/app/test_reports/pytest/pedidos_crud.xml"
+  ],
+  "action_items": [
+    "Adicionar `descricao: Optional[str] = ''` em PedidoItemIn (server.py L205) se o front está enviando esse campo — caso contrário o 'campo descrição por item' do novo form NUNCA será salvo nem exibido na tela de visualização.",
+    "(opcional) Em DELETE /api/pedidos/{id}, também remover comissoes e contas_receber vinculadas por pedido_id (ou impedir delete se status='faturado').",
+    "(opcional) Em PUT /api/pedidos/{id}, se o pedido já tem comissão/AR geradas, re-sincronizar valor/percentual nos documentos filhos."
+  ],
+  "critical_code_review_comments": [
+    "PedidoItemIn omite 'descricao' — bug silencioso de persistência: Pydantic descarta campos não declarados por padrão, então o novo campo do UI é perdido no POST/PUT.",
+    "calc_pedido_totals muta o dict de entrada in-place (data['itens'][i]['subtotal']=...) — ok funcionalmente mas acoplado; preferível retornar novos itens.",
+    "server.py já tem 1206 linhas e segue monolítico — pedidos/comissões/AR/XML/MaxAI/billing num só arquivo. Recomendado split em routers por domínio.",
+    "DELETE em qualquer entidade (pedidos, clientes, representadas, produtos) não valida referências — permite órfãos em cascata."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pedidos_crud.py (novo, 10 testes)"
+  ],
+  "success_rate": {"backend": "100% (10/10 pedidos_crud + 15/15 xml_import regress)", "frontend": "n/a"},
+  "test_credentials": "alvarofilho39@gmail.com / admin123",
+  "seed_data_creation": "Pedidos efêmeros no tenant admin criados e deletados dentro de cada teste; tenant efêmero TEST_pedidos_<ts>@example.com via /api/auth/signup para teste de isolamento.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "CRUD de pedidos (criação com desconto por item, GET persistido com todos campos, PUT recalculando, DELETE com 404 em outro tenant/inexistente) está 100% verde. ÚNICO ponto de atenção: o front mencionou 'campo descrição por item' novo mas PedidoItemIn não aceita esse campo — se o main agent quer persistir, precisa adicionar no model. Admin segue com plan='pro'. MaxAI, backup cron, plans, subscriptions continuam ok.",
+  "rca of the issue": "N/A — nenhum bug funcional novo detectado nas features testadas. Único alerta de RCA preventiva: campo 'descricao' do item descrito no changelog provavelmente não está persistindo pois PedidoItemIn (server.py L205-210) só aceita produto_id/nome/quantidade/preco_unitario/desconto. Pydantic model_dump() descarta extras por default — adicionar campo no model resolve."
+}

@@ -1,0 +1,8 @@
+crons:
+  - name: daily-backup
+    description: "Dumps all Mongo collections into a backup snapshot at 03:00 BRT daily"
+    cron: "0 6 * * *"
+    endpoint: "{{BASE_URL}}/api/cron/backup"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

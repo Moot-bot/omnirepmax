@@ -1,0 +1,38 @@
+{
+  "summary": "Backend-only validation of OMNIREPMAX multi-tenant SaaS features: public signup, MAX AI chat (emergentintegrations/gpt-4o-mini), forgot/reset password, and strict tenant_id isolation across all CRUD endpoints. Created /app/backend/tests/test_multitenant_maxai.py (17 tests). After fixing one production bug in /api/auth/signup (ObjectId leak), 17/17 passed. Coverage: (a) signup new email → 200 + token + user.tenant_id == user.id; duplicate email → 400; (b) login response and /auth/me include tenant_id for admin; (c) new user dashboard shows clientes_ativos=0/pedidos_faturados=0/faturamento_ano=0 while admin dashboard shows >=5/>=9/>0 (isolation OK); (d) new user CRUD on representadas/clientes/produtos/pedidos — all docs get tenant_id, lists return only own docs; (e) new user DELETE/PUT on admin's representada id → 404 (admin doc untouched); (f) MAX AI with admin token returns real analysis containing 'R$' values from real data; MAX AI with fresh empty tenant returns 'no data' indication; (g) forgot-password returns {ok, token} in DEV, reset-password updates password (new login works, old fails), token reuse → 400, short password → 400, unknown email returns ok without token (anti-enumeration); (h) regression: PATCH /auth/me still updates name/empresa/telefone without leaking password_hash; cron /api/cron/backup correctly rejects no-auth/wrong-secret (401) and accepts right Bearer secret (200).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_multitenant_maxai.py",
+    "/app/backend/tests/test_dashboard_profile.py",
+    "/app/backend/tests/test_backup_cron.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "FIXED during this run: /api/auth/signup was returning 500 (ObjectId serialization). pymongo's insert_one mutates the dict in place by adding _id (ObjectId), and the return comprehension only excluded 'password_hash'. Patched server.py line 306 to also exclude '_id'. Recommend auditing other endpoints that return raw post-insert dicts (none currently do t_insert excludes _id via clean_doc).",
+    "server.py now 951 lines — strongly recommend splitting into routers (auth, tenants, crm, dashboard, max_ai, backup).",
+    "/api/auth/forgot-password returns the reset token directly in the HTTP body in DEV mode. Must gate behind env flag (e.g., APP_ENV=dev) before production — currently always exposed.",
+    "/api/auth/reset-password accepts any token-like string with no rate-limiting; combined with the enumeration-safe forgot endpoint this is fine, but add rate-limit per IP in production.",
+    "signup creates user with role='admin' and plan='trial' but there is no middleware enforcing plan expiry (trial_ends_at is stored but never checked).",
+    "MAX AI endpoint catches all exceptions and returns 200 with {error:true}. OK for UI but makes failure modes invisible to monitoring — recommend logging + optional 502 for infra errors.",
+    "CORS allow_origins=['*'] with allow_credentials=True remains misconfigured (from prior iteration — not fixed).",
+    "/api/backups is still protected only by role check in handler, but /api/backups/run (if present) and other admin ops should use a reusable require_admin dependency.",
+    "No validation on signup password strength beyond Pydantic str (any non-empty allowed). Recommend minimum length 8 + complexity check.",
+    "tenant_id guards rely on t_update/t_delete returning 404 — verified working. But raw db.* calls in pedido-status transition (lines 487-492) use tenant_id filter correctly — good."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (one-line fix in /auth/signup return to exclude _id)",
+    "/app/backend/tests/test_multitenant_maxai.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "n/a"},
+  "test_credentials": "alvarofilho39@gmail.com / admin123 ; WEBHOOK_CRON_SECRET=omni-rep-backup-secret-1f9c47b3e6a2d5f8c1b0e4a9d7f2c6b3 (sent as 'Authorization: Bearer <secret>' header, NOT X-Webhook-Secret)",
+  "seed_data_creation": "Created several ephemeral tenants with TEST_tenant_*/TEST_fp_*/TEST_empty_* email prefixes via signup. One tenant has 1 representada/cliente/produto/pedido with TEST_ prefix. Admin profile already carries name='Alvaro Admin TEST' / empresa='OmniRep TEST' from prior iteration (unchanged pattern).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Multi-tenant backend is fully green. The /auth/signup ObjectId bug was fixed in this iteration (server.py line 306). test_multitenant_maxai.py covers signup/login/isolation/MAX AI/forgot-reset/PATCH me/cron backup — reuse as regression. IMPORTANT when testing cron: endpoint is /api/cron/backup and auth is Authorization: Bearer <WEBHOOK_CRON_SECRET> (not X-Webhook-Secret header). Test tenants left behind are harmless (prefixed TEST_).",
+  "rca of the issue": "RCA — Signup 500: pymongo's AsyncIOMotorCollection.insert_one(user) mutates the user dict in place by injecting the generated BSON _id. The return statement built a dict only excluding 'password_hash', so FastAPI's JSONResponse attempted to serialize the ObjectId, raising TypeError. Repro: POST /api/auth/signup with any new email → 500. Fix: exclude both 'password_hash' and '_id' from the returned user. Validated with 17/17 passing tests including duplicate-email → 400 path."
+}

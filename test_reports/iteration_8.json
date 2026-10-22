@@ -1,0 +1,36 @@
+{
+  "summary": "Regressão focada nas 2 correções da iteração 8 (campo descricao por item + cascata em DELETE /pedidos). RESULTADO: NENHUMA das 2 correções foi efetivamente aplicada em /app/backend/server.py. 4 de 6 testes FALHARAM. PedidoItemIn (server.py L205-210) continua SEM 'descricao: Optional[str] = \"\"' e DELETE /api/pedidos/{pid} (L497-499) continua chamando apenas t_delete('pedidos', current, pid) — sem delete_many em comissoes/contas_receber. Confirmado via grep e inspeção direta. Smoke test que o main agent diz ter rodado deve ter batido em outro ambiente ou com código local não comitado — o deployment público (REACT_APP_BACKEND_URL) está servindo a versão antiga.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST/PUT /api/pedidos", "issue": "PedidoItemIn (server.py L205-210) NÃO declara 'descricao'. Enviado no body, Pydantic descarta silenciosamente. GET retorna item sem o campo. Fix não aplicado apesar do changelog afirmar o contrário.", "priority": "CRITICAL"},
+      {"endpoint": "DELETE /api/pedidos/{pid}", "issue": "server.py L497-499 ainda executa apenas `await t_delete('pedidos', current, pid)` — sem cascata. Após DELETE de pedido faturado, comissão e conta_receber vinculadas por pedido_id permanecem órfãs no banco. Fix não aplicado.", "priority": "CRITICAL"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_pedidos_fixes.py",
+    "/app/test_reports/pytest/pedidos_fixes.xml"
+  ],
+  "action_items": [
+    "APLICAR DE FATO em /app/backend/server.py (L205-210): adicionar `descricao: Optional[str] = \"\"` em PedidoItemIn. Verificar também se calc_pedido_totals/create_pedido/update_pedido estão preservando o campo ao serializar via .model_dump() (deve preservar automaticamente).",
+    "APLICAR DE FATO em /app/backend/server.py (L497-499) a cascata no DELETE /pedidos/{pid}: antes de t_delete, chamar `await db.comissoes.delete_many({'tenant_id': current['tenant_id'], 'pedido_id': pid})` e `await db.contas_receber.delete_many({'tenant_id': current['tenant_id'], 'pedido_id': pid})` (usando t_delete_many se existir helper equivalente).",
+    "Após aplicar, rodar: `pytest /app/backend/tests/test_pedidos_fixes.py -v` — deve passar 6/6.",
+    "Investigar porque o smoke test manual do changelog aparentemente passou — provavelmente foi testado em runtime local sem persistir as mudanças (ou mudança perdida entre edição e commit)."
+  ],
+  "critical_code_review_comments": [
+    "O main agent reportou mudanças que NÃO estão no código servido. Verificar git/salvamento do arquivo.",
+    "PedidoItemIn omite 'descricao' — ainda é o bug silencioso de descarte Pydantic.",
+    "DELETE pedidos ainda deixa órfãos em comissoes e contas_receber."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pedidos_fixes.py (novo, 6 testes de regressão específica)"
+  ],
+  "success_rate": {"backend": "33% (2/6 — somente isolamento 404 passa)", "frontend": "n/a"},
+  "test_credentials": "alvarofilho39@gmail.com / admin123",
+  "seed_data_creation": "Pedidos efêmeros criados/deletados dentro de cada teste. Tenant TEST_cascade_<ts>@example.com via /api/auth/signup para isolamento.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Após o main agent efetivamente editar server.py (PedidoItemIn + DELETE cascade), basta re-rodar `pytest /app/backend/tests/test_pedidos_fixes.py -v`. test_delete_nonexistent_404 e test_delete_other_tenant_404 já passam. Os 4 que falham validam exatamente as 2 features anunciadas.",
+  "rca of the issue": "RCA: as duas mudanças descritas no review_request (PedidoItemIn.descricao e cascata em DELETE /pedidos) NÃO estão presentes no server.py em runtime. Confirmado por: (a) grep direto nas linhas 205-210 mostra apenas produto_id/nome/quantidade/preco_unitario/desconto; (b) linhas 497-499 contêm somente `return await t_delete('pedidos', current, pid)`; (c) testes de API públicos reproduzem o bug: POST com 'descricao' retorna item sem o campo, DELETE de pedido faturado deixa comissão e AR órfãs. Mitigação: main agent deve aplicar as edições reais no arquivo e salvar — hot reload do uvicorn deve pegar automaticamente."
+}

@@ -1,0 +1,342 @@
+{
+  "app_type": "saas_app",
+  "name": "OmniRep B2B CRM + ERP",
+  "tagline": "Plataforma Inteligente para Representantes Comerciais Multi-Representadas",
+  "language": "pt-BR",
+  "theme_support": {
+    "default": "dark",
+    "modes": ["light", "dark"],
+    "strategy": "class",
+    "toggle_location": "Header and Sidebar footer"
+  },
+  "typography": {
+    "headings": {
+      "font_family": "Plus Jakarta Sans, Outfit, sans-serif",
+      "forbidden_heading_font": "Inter",
+      "weight": "font-bold font-extrabold",
+      "h1": "text-3xl sm:text-4xl lg:text-5xl tracking-tight leading-tight",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight leading-snug",
+      "h3": "text-xl sm:text-2xl tracking-tight leading-snug",
+      "h4": "text-lg sm:text-xl font-semibold leading-snug"
+    },
+    "body": {
+      "font_family": "DM Sans, sans-serif",
+      "weight": "font-normal font-medium",
+      "size": "text-sm sm:text-base leading-relaxed text-slate-700 dark:text-slate-300"
+    },
+    "mono_data": {
+      "font_family": "JetBrains Mono, monospace",
+      "usage": "Values in BRL (R$), CNPJ, NF-e numbers, Order IDs, Commission percentages, SKU codes"
+    }
+  },
+  "colors": {
+    "palette_name": "Swiss Corporate & Precision Tech (Multi-Representada Edition)",
+    "light_theme": {
+      "background_page": "#F8FAFC",
+      "background_card": "#FFFFFF",
+      "background_sidebar": "#0F172A",
+      "background_header": "rgba(255, 255, 255, 0.85)",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "text_muted": "#64748B",
+      "border": "#E2E8F0",
+      "primary_brand": "#2563EB",
+      "primary_hover": "#1D4ED8",
+      "primary_light": "#EFF6FF",
+      "accent_emerald": "#10B981",
+      "accent_amber": "#F59E0B",
+      "accent_rose": "#EF4444",
+      "accent_purple": "#8B5CF6",
+      "accent_indigo": "#6366F1"
+    },
+    "dark_theme": {
+      "background_page": "#090D16",
+      "background_card": "#111827",
+      "background_sidebar": "#070B12",
+      "background_header": "rgba(17, 24, 39, 0.85)",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "text_muted": "#64748B",
+      "border": "#1F2937",
+      "primary_brand": "#3B82F6",
+      "primary_hover": "#60A5FA",
+      "primary_light": "#1E293B",
+      "accent_emerald": "#34D399",
+      "accent_amber": "#FBBF24",
+      "accent_rose": "#F87171",
+      "accent_purple": "#A78BFA",
+      "accent_indigo": "#818CF8"
+    },
+    "contrast_rules": {
+      "normal_text_min_ratio": "4.5:1",
+      "large_text_min_ratio": "3:1",
+      "hover_state_rule": "Always explicitly specify text color on hover alongside background color to ensure contrast",
+      "focus_state_rule": "focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-md bg-white/80 dark:bg-slate-900/80 border border-slate-200/60 dark:border-slate-800/60",
+    "card_borders": "1px solid border-slate-200 dark:border-slate-800 rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200",
+    "badges": "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide",
+    "active_indicator": "relative after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-blue-600 dark:after:bg-blue-400",
+    "scrollbar": "custom-scrollbar (thin, slate-300 dark:slate-700 track-transparent)"
+  },
+  "component_name": "OmniRep Modular Architecture",
+  "components": {
+    "sidebar": {
+      "width_expanded": "w-64",
+      "width_collapsed": "w-16",
+      "mobile_behavior": "Drawer slide-in with backdrop blur",
+      "sections": [
+        "Principal: Dashboard, Indicadores AI",
+        "Gestão Comercial: Representadas, Clientes (CRM), Funil Kanban, Agenda & Visitas",
+        "Catálogo & Vendas: Catálogo de Produtos, Catálogo Digital, Pedidos de Venda",
+        "Gestão Financeira: Importação NF-e, Faturamento & Comissões, Contas a Receber, Contas a Pagar, Fluxo de Caixa",
+        "Ferramentas: Mapa Comercial, Documentos, Relatórios, Notificações, Configurações"
+      ]
+    },
+    "header": {
+      "features": [
+        "Representada Multi-Select / Filter Dropdown (Filtrar visões por representada ativa ou 'Todas')",
+        "Global Search (Ctrl+K) com dialog para Clientes, Pedidos, Produtos e Representadas",
+        "Selector de Período (Mês atual, Trimestre, Ano)",
+        "Notificações Badge & Popover",
+        "Toggle Modo Claro / Escuro",
+        "Perfil do Representante (Foto, Core-Conferência, Status online)"
+      ]
+    },
+    "modules": [
+      {
+        "id": "dashboard",
+        "title": "Dashboard Consolidado",
+        "widgets": [
+          "Cards de KPI (Faturamento Total, Comissões Estimadas/Recebidas, Pedidos do Mês, Ticket Médio, Clientes Ativos)",
+          "Gráficos Recharts: Faturamento por Representada (Bar), Evolução de Vendas Mensais (Area), Funil de Conversão (Pie/Composed)",
+          "Painel de Ações Rápidas (Novo Pedido, Registrar Visita, Importar XML, Gerar Catálogo)",
+          "Feed de Atividades Recentes e Próximas Visitas Agendadas"
+        ]
+      },
+      {
+        "id": "representadas",
+        "title": "Empresas Representadas",
+        "features": [
+          "Cadastro Completo: Logo, Razão Social, CNPJ, Inscrição Estadual, Região de Atuação, % Comissão Padrão, Prazo Médio, Condições de Pagamento, Tabela de Preços",
+          "Visão em Cards Grid ou Tabela com métricas de desempenho por Representada",
+          "Modal com Detalhes: Contratos, Catálogo de Produtos da Representada, Regras de Comissão e Vendedores Associados"
+        ]
+      },
+      {
+        "id": "clientes",
+        "title": "CRM de Clientes (Varejo, Distribuidores & Redes)",
+        "features": [
+          "Segmentação por Status: Prospect, Ativo, Inativo, Bloqueado",
+          "Vínculo Multi-Representada: Indica quais representadas atende em cada cliente",
+          "Filtros Avançados: Cidade/UF, Ramo de Atividade, Limite de Crédito, Última Compra",
+          "Ficha 360 do Cliente: Histórico de Pedidos, Visitas, Contatos, Título em Aberto, Observações Comerciais"
+        ]
+      },
+      {
+        "id": "kanban",
+        "title": "Funil de Vendas Kanban",
+        "features": [
+          "Etapas do Funil: Prospecção, Contato Inicial, Proposta/Orçamento, Negociação, Aguardando Faturamento, Concluído/Ganhos, Perdidos",
+          "Drag and drop entre colunas com feedback visual de transição",
+          "Cards de Oportunidade com Valor do Pedido, Representada Vinculada, Data Prevista de Fechamento e Nível de Prioridade"
+        ]
+      },
+      {
+        "id": "agenda",
+        "title": "Agenda e Visitas Comerciais",
+        "features": [
+          "Calendário Mensal/Semanal/Diário de compromissos",
+          "Check-in de Visita Comercial com geolocalização simulada, registro de pauta, foto e pedidos gerados",
+          "Rotas Inteligentes do Dia com integrador de mapa"
+        ]
+      },
+      {
+        "id": "produtos",
+        "title": "Catálogo Geral de Produtos",
+        "features": [
+          "Filtro por Representada, Categoria, SKU, Marca",
+          "Grade com Foto, Código SKU, Preço de Tabela, Estoque Disponível, Unidade (CX, UN, KG, CX24), Alíquota IPI/ST",
+          "Visualização em Grid Expositivo ou Lista Técnica"
+        ]
+      },
+      {
+        "id": "catalogo_digital",
+        "title": "Catálogo Digital Interativo",
+        "features": [
+          "Modo Apresentação para Tablet/Celular em reuniões comerciais",
+          "Carrinho Rápido com cálculo instantâneo de descontos por quantidade e comissão gerada",
+          "Gerador de Link de Catálogo PDF / Web compartilhável por WhatsApp"
+        ]
+      },
+      {
+        "id": "pedidos",
+        "title": "Pedidos de Venda",
+        "features": [
+          "Emissão Rápida de Pedidos: Seleção de Cliente, Representada, Tabela de Preço, Condição de Pagamento, Frete (FOB/CIF)",
+          "Adição dinâmica de itens com sugestão de produtos mais vendidos para o cliente",
+          "Cálculo Automático: Total Bruto, Desconto %, ST/IPI, Total Líquido e Valor Estimado da Comissão",
+          "Status do Pedido: Rascunho, Enviado à Indústria, Aprovado, Faturado, Entregue, Cancelado"
+        ]
+      },
+      {
+        "id": "importacao_xml",
+        "title": "Importação XML NF-e",
+        "features": [
+          "Upload Drag-and-Drop de arquivos .xml da NF-e emitida pelas indústrias representadas",
+          "Parser Automático: Extrai Número da Nota, Valor Faturado, CNPJ Emitente/Destinatário, Chave de Acesso, Itens e Comissão",
+          "Baixa Automática no Pedido e Geração dos Lançamentos no Contas a Receber"
+        ]
+      },
+      {
+        "id": "faturamento_comissoes",
+        "title": "Faturamento e Controle de Comissões",
+        "features": [
+          "Relatório de Comissões por Representada, Mês e Status (Prevista, Faturada, A Receber, Paga)",
+          "Extrato Detalhado de Conciliação de Comissões da Indústria vs Pedidos Faturados",
+          "Emissão de Recibo / Nota de Comissão do Representante Comercial"
+        ]
+      },
+      {
+        "id": "financeiro",
+        "title": "Módulo Financeiro (Contas a Receber, Pagar e Fluxo de Caixa)",
+        "features": [
+          "Contas a Receber: Comissões a receber das representadas com datas de vencimento",
+          "Contas a Pagar: Despesas operacionais do representante (combustível, viagens, contador, softwares, equipe)",
+          "Fluxo de Caixa: Projeção diária e mensal com gráficos de saldo acumulado"
+        ]
+      },
+      {
+        "id": "mapa_comercial",
+        "title": "Mapa Comercial de Cobertura",
+        "features": [
+          "Visualização Geográfica interativa de Clientes e Visitas por Cidade/Bairro",
+          "Pins coloridos por status de cliente (Ativo, Prospect, Inativo)",
+          "Otimizador de Rotas de Visita para o Representante Comercial"
+        ]
+      },
+      {
+        "id": "insights_ia",
+        "title": "Insights Comerciais com IA (OmniBrain)",
+        "features": [
+          "Alertas Inteligentes: 'Clientes com risco de inatividade (>60 dias sem comprar)'",
+          "Oportunidades de Cross-Selling entre Representadas",
+          "Previsão de Faturamento e Meta de Comissão do Mês baseado em histórico",
+          "Assistente IA Comercial para simulação de propostas e roteiro de negociação"
+        ]
+      },
+      {
+        "id": "documentos_relatorios",
+        "title": "Documentos e Relatórios Exportáveis",
+        "features": [
+          "Gerador de PDF de Pedidos e Propostas Personalizadas",
+          "Exportação de Relatórios para Excel/CSV (Vendas por Período, Ranking de Produtos, Comissões)",
+          "Repositório de Contratos de Representação e Tabelas de Preços vigentes"
+        ]
+      }
+    ]
+  },
+  "grids": {
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6",
+    "bento_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-12 gap-4 sm:gap-6",
+    "card_grid": "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6",
+    "kanban_grid": "flex gap-4 overflow-x-auto pb-4 scrollbar-thin",
+    "form_grid": "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+  },
+  "layouts": {
+    "app_shell": "flex h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100",
+    "main_content": "flex-1 flex flex-col min-w-0 overflow-y-auto overflow-x-hidden focus:outline-none",
+    "page_container": "p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6"
+  },
+  "motion": {
+    "page_transition": "initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25, ease: 'easeOut' }}",
+    "modal_backdrop": "initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}",
+    "kanban_drag": "smooth transitions with dnd-kit or react-smooth-dnd micro-feedback",
+    "button_press": "active:scale-95 transition-transform duration-100",
+    "reduced_motion": "respect prefers-reduced-motion media query"
+  },
+  "accessibility": {
+    "keyboard_nav": "Full support for Tab, Shift+Tab, Enter, Escape, Arrow keys",
+    "focus_rings": "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 dark:focus-visible:ring-blue-400 focus-visible:ring-offset-2",
+    "aria_labels": "All icons, buttons without text, and status badges must have aria-label or title",
+    "touch_targets": "Minimum 44px height/width for buttons, tabs, inputs, and clickable icons on touch devices",
+    "data_testid_rule": "MANDATORY: Every button, input, tab, card, menu item, and status element MUST have a unique data-testid attribute in kebab-case (e.g., data-testid='new-order-button')"
+  },
+  "media": {
+    "images": [
+      {
+        "category": "representada_logos",
+        "urls": [
+          "https://images.unsplash.com/photo-1770558570565-ba20528f2ccb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjBjb21wYW55JTIwbG9nbyUyMGNvcnBvcmF0ZXxlbnwwfHx8fDE3OTAxMTU5Nzl8MA&ixlib=rb-4.1.0&q=85",
+          "https://images.unsplash.com/photo-1764383381195-5daa5902c3f8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBjb21wYW55JTIwbG9nbyUyMGNvcnBvcmF0ZXxlbnwwfHx8fDE3OTAxMTU5Nzl8MA&ixlib=rb-4.1.0&q=85",
+          "https://images.unsplash.com/photo-1772760110621-d7b6f54c1e42?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBjb21wYW55JTIwbG9nbyUyMGNvcnBvcmF0ZXxlbnwwfHx8fDE3OTAxMTU5Nzl8MA&ixlib=rb-4.1.0&q=85"
+        ],
+        "description": "Logos de Indústrias e Marcas Representadas"
+      },
+      {
+        "category": "product_catalog",
+        "urls": [
+          "https://images.unsplash.com/photo-1764795849885-e226e3cabe87?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxiMmIlMjBwcm9kdWN0JTIwY2F0YWxvZyUyMHJldGFpbHxlbnwwfHx8fDE3OTAxMTU5ODB8MA&ixlib=rb-4.1.0&q=85",
+          "https://images.pexels.com/photos/8410998/pexels-photo-8410998.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+          "https://images.pexels.com/photos/7667442/pexels-photo-7667442.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+        ],
+        "description": "Produtos do catálogo comercial de vestuário, utilidades e suprimentos"
+      }
+    ]
+  },
+  "3d_libraries_and_canvas": {
+    "charts": "Recharts (ResponsiveContainer, AreaChart, BarChart, PieChart, Tooltip customized for Dark/Light theme)",
+    "interactive_canvas": "TSParticles or SVG Interactive Canvas for Commercial Route Mapping & Sales Network Visualization"
+  },
+  "responsive": {
+    "breakpoint": "mobile-first",
+    "layout": {
+      "sidebar": "Desktop (≥1024px): Permanent collapsible sidebar (64px / 256px). Mobile (<1024px): Hidden with hamburger button trigger opening slide-over sheet.",
+      "dashboard_grid": "Mobile: 1 column. Tablet (md): 2 columns. Desktop (lg): 4 columns.",
+      "tables": "Mobile: Transform into responsive card view with key details stacked and expand/collapse action. Desktop: High-density data table with sorting, column toggle, and pagination.",
+      "kanban": "Mobile: Horizontal scrollable stage columns with swipe indicator or tabbed column selector. Desktop: 5-7 parallel columns."
+    },
+    "typography": {
+      "fluid_scaling": "h1: text-2xl sm:text-4xl lg:text-5xl, body: text-sm sm:text-base, buttons: text-sm font-medium",
+      "inputs": "Minimum text-base (16px) on mobile inputs to prevent unwanted iOS webview auto-zoom"
+    },
+    "overflow_guard": "w-full max-w-full overflow-x-hidden prevent layout break on small viewports",
+    "tap_targets": "Min 44px height for interactive items, bottom floating action bar on mobile for 'Novo Pedido' or 'Check-in Visita'"
+  },
+  "instructions_to_main_agent": [
+    "Construa uma aplicação completa e funcional de CRM + ERP especializada para Representantes Comerciais no Brasil (OmniRep B2B).",
+    "O idioma de toda a interface DEVE SER Português do Brasil (pt-BR), utilizando termos reais do mercado de representação comercial: Representadas, CNPJ, Inscrição Estadual, NF-e, Comissões, Tabela de Preços, Frete FOB/CIF, Substituição Tributária (ST), IPI, Razão Social, Varejo, Distribuidor, Rede de Lojas.",
+    "A aplicação DEVE conter um Toggle de Tema (Modo Claro e Modo Escuro) funcionando perfeitamente em toda a interface, com persistência e transições suaves.",
+    "Implemente um Menu Lateral completo com navegação intuitiva por ícones Lucide/Phosphor para todos os módulos requeridos:",
+    "  1. Dashboard Consolidado (Cards KPI com faturamento/comissão, gráficos Recharts, ações rápidas, feed de atividades)",
+    "  2. Representadas (Cadastro completo com logo, CNPJ, % comissão, tabelas de preço, prazo médio)",
+    "  3. Clientes CRM (Prospects, Ativos, Inativos, busca por cidade/CNPJ, vínculo multi-representada, ficha 360°)",
+    "  4. Funil de Vendas Kanban (Etapas interativas com drag & drop/troca de estágio, valor total por coluna, filtro por representada)",
+    "  5. Agenda & Visitas (Calendário, agendamento de visitas, check-in com registro de fotos/pauta, mapa de rota)",
+    "  6. Catálogo de Produtos (Busca por SKU, marca, representada, preço de tabela, fotos reais, controle de estoque)",
+    "  7. Catálogo Digital (Modo apresentação B2B interativo, montagem de carrinho rápido, compartilhamento WhatsApp/PDF)",
+    "  8. Pedidos de Venda (Emissão completa de pedidos com desconto %, cálculo de ST/IPI, cálculo automático de comissão, emissão em PDF/imprimir)",
+    "  9. Importação XML NF-e (Leitor/simulador de upload de XML de notas fiscais emitidas pelas indústrias, conciliando com pedidos)",
+    "  10. Faturamento & Comissões (Painel de controle de comissões a receber por representada, com status 'Prevista', 'Faturada', 'Paga', extrato de conciliação)",
+    "  11. Financeiro (Contas a Receber, Contas a Pagar de despesas da representação, Fluxo de Caixa projetado com gráficos)",
+    "  12. Mapa Comercial (Mapa interativo visualizando clientes por região, status e rotas comerciais sugeridas)",
+    "  13. Insights Inteligentes com IA (OmniBrain: Alertas de inatividade de clientes, oportunidades de cross-selling, previsão de comissões)",
+    "  14. Documentos & Relatórios (Gerador de propostas, exportação CSV/PDF, repositório de contratos)",
+    "  15. Configurações & Perfil (Dados do representante comercial, registro CORE, alíquotas de imposto Simples Nacional/Lucro Presumido, integrações)",
+    "Forneça dados de teste altamente realistas e ricos (empresas brasileiras fictícias ou com nome fantasia comercial, valores em R$, CNPJs formatados 00.000.000/0001-00, datas atualizadas).",
+    "Garantir total responsividade (mobile-first): em telas pequenas, o menu vira drawer deslizante, as tabelas viram cards adaptativos e os botões de ação ficam acessíveis.",
+    "Adicione o atributo data-testid em kebab-case em TODOS os elementos interativos, botões, campos de entrada, tabs, cards e opções de menu para automação de testes (ex: data-testid='new-order-button', data-testid='client-search-input', data-testid='theme-toggle-button').",
+    "Não utilize plano de fundo totalmente transparente em dropdowns, modais ou cabeçalhos. Use backdrop-blur com opacidade adequada (bg-white/90 ou bg-slate-900/90)."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": {
+    "design_philosophy": "Avoid AI slop aesthetic. Create depth, layered designs, glassmorphism, precise visual hierarchy and strong emotional directness.",
+    "typography_rule": "Do not use Inter for main headings. Use Plus Jakarta Sans / Outfit for bold corporate precision.",
+    "transitions_rule": "Do NOT apply universal transition (transition: all). Use specific transitions (transition-colors, transition-shadow, transition-transform).",
+    "alignment_rule": "Do not center align main app container. Maintain clean left-aligned grid alignment suited for B2B dashboards.",
+    "icons_rule": "Never use emoji characters as UI icons. Use Lucide React icons everywhere.",
+    "spacing_rule": "Use generous 2x-3x padding inside cards (p-4 to p-6) to prevent crowded layouts.",
+    "testing_rule": "All interactive elements MUST include data-testid attribute in kebab-case."
+  }
+}

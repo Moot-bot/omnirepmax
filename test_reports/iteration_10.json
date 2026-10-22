@@ -1,0 +1,28 @@
+{
+  "summary": "Deployment-readiness backend verification: 10/10 pytest cases passed. Verified both health endpoints, admin JWT auth (/api/auth/login + /api/auth/me), 3 plans with prices 69/99/129 (field name is price_brl), tenant-scoped /api/clientes, system reset preview + validation (short motivo and wrong confirmacao both return 400), and comissoes DELETE protection (400 for paid, 200 for non-paid). The deployment_agent PASS verdict is confirmed from the backend side.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /health (external URL)", "issue": "Root-level /health is only reachable through the backend internally (http://localhost:8001/health -> {\"status\":\"ok\"}). The external REACT_APP_BACKEND_URL/health returns the SPA index.html because the K8s ingress routes only /api/* to the backend. This is correct for the in-pod K8s liveness probe (which is what the deployment logs reflect) but it means /health cannot be probed from outside the cluster. Not a bug, just a note."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_deployment_health.py",
+    "/app/test_reports/pytest/deployment_health.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now very large (DELETE /api/comissoes at ~L568, PLANS at ~L1033, system reset endpoints near the bottom) — recommend splitting into routers (auth, plans, clientes, comissoes, system) once stable to keep each file < 700 lines.",
+    "/api/plans exposes price under the key `price_brl` (not `price`). Make sure the frontend pricing page and any Stripe lookup logic use `price_brl` consistently; otherwise prices will render as 0."
+  ],
+  "updated_files": ["/app/backend/tests/test_deployment_health.py"],
+  "success_rate": {"backend": "100%", "frontend": "not tested (per request)"},
+  "test_credentials": "alvarofilho39@gmail.com / admin123 (admin, works on /api/auth/login)",
+  "seed_data_creation": "None — used existing seeded admin + demo data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_deployment_health.py covers health + auth + plans + clientes + system/reset + comissoes delete protection. /health is validated against http://localhost:8001 (not the external URL) because K8s ingress only routes /api/* to backend; this matches how the K8s liveness probe actually calls it. Plan price field is `price_brl`.",
+  "rca of the issue": "User's reported deploy-log errors are two single-shot 'Connection refused' entries emitted by nginx while probing /health during the ~5s uvicorn boot window — followed by hundreds of 200 OK responses. The two 'Started server process' lines ([25] and [26]) come from two independent deployment runs merged in the same log view, not a crash loop. All target endpoints are healthy in the preview env, so the deployment is ready to roll out."
+}

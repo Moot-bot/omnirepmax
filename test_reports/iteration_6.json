@@ -1,0 +1,41 @@
+{
+  "summary": "Validação formal da feature de importação de XML NF-e (/api/xml/import + /api/xml/historico) + regressão. Criado /app/backend/tests/test_xml_import.py com 15 testes — TODOS PASSARAM (15/15). Cobertura: (1) seed admin tem Bella Moda CNPJ 12345678000190 + cliente Preço Bom 11222333000144; (2) XML completo com emit=Bella e dest=Preço Bom gera pedido PED-XXXXX status='faturado', total=1800, comissão=6.5% * 1800 = 117, 2 itens, nf_numero preenchido, tenant_id correto; (3) produtos novos (código/EAN inexistentes) são criados automaticamente dentro da representada (+2 confirmados via GET /api/produtos antes/depois); (4) comissão (/api/comissoes) e conta a receber (/api/contas-receber) criadas com pedido_id correto; (5) histórico /api/xml/historico registra pedido_id/representada_id/cliente_id; (6) emitente desconhecido → pedido_criado=null, pedido_erro='match_pendente', representada_sugestoes populadas, cliente_match ainda retornado; (7) override manual representada_id+cliente_id ignora matching por CNPJ e cria pedido; (8) XML vazio/sem tags → 400; (9) XML sem <nNF> e sem <det> → 400 'Não foi possível identificar NF-e'; (10) sem auth → 401; (11) multi-tenant: tenant novo (signup fresh) com XML dos CNPJs do admin NÃO acha matches (pedido_criado=null, representada_match=null, cliente_match=null). Regressão: /api/plans público 200 com 3 planos, /api/subscriptions/me 401/200, /api/payments/checkout admin 200 com {checkout_url,session_id}, /api/auth/forgot 200, /api/max-ai/chat 401. Match de CNPJ ignora pontuação via _only_digits (12345678000190 bate com 12.345.678/0001-90).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/xml/import", "issue": "Numeração de pedido PED-{count+1:05d} usa count_documents sem lock — em alta concorrência pode gerar números duplicados. Para MVP ok, mas documentar."},
+      {"endpoint": "/api/xml/import", "issue": "Quando _match_or_create_pedido lança exceção, retorna 200 com pedido_erro='erro ao criar pedido: <msg>' + mensagem técnica exposta ao cliente. Melhor logar interno e retornar mensagem genérica."},
+      {"endpoint": "/api/xml/import", "issue": "Produtos auto-criados não validam duplicidade por EAN entre representadas distintas — ok porque a busca é escopada por representada_id, mas EANs duplicados global podem ocorrer silenciosamente."},
+      {"endpoint": "/api/xml/import", "issue": "Parsing com regex é frágil para NF-e reais com namespace xmlns (ex.: <nfe:emit><nfe:CNPJ>). Caso cliente faça upload de XML namespaced, não encontra CNPJ e cai em match_pendente sem explicação clara. Recomendado usar lxml/xml.etree."},
+      {"endpoint": "/api/xml/historico", "issue": "Não há endpoint para remover entradas do histórico (soft delete), e o pedido_id não é desvinculado se o pedido for excluído."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_xml_import.py",
+    "/app/test_reports/pytest/xml_import.xml"
+  ],
+  "action_items": [
+    "(opcional) Trocar regex por parser XML (xml.etree.ElementTree ou lxml) para suportar NF-e com namespace nfe: — hoje falha silenciosamente retornando match_pendente.",
+    "(opcional) Em /api/xml/import, quando pedido_erro contém traceback, não expor detalhes ao cliente — retornar mensagem genérica + log interno.",
+    "Observações herdadas da iteração 5 continuam válidas: seed_admin não sincroniza plan='pro' para admin existente; CORS allow_origins=['*']+credentials; server.py >1100 linhas precisa split."
+  ],
+  "critical_code_review_comments": [
+    "_match_or_create_pedido mistura 3 responsabilidades (match, auto-criação de produto, criação de pedido+comissão+AR). Dividir em funções menores.",
+    "Produto auto-criado tem custo=0 e preco_sugerido=preco_tabela da NF — isso vai distorcer margem/comissão nos relatórios. Marcar como 'pending_review' ou similar.",
+    "O pedido é criado com status='faturado' direto, mas não há verificação de duplicidade por nf_numero+representada_id — reimportação do mesmo XML cria pedidos duplicados (confirmei via re-execução no teste manual).",
+    "representada_sugestoes/cliente_sugestoes retornam TODAS as reps/clientes do tenant (sem limite), podendo ficar pesado em contas grandes.",
+    "t_insert('xml_files') grava o XML inteiro parsed, mas não grava o xml_content original — não dá para auditar/reimportar depois.",
+    "Falta rate limit no endpoint — upload abusivo de XMLs pode criar muitos pedidos."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_xml_import.py (novo, 15 testes)"
+  ],
+  "success_rate": {"backend": "100% (15/15 na suite xml_import)", "frontend": "n/a"},
+  "test_credentials": "alvarofilho39@gmail.com / admin123",
+  "seed_data_creation": "Admin tenant: 2 produtos TST-<UUID>-A/B criados automaticamente em Bella Moda via XML; 1 pedido PED-XXXXX R$1800 faturado + comissão R$117 + AR; 1 pedido override + 1 xml_files histórico com match_pendente. Tenants efêmeros TEST_xml_<ts>@example.com via signup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Feature XML import 100% verde. Validação manual do main agent (PED-00016 R$1800 comissão R$117) confirmada formalmente. Pontos de atenção para próximas iterações: (a) duplicate detection por nf_numero+representada ANTES de criar pedido; (b) suporte a XML com namespace nfe:; (c) idempotência de reimportação. Admin precisa continuar com plan='pro' no DB (vide iter 5 RCA). Todas as suítes anteriores (test_plans_stripe, test_multitenant_maxai, test_dashboard_profile, test_backup_cron) continuam intocadas e verdes.",
+  "rca of the issue": "Problema reportado pelo usuário ('não consegui importar pedido através do XML') foi resolvido pela implementação atual: /api/xml/import agora (1) faz match de CNPJ ignorando pontuação via _only_digits(), (2) auto-cria produtos faltantes dentro da representada, (3) cria pedido status='faturado' com comissão + AR, (4) retorna sugestões para associação manual quando não há match. Verificado via 15 testes automatizados."
+}

@@ -1,0 +1,146 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, h5, h6, .font-display {
+  font-family: 'Inter', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.font-mono, .mono { font-family: 'JetBrains Mono', monospace; }
+
+@layer base {
+  :root {
+    /* --- Shadcn surface tokens (OMNIREP MAX light theme) --- */
+    --background: 220 50% 97%;              /* #F4F7FC */
+    --foreground: 220 46% 15%;              /* #152238 */
+    --card: 0 0% 100%;
+    --card-foreground: 220 46% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 46% 15%;
+    --primary: 218 100% 51%;                /* Royal blue #075BFF */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 216 44% 94%;               /* light silver */
+    --secondary-foreground: 220 46% 15%;
+    --muted: 216 44% 94%;
+    --muted-foreground: 215 16% 47%;        /* #64748B */
+    --accent: 190 92% 50%;                  /* Cyan tech #08D5F5 */
+    --accent-foreground: 220 75% 15%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;                  /* #E2E8F0 */
+    --input: 214 32% 91%;
+    --ring: 218 100% 51%;
+    --radius: 0.75rem;
+
+    --chart-1: 218 100% 51%;                /* Royal */
+    --chart-2: 190 92% 50%;                 /* Cyan */
+    --chart-3: 220 75% 15%;                 /* Navy */
+    --chart-4: 38 92% 50%;                  /* Amber (atenção) */
+    --chart-5: 142 71% 45%;                 /* Emerald (sucesso) */
+
+    /* --- OMNIREP MAX brand tokens (official palette) --- */
+    --brand-navy-deep: 219 79% 10%;         /* #06152F */
+    --brand-navy: 219 86% 22%;              /* #082B68 */
+    --brand-royal: 218 100% 51%;            /* #075BFF */
+    --brand-electric: 211 100% 52%;         /* #087BFF */
+    --brand-cyan: 190 100% 47%;             /* #00C8F0 */
+    --brand-silver: 216 20% 83%;            /* #C8D0DC */
+    --brand-text-primary: 220 46% 15%;      /* #152238 */
+    --brand-text-secondary: 215 16% 47%;    /* #64748B */
+  }
+
+  .dark {
+    --background: 219 79% 10%;              /* #06152F — navy deep */
+    --foreground: 210 40% 98%;
+    --card: 219 86% 15%;                    /* near #082B68 */
+    --card-foreground: 210 40% 98%;
+    --popover: 219 86% 15%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 218 100% 60%;                /* royal */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 219 60% 20%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 219 50% 18%;
+    --muted-foreground: 215 25% 75%;
+    --accent: 190 100% 50%;                 /* cyan */
+    --accent-foreground: 219 79% 10%;
+    --destructive: 0 63% 55%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 219 50% 22%;
+    --input: 219 50% 22%;
+    --ring: 218 100% 60%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}
+
+@layer utilities {
+  /* Brand color utilities */
+  .bg-brand-navy-deep { background-color: hsl(var(--brand-navy-deep)); }
+  .bg-brand-navy { background-color: hsl(var(--brand-navy)); }
+  .bg-brand-royal { background-color: hsl(var(--brand-royal)); }
+  .bg-brand-electric { background-color: hsl(var(--brand-electric)); }
+  .bg-brand-cyan { background-color: hsl(var(--brand-cyan)); }
+  .bg-brand-silver { background-color: hsl(var(--brand-silver)); }
+
+  .text-brand-navy { color: hsl(var(--brand-navy)); }
+  .text-brand-royal { color: hsl(var(--brand-royal)); }
+  .text-brand-cyan { color: hsl(var(--brand-cyan)); }
+  .text-brand-silver { color: hsl(var(--brand-silver)); }
+
+  .border-brand-royal { border-color: hsl(var(--brand-royal)); }
+  .border-brand-cyan { border-color: hsl(var(--brand-cyan)); }
+
+  /* Signature gradients */
+  .bg-brand-gradient { background-image: linear-gradient(135deg, #06152F 0%, #082B68 55%, #075BFF 100%); }
+  .bg-brand-cta { background-image: linear-gradient(135deg, #075BFF 0%, #087BFF 100%); }
+  .bg-brand-cyan-gradient { background-image: linear-gradient(135deg, #075BFF 0%, #00C8F0 100%); }
+
+  .text-brand-gradient {
+    background-image: linear-gradient(90deg, #075BFF 0%, #00C8F0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .text-metallic {
+    background-image: linear-gradient(180deg, #ffffff 0%, #C8D0DC 55%, #ffffff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Decorative diagonals used in hero/login panels */
+  .brand-diagonals::before,
+  .brand-diagonals::after {
+    content: "";
+    position: absolute;
+    width: 2px;
+    height: 160%;
+    top: -30%;
+    background: linear-gradient(180deg, transparent, hsl(var(--brand-royal) / 0.6), hsl(var(--brand-cyan) / 0.8), transparent);
+    filter: blur(0.5px);
+    pointer-events: none;
+  }
+  .brand-diagonals::before { left: 6%;  transform: rotate(18deg); }
+  .brand-diagonals::after  { right: 8%; transform: rotate(-18deg); }
+}
+
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.3); border-radius: 6px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes wave { 0%,100% { transform: rotate(0deg);} 25% { transform: rotate(20deg);} 75% { transform: rotate(-10deg);} }
+.animate-wave { display: inline-block; animation: wave 1.5s ease-in-out infinite; transform-origin: 70% 70%; }
