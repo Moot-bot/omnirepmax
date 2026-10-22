@@ -331,11 +331,12 @@ class ChatIn(BaseModel):
 # Auth
 # ------------------------------------------------------------
 def set_cookies(response: Response, token: str):
+    # Configuração estrita para produção entre domínios diferentes (Vercel -> Render)
     response.set_cookie(
         "access_token", token,
         httponly=True,
-        secure=IS_PROD,
-        samesite="none" if IS_PROD else "lax",
+        secure=True,             # Obrigatório para SameSite=None
+        samesite="none",         # Obrigatório para domínios diferentes
         max_age=604800,
         path="/",
     )
@@ -1512,8 +1513,11 @@ async def startup():
             await db.users.update_one({"email": admin_email}, {"$set": patch})
     admin_tid = (existing.get("tenant_id") or existing["id"])
 
-    from seed import seed_demo
-    await seed_demo(db)
+    try:
+        from seed import seed_demo
+        await seed_demo(db)
+    except ImportError:
+        logger.warning("Arquivo seed.py não encontrado, pulando dados de demonstração.")
 
     for col in ["representadas", "clientes", "produtos", "pedidos",
                 "oportunidades", "visitas", "comissoes", "contas_receber",
