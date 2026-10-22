@@ -1,71 +1,68 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import api from "../lib/api";
-import { PageHeader, StatusBadge, KpiCard } from "../components/Common";
+import { PageHeader, StatusBadge } from "../components/Common";
 import { fmtBRL, fmtDate } from "../lib/format";
-import { Button } from "../components/ui/button";
-import { Percent, Check, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { Card } from "../components/ui/card";
+import { Percent, TrendingUp } from "lucide-react";
 
 export default function Comissoes() {
   const [list, setList] = useState([]);
-  const [clientes, setClientes] = useState([]);
-  const [reps, setReps] = useState([]);
-  const load = async () => setList((await api.get("/comissoes")).data);
-  useEffect(() => { load(); api.get("/clientes").then((r) => setClientes(r.data)); api.get("/representadas").then((r) => setReps(r.data)); }, []);
-  const clienteName = (id) => clientes.find((c) => c.id === id)?.nome_fantasia || "-";
-  const repName = (id) => reps.find((r) => r.id === id)?.nome_fantasia || "-";
-  const totals = list.reduce((a, c) => { a.total += c.valor; if (c.status === "paga") a.paga += c.valor; else a.aberto += c.valor; return a; }, { total: 0, paga: 0, aberto: 0 });
-  const marcarPaga = async (id) => { await api.patch(`/comissoes/${id}`, { status: "paga", data_pagamento: new Date().toISOString() }); toast.success("Registrado"); load(); };
-  const del = async (c) => {
-    if (c.status === "paga") { toast.error("Comissões já pagas não podem ser excluídas"); return; }
-    if (!window.confirm(`Excluir a comissão do pedido ${c.pedido_numero}?`)) return;
-    try { await api.delete(`/comissoes/${c.id}`); toast.success("Comissão excluída"); load(); }
-    catch (e) { toast.error(e?.response?.data?.detail || "Erro ao excluir"); }
-  };
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const res = await api.get("/comissoes");
+    setList(res.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const previstas = list.filter(c => c.status === "prevista" || c.status === "faturada").reduce((acc, c) => acc + c.valor, 0);
+  const pagas = list.filter(c => c.status === "paga").reduce((acc, c) => acc + c.valor, 0);
 
   return (
-    <div>
-      <PageHeader title="Comissões" subtitle="Controle previsto x recebido por representada e pedido" />
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <KpiCard label="Total previsto" value={fmtBRL(totals.total)} icon={Percent} accent="blue" />
-        <KpiCard label="Comissões pagas" value={fmtBRL(totals.paga)} icon={Percent} accent="emerald" />
-        <KpiCard label="A receber" value={fmtBRL(totals.aberto)} icon={Percent} accent="amber" />
+    <div className="pb-10">
+      <PageHeader title="Gestão de Comissões" subtitle="Acompanhe as comissões geradas por cada pedido faturado" />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+        <Card className="p-5 border-l-4 border-l-amber-500 shadow-sm">
+          <div className="flex items-center gap-2 text-slate-500 text-sm font-semibold mb-1"><TrendingUp className="w-4 h-4" /> Comissões a Receber</div>
+          <div className="text-2xl font-bold text-slate-900 dark:text-white">{fmtBRL(previstas)}</div>
+          <p className="text-xs text-slate-400 mt-1">Valores aguardando pagamento (veja em Contas a Receber).</p>
+        </Card>
+        <Card className="p-5 border-l-4 border-l-emerald-500 shadow-sm">
+          <div className="flex items-center gap-2 text-slate-500 text-sm font-semibold mb-1"><Percent className="w-4 h-4" /> Comissões Recebidas</div>
+          <div className="text-2xl font-bold text-emerald-600">{fmtBRL(pagas)}</div>
+          <p className="text-xs text-slate-400 mt-1">Total já liquidado.</p>
+        </Card>
       </div>
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-x-auto">
+
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-900/70 border-b border-slate-200 dark:border-slate-800">
+          <thead className="bg-slate-50 dark:bg-slate-900/80 border-b">
             <tr>
-              <th className="text-left px-4 py-3">Pedido</th>
-              <th className="text-left px-4 py-3">Cliente</th>
-              <th className="text-left px-4 py-3">Representada</th>
-              <th className="text-right px-4 py-3">Faturado</th>
-              <th className="text-right px-4 py-3">%</th>
-              <th className="text-right px-4 py-3">Comissão</th>
-              <th className="text-left px-4 py-3">Previsto</th>
-              <th className="text-left px-4 py-3">Status</th>
-              <th className="text-right px-4 py-3">Ação</th>
+              <th className="px-5 py-4 text-left">Pedido</th>
+              <th className="px-5 py-4 text-right">Valor Faturado</th>
+              <th className="px-5 py-4 text-center">Comissão (%)</th>
+              <th className="px-5 py-4 text-right text-emerald-600">Valor Comissão</th>
+              <th className="px-5 py-4 text-center">Previsão</th>
+              <th className="px-5 py-4 text-center">Status</th>
             </tr>
           </thead>
           <tbody>
-            {list.map((c) => (
-              <tr key={c.id} className="border-b border-slate-100 dark:border-slate-800">
-                <td className="px-4 py-3 font-mono text-xs">{c.pedido_numero}</td>
-                <td className="px-4 py-3">{clienteName(c.cliente_id)}</td>
-                <td className="px-4 py-3">{repName(c.representada_id)}</td>
-                <td className="px-4 py-3 text-right font-mono">{fmtBRL(c.valor_faturado)}</td>
-                <td className="px-4 py-3 text-right font-mono">{c.percentual}%</td>
-                <td className="px-4 py-3 text-right font-mono text-emerald-600">{fmtBRL(c.valor)}</td>
-                <td className="px-4 py-3 text-xs">{fmtDate(c.data_prevista)}</td>
-                <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
-                <td className="px-4 py-3 text-right">
-                  <div className="inline-flex items-center gap-1">
-                    {c.status !== "paga" && <Button size="sm" variant="outline" onClick={() => marcarPaga(c.id)} data-testid={`btn-pagar-${c.id}`}><Check className="w-3.5 h-3.5" />Pagar</Button>}
-                    {c.status !== "paga" && <Button data-testid={`btn-del-comissao-${c.id}`} size="sm" variant="ghost" onClick={() => del(c)} title="Excluir" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-500/10"><Trash2 className="w-3.5 h-3.5" /></Button>}
-                  </div>
-                </td>
+            {list.map(c => (
+              <tr key={c.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50/50">
+                <td className="px-5 py-3 font-mono font-semibold">{c.pedido_numero}</td>
+                <td className="px-5 py-3 text-right font-mono text-slate-500">{fmtBRL(c.valor_faturado)}</td>
+                <td className="px-5 py-3 text-center text-slate-500">{c.percentual}%</td>
+                <td className="px-5 py-3 text-right font-mono font-bold text-emerald-600">{fmtBRL(c.valor)}</td>
+                <td className="px-5 py-3 text-center">{fmtDate(c.data_prevista)}</td>
+                <td className="px-5 py-3 text-center"><StatusBadge status={c.status} /></td>
               </tr>
             ))}
-            {list.length === 0 && <tr><td colSpan={9} className="p-8 text-center text-slate-500">Sem comissões. Fature pedidos para gerar.</td></tr>}
+            {list.length === 0 && !loading && (
+              <tr><td colSpan={6} className="text-center py-10 text-slate-500">Nenhuma comissão gerada.</td></tr>
+            )}
           </tbody>
         </table>
       </div>

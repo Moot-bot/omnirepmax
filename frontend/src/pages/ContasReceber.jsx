@@ -1,75 +1,162 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import api from "../lib/api";
-import { PageHeader, StatusBadge, KpiCard } from "../components/Common";
-import { fmtBRL, fmtDate } from "../lib/format";
+import { PageHeader, StatusBadge } from "../components/Common";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Plus, Check, Trash2 } from "lucide-react";
+import { fmtBRL, fmtDate } from "../lib/format";
+import { CheckCircle2, History, DollarSign } from "lucide-react";
 import { toast } from "sonner";
 
 export default function ContasReceber() {
   const [list, setList] = useState([]);
   const [clientes, setClientes] = useState([]);
+  
+  // Modal de Recebimento
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ cliente_id: "", numero_documento: "", valor: 0, vencimento: "", status: "aberto", forma_pagamento: "Boleto" });
-  const load = async () => setList((await api.get("/contas-receber")).data);
-  useEffect(() => { load(); api.get("/clientes").then((r) => setClientes(r.data)); }, []);
-  const totalAberto = list.filter((a) => a.status === "aberto").reduce((s, a) => s + a.valor, 0);
-  const totalRecebido = list.filter((a) => a.status === "recebido").reduce((s, a) => s + a.valor, 0);
-  const clienteName = (id) => clientes.find((c) => c.id === id)?.nome_fantasia || "-";
-  const save = async () => { try { await api.post("/contas-receber", form); toast.success("Criado"); setOpen(false); load(); } catch { toast.error("Erro"); } };
-  const receber = async (a) => { await api.put(`/contas-receber/${a.id}`, { ...a, status: "recebido", data_recebimento: new Date().toISOString() }); load(); };
-  const del = async (a) => {
-    if (!window.confirm(`Excluir o título ${a.numero_documento || ""}?`)) return;
-    try { await api.delete(`/contas-receber/${a.id}`); toast.success("Título excluído"); load(); }
-    catch (e) { toast.error(e?.response?.data?.detail || "Erro ao excluir"); }
+  const [selectedAR, setSelectedAR] = useState(null);
+  const [valorReceber, setValorReceber] = useState("");
+  const [dataRecebimento, setDataRecebimento] = useState(new Date().toISOString().split('T')[0]);
+
+  const load = useCallback(async () => {
+    const [arRes, cliRes] = await Promise.all([
+      api.get("/contas-receber"),
+      api.get("/clientes")
+    ]);
+    setList(arRes.data);
+    setClientes(cliRes.data);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const getClienteName = (id) => clientes.find(c => c.id === id)?.nome_fantasia || "Cliente Desconhecido";
+
+  const handleOpenRecebimento = (ar) => {
+    setSelectedAR(ar);
+    setValorReceber(ar.saldo_pendente || ar.valor);
+    setDataRecebimento(new Date().toISOString().split('T')[0]);
+    setOpen(true);
   };
 
+  const confirmarRecebimento = async () => {
+    try {
+      await api.post(`/contas-receber/${selectedAR.id}/receber`, {
+        valor: parseFloat(valorReceber),
+        data: new Date(dataRecebimento).toISOString()
+      });
+      toast.success("Recebimento registrado com sucesso!");
+      setOpen(false);
+      load(); // Recarrega a lista
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Erro ao registrar recebimento");
+    }
+  };
+
+  const totalPendente = list.filter(a => a.status !== "recebido").reduce((acc, a) => acc + (a.saldo_pendente || a.valor), 0);
+  const totalRecebido = list.reduce((acc, a) => acc + (a.valor_recebido || 0), 0);
+
   return (
-    <div>
-      <PageHeader title="Contas a Receber" subtitle="Títulos, vencimentos e recebimentos" actions={<Button data-testid="btn-new-ar" onClick={() => setOpen(true)} className="bg-[#075BFF] hover:bg-[#087BFF]"><Plus className="w-4 h-4 mr-1" />Novo título</Button>} />
+    <div className="pb-10">
+      <PageHeader 
+        title="Contas a Receber" 
+        subtitle="Gestão de comissões a receber por pedido faturado" 
+      />
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-        <KpiCard label="Em aberto" value={fmtBRL(totalAberto)} accent="amber" />
-        <KpiCard label="Recebido" value={fmtBRL(totalRecebido)} accent="emerald" />
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-lg">
+          <div className="text-sm font-semibold uppercase opacity-90">Saldo Pendente a Receber</div>
+          <div className="text-3xl font-bold mt-1">{fmtBRL(totalPendente)}</div>
+        </div>
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg">
+          <div className="text-sm font-semibold uppercase opacity-90">Total Já Recebido</div>
+          <div className="text-3xl font-bold mt-1">{fmtBRL(totalRecebido)}</div>
+        </div>
       </div>
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-900/70 border-b border-slate-200 dark:border-slate-800"><tr>
-            <th className="text-left px-4 py-3">Documento</th><th className="text-left px-4 py-3">Cliente</th>
-            <th className="text-right px-4 py-3">Valor</th><th className="text-left px-4 py-3">Vencimento</th>
-            <th className="text-left px-4 py-3">Status</th><th className="text-right px-4 py-3">Ação</th>
-          </tr></thead>
-          <tbody>{list.map((a) => (
-            <tr key={a.id} className="border-b border-slate-100 dark:border-slate-800">
-              <td className="px-4 py-3 font-mono text-xs">{a.numero_documento}</td>
-              <td className="px-4 py-3">{clienteName(a.cliente_id)}</td>
-              <td className="px-4 py-3 text-right font-mono">{fmtBRL(a.valor)}</td>
-              <td className="px-4 py-3">{fmtDate(a.vencimento)}</td>
-              <td className="px-4 py-3"><StatusBadge status={a.status} /></td>
-              <td className="px-4 py-3 text-right">
-                <div className="inline-flex items-center gap-1">
-                  {a.status === "aberto" && <Button size="sm" variant="outline" onClick={() => receber(a)}><Check className="w-3.5 h-3.5" />Baixar</Button>}
-                  <Button data-testid={`btn-del-ar-${a.id}`} size="sm" variant="ghost" onClick={() => del(a)} title="Excluir" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-500/10"><Trash2 className="w-3.5 h-3.5" /></Button>
-                </div>
-              </td>
-            </tr>
-          ))}{list.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-slate-500">Sem títulos.</td></tr>}</tbody>
-        </table>
+
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 dark:bg-slate-900/80 border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="text-left px-5 py-4 font-semibold">Pedido / Doc</th>
+                <th className="text-left px-5 py-4 font-semibold">Cliente</th>
+                <th className="text-left px-5 py-4 font-semibold">Vencimento</th>
+                <th className="text-right px-5 py-4 font-semibold">Comissão Total</th>
+                <th className="text-right px-5 py-4 font-semibold">Recebido</th>
+                <th className="text-right px-5 py-4 font-semibold">Saldo Pendente</th>
+                <th className="text-center px-5 py-4 font-semibold">Status</th>
+                <th className="text-right px-5 py-4 font-semibold">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((ar) => (
+                <tr key={ar.id} className="border-b border-slate-100 dark:border-slate-800/50 hover:bg-slate-50/80 group">
+                  <td className="px-5 py-3 font-mono text-xs">{ar.numero_documento}</td>
+                  <td className="px-5 py-3 font-semibold text-slate-900 dark:text-white">{getClienteName(ar.cliente_id)}</td>
+                  <td className="px-5 py-3">{fmtDate(ar.vencimento)}</td>
+                  <td className="px-5 py-3 text-right font-mono text-slate-500">{fmtBRL(ar.valor)}</td>
+                  <td className="px-5 py-3 text-right font-mono text-emerald-600">{fmtBRL(ar.valor_recebido || 0)}</td>
+                  <td className="px-5 py-3 text-right font-mono font-bold text-amber-600">{fmtBRL(ar.saldo_pendente || ar.valor)}</td>
+                  <td className="px-5 py-3 text-center"><StatusBadge status={ar.status} /></td>
+                  <td className="px-5 py-3 text-right">
+                    {ar.status !== "recebido" ? (
+                      <Button size="sm" onClick={() => handleOpenRecebimento(ar)} className="bg-[#075BFF] hover:bg-[#087BFF] h-8">
+                        <DollarSign className="w-3.5 h-3.5 mr-1" /> Baixar
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" disabled className="h-8 border-emerald-200 text-emerald-600 bg-emerald-50">
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Pago
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {list.length === 0 && <tr><td colSpan={8} className="text-center py-10 text-slate-500">Nenhuma comissão a receber.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {/* Modal de Baixa */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent><DialogHeader><DialogTitle>Novo título</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1"><Label>Cliente</Label><Select value={form.cliente_id} onValueChange={(v) => setForm({ ...form, cliente_id: v })}><SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger><SelectContent>{clientes.map((c) => <SelectItem key={c.id} value={c.id}>{c.nome_fantasia || c.razao_social}</SelectItem>)}</SelectContent></Select></div>
-            <div className="space-y-1"><Label>Documento</Label><Input value={form.numero_documento} onChange={(e) => setForm({ ...form, numero_documento: e.target.value })} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1"><Label>Valor</Label><Input type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: parseFloat(e.target.value || 0) })} /></div>
-              <div className="space-y-1"><Label>Vencimento</Label><Input type="date" value={form.vencimento?.substring(0, 10) || ""} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></div>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Receber Comissão</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-lg mb-4">
+              <p className="text-sm text-slate-500">Saldo Pendente deste título:</p>
+              <p className="text-2xl font-bold text-amber-600">{fmtBRL(selectedAR?.saldo_pendente || 0)}</p>
             </div>
+            
+            <div className="space-y-1.5">
+              <Label>Valor Recebido (R$)</Label>
+              <Input type="number" step="0.01" value={valorReceber} onChange={e => setValorReceber(e.target.value)} />
+              <p className="text-xs text-slate-500">Deixe o valor cheio para quitar, ou menor para baixa parcial.</p>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label>Data do Recebimento</Label>
+              <Input type="date" value={dataRecebimento} onChange={e => setDataRecebimento(e.target.value)} />
+            </div>
+
+            {selectedAR?.historico_recebimentos?.length > 0 && (
+              <div className="mt-4 border-t pt-4">
+                <Label className="flex items-center gap-2 mb-2"><History className="w-4 h-4" /> Histórico de Recebimentos</Label>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {selectedAR.historico_recebimentos.map((h, i) => (
+                    <div key={i} className="flex justify-between text-xs p-2 bg-slate-50 dark:bg-slate-800/50 rounded">
+                      <span>{fmtDate(h.data)}</span>
+                      <span className="font-bold text-emerald-600">+ {fmtBRL(h.valor)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button><Button data-testid="btn-save-ar" onClick={save} className="bg-[#075BFF] hover:bg-[#087BFF]">Salvar</Button></DialogFooter>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
+            <Button onClick={confirmarRecebimento} className="bg-[#075BFF]">Confirmar Recebimento</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

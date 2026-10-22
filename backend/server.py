@@ -252,6 +252,10 @@ class ProdutoIn(BaseModel):
     imagem: Optional[str] = ""
     observacoes: Optional[str] = ""
 
+class TXTImportIn(BaseModel):
+    representada_id: str
+    produtos: List[dict]
+
 class PedidoItemIn(BaseModel):
     produto_id: str
     nome: str
@@ -331,12 +335,11 @@ class ChatIn(BaseModel):
 # Auth
 # ------------------------------------------------------------
 def set_cookies(response: Response, token: str):
-    # Configuração estrita para produção entre domínios diferentes (Vercel -> Render)
     response.set_cookie(
         "access_token", token,
         httponly=True,
-        secure=True,             # Obrigatório para SameSite=None
-        samesite="none",         # Obrigatório para domínios diferentes
+        secure=True,
+        samesite="none",
         max_age=604800,
         path="/",
     )
@@ -501,6 +504,25 @@ async def update_produto(pid: str, body: ProdutoIn, current=Depends(get_current_
 async def del_produto(pid: str, current=Depends(get_current_user)):
     return await t_delete("produtos", current, pid)
 
+@api.post("/produtos/import-txt")
+async def import_txt(body: TXTImportIn, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    criados = 0
+    for p in body.produtos:
+        # Evita duplicidade checando o código ou nome dentro da mesma representada
+        existing = await db.produtos.find_one({"tenant_id": tid, "codigo": p.get("codigo"), "representada_id": body.representada_id})
+        if not existing:
+            await t_insert("produtos", current, {
+                "representada_id": body.representada_id,
+                "nome": p.get("nome"),
+                "codigo": p.get("codigo"),
+                "preco_tabela": float(p.get("preco", 0)),
+                "unidade": p.get("unidade", "UN"),
+                "status": "ativo"
+            })
+            criados += 1
+    return {"ok": True, "criados": criados}
+
 # ------------------------------------------------------------
 # Pedidos
 # ------------------------------------------------------------
@@ -564,7 +586,9 @@ async def status_pedido(pid: str, body: dict, current=Depends(get_current_user))
     novo = body.get("status")
     if not novo: raise HTTPException(400, "status obrigatório")
     ped = await t_update("pedidos", current, pid, {"status": novo})
+    
     if novo == "faturado":
+        # 1. Gera a Comissão
         exists = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid_of(current)})
         if not exists:
             await t_insert("comissoes", current, {
@@ -577,14 +601,25 @@ async def status_pedido(pid: str, body: dict, current=Depends(get_current_user))
                 "data_prevista": iso(now_utc() + timedelta(days=30)),
                 "data_pagamento": None,
             })
+        
+        # 2. Gera a Conta a Receber (Apenas a comissão, não o valor total do pedido)
         exists_ar = await db.contas_receber.find_one({"pedido_id": pid, "tenant_id": tid_of(current)})
         if not exists_ar:
+            comissao_val = ped.get("comissao_valor", 0)
             await t_insert("contas_receber", current, {
-                "cliente_id": ped.get("cliente_id"), "representada_id": ped.get("representada_id"),
-                "pedido_id": pid, "numero_documento": ped.get("numero"),
-                "valor": ped.get("total", 0),
+                "cliente_id": ped.get("cliente_id"), 
+                "representada_id": ped.get("representada_id"),
+                "pedido_id": pid, 
+                "numero_documento": ped.get("numero"),
+                "valor_total_pedido": ped.get("total", 0), # Mantém o valor do pedido no histórico
+                "valor": comissao_val,                     # O valor a receber é a comissão
+                "valor_recebido": 0.0,
+                "saldo_pendente": comissao_val,
                 "vencimento": iso(now_utc() + timedelta(days=30)),
-                "status": "aberto", "forma_pagamento": "Boleto",
+                "status": "aberto", 
+                "tipo": "comissao",
+                "historico_recebimentos": [],
+                "forma_pagamento": "Boleto",
             })
     return ped
 
@@ -638,7 +673,7 @@ async def del_visita(vid: str, current=Depends(get_current_user)):
     return await t_delete("visitas", current, vid)
 
 # ------------------------------------------------------------
-# Comissões / Contas
+# Comissões / Contas a Receber
 # ------------------------------------------------------------
 @api.get("/comissoes")
 async def get_comissoes(status: Optional[str] = None, representada_id: Optional[str] = None,
@@ -678,6 +713,49 @@ async def update_ar(rid: str, body: ARIn, current=Depends(get_current_user)):
 async def del_ar(rid: str, current=Depends(get_current_user)):
     return await t_delete("contas_receber", current, rid)
 
+@api.post("/contas-receber/{rid}/receber")
+async def receber_comissao(rid: str, body: dict, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid})
+    if not ar:
+        raise HTTPException(404, "Conta não encontrada")
+    
+    valor_recebido = float(body.get("valor", 0))
+    data_recebimento = body.get("data", iso(now_utc()))
+    
+    if valor_recebido <= 0:
+        raise HTTPException(400, "Valor deve ser maior que zero")
+        
+    # Como mudamos a regra, o campo 'valor' agora é a comissão.
+    # E o saldo_pendente é usado para os recebimentos parciais.
+    saldo_atual = ar.get("saldo_pendente", ar.get("valor", 0))
+    novo_saldo = saldo_atual - valor_recebido
+    novo_total_recebido = ar.get("valor_recebido", 0) + valor_recebido
+    
+    novo_status = "recebido" if novo_saldo <= 0.01 else "aberto"
+    
+    historico = ar.get("historico_recebimentos", [])
+    historico.append({
+        "data": data_recebimento,
+        "valor": valor_recebido,
+        "saldo_restante": round(max(0, novo_saldo), 2)
+    })
+    
+    await db.contas_receber.update_one(
+        {"id": rid},
+        {"$set": {
+            "valor_recebido": round(novo_total_recebido, 2),
+            "saldo_pendente": round(max(0, novo_saldo), 2),
+            "status": novo_status,
+            "historico_recebimentos": historico,
+            "updated_at": iso(now_utc())
+        }}
+    )
+    return {"ok": True, "novo_saldo": novo_saldo}
+
+# ------------------------------------------------------------
+# Contas a Pagar
+# ------------------------------------------------------------
 @api.get("/contas-pagar")
 async def get_ap(current=Depends(get_current_user)):
     return await t_list("contas_pagar", current, sort_key="vencimento")
@@ -708,28 +786,40 @@ async def dashboard(current=Depends(get_current_user)):
     pedidos = await t_list("pedidos", current)
     faturados = [p for p in pedidos if p.get("status") == "faturado"]
     now = now_utc(); mes = now.month; ano = now.year
+    
+    # Volume de Vendas (Mês e Ano)
     fat_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
     fat_ano = sum(p.get("total", 0) for p in faturados if _in_year(p.get("data_pedido"), ano))
+    
     reps = await t_list("representadas", current)
     fat_por_rep = []
     for r in reps:
         v = sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"])
         fat_por_rep.append({"nome": r.get("nome_fantasia") or r.get("razao_social"), "valor": round(v, 2)})
+        
     comissoes = await t_list("comissoes", current)
     com_recebidas = sum(c.get("valor", 0) for c in comissoes if c.get("status") == "paga")
     com_abertas = sum(c.get("valor", 0) for c in comissoes if c.get("status") in ("prevista", "faturada"))
+    
     ap = await t_list("contas_pagar", current)
     ar = await t_list("contas_receber", current)
+    
     ap_abertas = sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto")
-    ar_abertas = sum(a.get("valor", 0) for a in ar if a.get("status") == "aberto")
+    # O valor a receber em aberto agora usa o saldo pendente (comissão menos o que já foi recebido)
+    ar_abertas = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
+    
     despesas_mes = sum(a.get("valor", 0) for a in ap if a.get("status") == "pago" and _in_month(a.get("vencimento"), ano, mes))
     saldo_mes = fat_mes - despesas_mes
+    
     em_atraso_valor = 0.0; em_atraso_count = 0
     for a in ap + ar:
         if a.get("status") in ("aberto", "vencido"):
             d = _parse_date(a.get("vencimento"))
             if d and d < now:
-                em_atraso_valor += a.get("valor", 0); em_atraso_count += 1
+                # Para contas a receber, considera apenas o saldo pendente
+                val_atraso = a.get("saldo_pendente", a.get("valor", 0)) if a.get("tipo") == "comissao" else a.get("valor", 0)
+                em_atraso_valor += val_atraso; em_atraso_count += 1
+                
     projecao_valor = sum(p.get("total", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
     projecao_comissao = sum(p.get("comissao_valor", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
     clientes = await t_list("clientes", current)
@@ -741,20 +831,24 @@ async def dashboard(current=Depends(get_current_user)):
     visitas_realizadas = sum(1 for v in visitas if v.get("status") == "realizada")
     ops = await t_list("oportunidades", current)
     propostas_neg = sum(1 for o in ops if o.get("estagio") in ("proposta", "negociacao"))
+    
     serie = []
     for i in range(5, -1, -1):
         d = (now.replace(day=1) - timedelta(days=30 * i))
         val = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), d.year, d.month))
         serie.append({"mes": f"{MESES_ABR[d.month-1]}/{d.strftime('%y')}", "valor": round(val, 2)})
+        
     prod_total: Dict[str, float] = {}
     for p in faturados:
         for it in p.get("itens", []):
             k = it.get("nome", ""); prod_total[k] = prod_total.get(k, 0) + it.get("subtotal", 0)
     top_produtos = sorted([{"nome": k, "valor": round(v, 2)} for k, v in prod_total.items()], key=lambda x: -x["valor"])[:5]
+    
     cat_total: Dict[str, float] = {}
     for a in ap:
         c = a.get("categoria", "Outros"); cat_total[c] = cat_total.get(c, 0) + a.get("valor", 0)
     gastos_por_categoria = sorted([{"categoria": k, "valor": round(v, 2)} for k, v in cat_total.items()], key=lambda x: -x["valor"])
+    
     if fat_mes <= 0:
         saude = 50
     else:
@@ -762,6 +856,7 @@ async def dashboard(current=Depends(get_current_user)):
         pen_atraso = min(0.4, em_atraso_valor / max(1.0, fat_mes))
         saude = int(round(max(0, min(100, (margem * 0.7 + 0.3) * 100 - pen_atraso * 100))))
     saude_label = "Excelente" if saude >= 80 else ("Boa" if saude >= 60 else ("Regular" if saude >= 40 else "Ruim"))
+    
     avisos = []
     cmap = {c["id"]: c for c in clientes}
     for a in ap + ar:
@@ -770,7 +865,8 @@ async def dashboard(current=Depends(get_current_user)):
             if d and d < now:
                 dias = (now - d).days
                 nome = a.get("descricao") or (cmap.get(a.get("cliente_id"), {}).get("nome_fantasia") if a.get("cliente_id") else "") or a.get("numero_documento", "Título")
-                avisos.append({"tipo": "atraso", "titulo": f'"{nome}" está vencida há {dias} dias', "valor": a.get("valor", 0)})
+                val_aviso = a.get("saldo_pendente", a.get("valor", 0)) if a.get("tipo") == "comissao" else a.get("valor", 0)
+                avisos.append({"tipo": "atraso", "titulo": f'"{nome}" está vencida há {dias} dias', "valor": val_aviso})
     for c in comissoes:
         if c.get("status") in ("prevista", "faturada"):
             d = _parse_date(c.get("data_prevista"))
@@ -778,6 +874,7 @@ async def dashboard(current=Depends(get_current_user)):
                 nome = cmap.get(c.get("cliente_id"), {}).get("nome_fantasia", "cliente")
                 avisos.append({"tipo": "comissao", "titulo": f'Comissão de {nome} vence em {(d - now).days} dias', "valor": c.get("valor", 0)})
     avisos = avisos[:5]
+    
     return {
         "mes_atual": f"{MESES_PT[mes]} de {ano}",
         "faturamento_mes": round(fat_mes, 2), "faturamento_ano": round(fat_ano, 2),
@@ -868,6 +965,9 @@ async def _build_ai_context(current: dict) -> str:
                         "total_faturado": round(sum(p.get("total", 0) for p in pr), 2),
                         "pedidos_faturados": len(pr)})
 
+    # Saldo a receber real (considerando baixas parciais)
+    ar_saldo_aberto = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
+
     ctx = {
         "data_de_hoje": now.strftime("%Y-%m-%d"),
         "resumo": {
@@ -878,11 +978,11 @@ async def _build_ai_context(current: dict) -> str:
             "pedidos_total": len(pedidos),
             "pedidos_faturados": sum(1 for p in pedidos if p.get("status") == "faturado"),
             "pedidos_em_aberto": sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")),
-            "faturamento_total": round(sum(p.get("total", 0) for p in pedidos if p.get("status") == "faturado"), 2),
+            "volume_vendas_total": round(sum(p.get("total", 0) for p in pedidos if p.get("status") == "faturado"), 2),
             "comissoes_a_receber": round(sum(c.get("valor", 0) for c in comissoes if c.get("status") in ("prevista", "faturada")), 2),
             "comissoes_recebidas": round(sum(c.get("valor", 0) for c in comissoes if c.get("status") == "paga"), 2),
             "contas_a_pagar_aberto": round(sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto"), 2),
-            "contas_a_receber_aberto": round(sum(a.get("valor", 0) for a in ar if a.get("status") == "aberto"), 2),
+            "contas_a_receber_aberto": round(ar_saldo_aberto, 2),
         },
         "representadas": por_rep,
         "top_10_clientes": top_clientes,
@@ -923,7 +1023,7 @@ async def max_ai(body: ChatIn, current=Depends(get_current_user)):
                 {"role": "system", "content": system},
                 {"role": "user", "content": msg_text}
             ],
-            model="openai/gpt-oss-120b", # Modelo via Groq
+            model="openai/gpt-oss-120b",
         )
         reply = chat_completion.choices[0].message.content
         return {"reply": reply}
@@ -1068,11 +1168,21 @@ async def _match_or_create_pedido(current: dict, parsed: dict,
         "status": "prevista", "data_prevista": iso(now_utc() + timedelta(days=30)),
         "data_pagamento": None,
     })
+    
+    # Gera Conta a Receber (Apenas Comissão)
+    comissao_val = pedido_data["comissao_valor"]
     await t_insert("contas_receber", current, {
         "cliente_id": cli_match["id"], "representada_id": rep_match["id"],
         "pedido_id": pedido["id"], "numero_documento": pedido["numero"],
-        "valor": total, "vencimento": iso(now_utc() + timedelta(days=30)),
-        "status": "aberto", "forma_pagamento": "Boleto",
+        "valor_total_pedido": total,
+        "valor": comissao_val,
+        "valor_recebido": 0.0,
+        "saldo_pendente": comissao_val,
+        "vencimento": iso(now_utc() + timedelta(days=30)),
+        "status": "aberto",
+        "tipo": "comissao",
+        "historico_recebimentos": [],
+        "forma_pagamento": "Boleto",
     })
     result["pedido_criado"] = pedido
     return result
@@ -1121,7 +1231,7 @@ async def insights_ai(current=Depends(get_current_user)):
                 {"role": "system", "content": "Você é um analista comercial. Retorne APENAS um JSON array com 4-6 objetos {tipo:'oportunidade|alerta|dica',titulo:'',descricao:''}. Sem markdown, sem texto extra antes ou depois."},
                 {"role": "user", "content": f"Dados: {ctx}"}
             ],
-            model="openai/gpt-oss-120b", # Modelo via Groq
+            model="openai/gpt-oss-120b",
         )
         raw = chat_completion.choices[0].message.content
         m = re.search(r"\[.*\]", raw.strip(), re.S)
@@ -1450,7 +1560,51 @@ async def system_reset_history(current=Depends(get_current_user), limit: int = 1
         d.pop("_id", None)
         out.append(d)
     return out
+class DocumentoIn(BaseModel):
+    nome: str
+    arquivo_base64: str
 
+@api.post("/representadas/{rid}/documentos")
+async def upload_documento(rid: str, body: DocumentoIn, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    # Verifica se a representada existe
+    rep = await db.representadas.find_one({"id": rid, "tenant_id": tid})
+    if not rep:
+        raise HTTPException(404, "Representada não encontrada")
+    
+    if len(body.arquivo_base64) > 5_000_000: # Limite de ~3.5MB
+        raise HTTPException(413, "Arquivo muito grande. Máximo 3MB.")
+
+    doc = {
+        "id": new_id(),
+        "tenant_id": tid,
+        "representada_id": rid,
+        "nome": body.nome,
+        "arquivo_base64": body.arquivo_base64,
+        "created_at": iso(now_utc())
+    }
+    await db.documentos.insert_one(doc)
+    return {"ok": True, "id": doc["id"]}
+
+@api.get("/representadas/{rid}/documentos")
+async def get_documentos(rid: str, current=Depends(get_current_user)):
+    # Retorna a lista sem o conteúdo do arquivo (para não pesar)
+    docs = await db.documentos.find({"tenant_id": tid_of(current), "representada_id": rid}, {"arquivo_base64": 0, "_id": 0}).to_list(100)
+    return docs
+
+@api.get("/documentos/{doc_id}/download")
+async def download_documento(doc_id: str, current=Depends(get_current_user)):
+    doc = await db.documentos.find_one({"id": doc_id, "tenant_id": tid_of(current)})
+    if not doc:
+        raise HTTPException(404, "Documento não encontrado")
+    return {"nome": doc["nome"], "arquivo_base64": doc["arquivo_base64"]}
+
+@api.delete("/documentos/{doc_id}")
+async def del_documento(doc_id: str, current=Depends(get_current_user)):
+    res = await db.documentos.delete_one({"id": doc_id, "tenant_id": tid_of(current)})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Documento não encontrado")
+    return {"ok": True}
 # ------------------------------------------------------------
 # Register + startup
 # ------------------------------------------------------------

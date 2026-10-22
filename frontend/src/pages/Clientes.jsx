@@ -7,7 +7,7 @@ import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Plus, Edit2, Trash2, Search, Building2, MapPin, Users } from "lucide-react";
+import { Plus, Edit2, Trash2, Search, Building2, MapPin, Users, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 const empty = { razao_social: "", nome_fantasia: "", cnpj_cpf: "", segmento: "", grupo_economico: "", cidade: "", estado: "", telefone: "", whatsapp: "", email: "", responsavel: "", cargo: "", origem: "", status: "ativo", potencial: "medio", representadas: [], observacoes: "" };
@@ -20,8 +20,8 @@ export default function Clientes() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
+  const [loadingCnpj, setLoadingCnpj] = useState(false);
 
-  // Resolve o warning do ESLint
   const load = useCallback(async () => {
     try {
       const params = status !== "all" ? { status } : {};
@@ -34,6 +34,33 @@ export default function Clientes() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { api.get("/representadas").then((r) => setReps(r.data)).catch(() => {}); }, []);
+
+  const buscarCNPJ = async (cnpjRaw) => {
+    const cnpj = cnpjRaw.replace(/\D/g, '');
+    if (cnpj.length !== 14) return; // Só busca se tiver 14 dígitos
+    
+    setLoadingCnpj(true);
+    try {
+      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+      if (!res.ok) throw new Error("CNPJ não encontrado");
+      const data = await res.json();
+      
+      setForm(prev => ({
+        ...prev,
+        razao_social: data.razao_social || prev.razao_social,
+        nome_fantasia: data.nome_fantasia || prev.nome_fantasia,
+        cidade: data.municipio || prev.cidade,
+        estado: data.uf || prev.estado,
+        telefone: data.ddd_telefone_1 || prev.telefone,
+        email: data.email || prev.email
+      }));
+      toast.success("Dados preenchidos via CNPJ!");
+    } catch (err) {
+      toast.error("Não foi possível buscar os dados deste CNPJ.");
+    } finally {
+      setLoadingCnpj(false);
+    }
+  };
 
   const save = async () => {
     if (!form.razao_social) return toast.error("Razão Social é obrigatória");
@@ -69,7 +96,7 @@ export default function Clientes() {
     <div className="pb-10">
       <PageHeader 
         title="Clientes" 
-        subtitle="CRM completo de varejo, distribuidores e redes" 
+        subtitle="CRM completo com preenchimento automático por CNPJ" 
         actions={
           <Button onClick={() => { setForm(empty); setEditing(null); setOpen(true); }} className="bg-[#075BFF] hover:bg-[#087BFF] shadow-md shadow-blue-500/20 transition-all hover:-translate-y-0.5">
             <Plus className="w-4 h-4 mr-2" />Novo cliente
@@ -156,7 +183,6 @@ export default function Clientes() {
                   <td colSpan={6} className="p-12 text-center">
                     <Users className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
                     <p className="text-slate-500 font-medium">Nenhum cliente encontrado.</p>
-                    <p className="text-sm text-slate-400 mt-1">Tente ajustar a busca ou os filtros.</p>
                   </td>
                 </tr>
               )}
@@ -170,13 +196,24 @@ export default function Clientes() {
           <DialogHeader><DialogTitle>{editing ? "Editar cliente" : "Novo cliente"}</DialogTitle></DialogHeader>
           
           <div className="space-y-6 py-4">
-            {/* Sessão 1: Dados Principais */}
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><Building2 className="w-4 h-4 text-[#075BFF]" />Dados Principais</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5 sm:col-span-2"><Label>Razão Social <span className="text-rose-500">*</span></Label><Input value={form.razao_social || ""} onChange={(e) => setForm({ ...form, razao_social: e.target.value })} placeholder="Ex: Distribuidora Alfa LTDA" /></div>
                 <div className="space-y-1.5"><Label>Nome Fantasia</Label><Input value={form.nome_fantasia || ""} onChange={(e) => setForm({ ...form, nome_fantasia: e.target.value })} placeholder="Ex: Alfa Distribuição" /></div>
-                <div className="space-y-1.5"><Label>CNPJ / CPF</Label><Input value={form.cnpj_cpf || ""} onChange={(e) => setForm({ ...form, cnpj_cpf: e.target.value })} placeholder="00.000.000/0000-00" /></div>
+                <div className="space-y-1.5 relative">
+                  <Label>CNPJ / CPF <span className="text-xs text-blue-500">(Busca automática)</span></Label>
+                  <div className="relative">
+                    <Input 
+                      value={form.cnpj_cpf || ""} 
+                      onChange={(e) => setForm({ ...form, cnpj_cpf: e.target.value })} 
+                      onBlur={(e) => buscarCNPJ(e.target.value)}
+                      placeholder="00.000.000/0000-00" 
+                      disabled={loadingCnpj}
+                    />
+                    {loadingCnpj && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-blue-500" />}
+                  </div>
+                </div>
                 <div className="space-y-1.5"><Label>Status</Label>
                   <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -187,7 +224,6 @@ export default function Clientes() {
               </div>
             </div>
 
-            {/* Sessão 2: Contato e Localização */}
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><MapPin className="w-4 h-4 text-[#08D5F5]" />Contato e Localização</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -200,7 +236,6 @@ export default function Clientes() {
               </div>
             </div>
 
-            {/* Sessão 3: Representadas */}
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><Building2 className="w-4 h-4 text-amber-500" />Representadas Vinculadas</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -213,7 +248,6 @@ export default function Clientes() {
               </div>
             </div>
 
-            {/* Sessão 4: Obs */}
             <div className="space-y-1.5">
               <Label>Observações</Label>
               <Textarea value={form.observacoes || ""} onChange={(e) => setForm({ ...form, observacoes: e.target.value })} placeholder="Anotações sobre este cliente..." className="min-h-[100px]" />
