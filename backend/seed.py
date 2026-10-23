@@ -1,4 +1,4 @@
-"""Seed demo data for OmniRep CRM+ERP."""
+"""Seed de dados de demonstração para o OmniRepMax (Novo Modelo Financeiro)."""
 import uuid
 from datetime import datetime, timezone, timedelta
 import random
@@ -10,169 +10,210 @@ def _iso(dt):
     return dt.astimezone(timezone.utc).isoformat()
 
 async def seed_demo(db):
+    # Evita duplicar se já existirem representadas
     if await db.representadas.count_documents({}) > 0:
         return
+
     now = datetime.now(timezone.utc)
+
+    # ==========================================
+    # 1. REPRESENTADAS (FÁBRICAS)
+    # ==========================================
     reps = [
-        {"id": _id(), "razao_social": "Indústria Bella Roupa Ltda", "nome_fantasia": "Bella Moda", "cnpj": "12.345.678/0001-90", "inscricao_estadual": "123.456.789.000", "segmento": "Vestuário", "cidade": "São Paulo", "estado": "SP", "telefone": "(11) 3456-7890", "whatsapp": "(11) 98765-4321", "email": "comercial@bellamoda.com.br", "contato_nome": "Fernanda Silva", "contato_cargo": "Gerente Comercial", "comissao_padrao": 6.5, "prazo_pagamento": "28/56/84 dias", "observacoes": "Coleção verão em destaque."},
-        {"id": _id(), "razao_social": "Alimentos Terra Boa S/A", "nome_fantasia": "Terra Boa", "cnpj": "23.456.789/0001-01", "inscricao_estadual": "234.567.890.111", "segmento": "Alimentos", "cidade": "Curitiba", "estado": "PR", "telefone": "(41) 3222-1010", "whatsapp": "(41) 99988-7766", "email": "vendas@terraboa.com.br", "contato_nome": "Rogério Alves", "contato_cargo": "Diretor Comercial", "comissao_padrao": 4.0, "prazo_pagamento": "30 dias"},
-        {"id": _id(), "razao_social": "TecnoLar Utilidades Ltda", "nome_fantasia": "TecnoLar", "cnpj": "34.567.890/0001-12", "inscricao_estadual": "345.678.901.222", "segmento": "Utilidades Domésticas", "cidade": "Joinville", "estado": "SC", "telefone": "(47) 3033-4040", "whatsapp": "(47) 98800-1122", "email": "comercial@tecnolar.com.br", "contato_nome": "Patrícia Melo", "contato_cargo": "Coordenadora", "comissao_padrao": 5.0, "prazo_pagamento": "45 dias"},
-        {"id": _id(), "razao_social": "Cosméticos Aura Beauty ME", "nome_fantasia": "Aura Beauty", "cnpj": "45.678.901/0001-23", "inscricao_estadual": "456.789.012.333", "segmento": "Cosméticos", "cidade": "Belo Horizonte", "estado": "MG", "telefone": "(31) 3555-6060", "whatsapp": "(31) 99911-2233", "email": "vendas@aurabeauty.com.br", "contato_nome": "Camila Rocha", "contato_cargo": "Gestora", "comissao_padrao": 8.0, "prazo_pagamento": "30/60 dias"},
+        {"id": _id(), "razao_social": "Indústria Bella Roupa Ltda", "nome_fantasia": "Bella Moda", "cnpj": "12.345.678/0001-90", "segmento": "Vestuário", "cidade": "São Paulo", "estado": "SP", "comissao_padrao": 8.0, "modalidade_comissao": "faturamento", "prazo_pagamento": "30/60", "logo": ""},
+        {"id": _id(), "razao_social": "Alimentos Terra Boa S/A", "nome_fantasia": "Terra Boa", "cnpj": "23.456.789/0001-01", "segmento": "Alimentos", "cidade": "Curitiba", "estado": "PR", "comissao_padrao": 5.0, "modalidade_comissao": "liquidez", "prazo_pagamento": "30/60/90", "logo": ""},
+        {"id": _id(), "razao_social": "TecnoLar Utilidades Ltda", "nome_fantasia": "TecnoLar", "cnpj": "34.567.890/0001-12", "segmento": "Utilidades Domésticas", "cidade": "Joinville", "estado": "SC", "comissao_padrao": 10.0, "modalidade_comissao": "faturamento", "prazo_pagamento": "30 dias", "logo": ""},
     ]
     for r in reps:
-        r["created_at"] = _iso(now); r["updated_at"] = _iso(now); r["logo"] = ""
+        r["created_at"] = _iso(now)
+        r["updated_at"] = _iso(now)
     await db.representadas.insert_many(reps)
 
+    # ==========================================
+    # 2. CLIENTES
+    # ==========================================
     cli_data = [
-        ("Rede Preço Bom Supermercados Ltda", "Preço Bom", "11.222.333/0001-44", "prospect", "Varejo", "São Paulo", "SP", -23.5505, -46.6333),
-        ("Distribuidora Norte Sul Ltda", "Norte Sul Distribuição", "22.333.444/0001-55", "ativo", "Distribuidor", "Campinas", "SP", -22.9064, -47.0616),
-        ("Casa Nova Boutique EIRELI", "Casa Nova", "33.444.555/0001-66", "ativo", "Varejo", "Rio de Janeiro", "RJ", -22.9068, -43.1729),
-        ("Rede Farmais Comércio Ltda", "Farmais", "44.555.666/0001-77", "ativo", "Rede de Lojas", "Curitiba", "PR", -25.4284, -49.2733),
-        ("Empório Sabor & Cia Ltda", "Empório Sabor", "55.666.777/0001-88", "ativo", "Varejo", "Porto Alegre", "RS", -30.0346, -51.2177),
-        ("Beleza Pura Cosméticos", "Beleza Pura", "66.777.888/0001-99", "prospect", "Varejo", "Belo Horizonte", "MG", -19.9167, -43.9345),
-        ("SuperVarejo Alfa Distribuidora", "SuperAlfa", "77.888.999/0001-00", "inativo", "Distribuidor", "Salvador", "BA", -12.9714, -38.5014),
-        ("Lojas Marisol Confecções", "Marisol", "88.999.000/0001-11", "ativo", "Rede de Lojas", "Fortaleza", "CE", -3.7172, -38.5433),
+        ("Rede Preço Bom Supermercados Ltda", "Preço Bom", "11.222.333/0001-44", "prospect", "Varejo", "São Paulo", "SP"),
+        ("Distribuidora Norte Sul Ltda", "Norte Sul Distribuição", "22.333.444/0001-55", "ativo", "Distribuidor", "Campinas", "SP"),
+        ("Casa Nova Boutique EIRELI", "Casa Nova", "33.444.555/0001-66", "ativo", "Varejo", "Rio de Janeiro", "RJ"),
+        ("Rede Farmais Comércio Ltda", "Farmais", "44.555.666/0001-77", "ativo", "Rede de Lojas", "Curitiba", "PR"),
+        ("Empório Sabor & Cia Ltda", "Empório Sabor", "55.666.777/0001-88", "ativo", "Varejo", "Porto Alegre", "RS"),
     ]
     clientes = []
-    for rs, nf, cnpj, st, seg, cid, est, lat, lng in cli_data:
+    for rs, nf, cnpj, st, seg, cid, est in cli_data:
         clientes.append({
             "id": _id(), "razao_social": rs, "nome_fantasia": nf, "cnpj_cpf": cnpj,
             "segmento": seg, "cidade": cid, "estado": est, "status": st,
             "email": f"contato@{nf.lower().replace(' ', '')}.com.br", "telefone": "(11) 3000-0000",
-            "responsavel": random.choice(["Ana Souza", "Carlos Lima", "Julia Nunes", "Rafael Costa"]),
-            "cargo": "Comprador", "potencial": random.choice(["baixo", "medio", "alto"]),
-            "representadas": random.sample([r["id"] for r in reps], k=random.randint(1, 3)),
-            "lat": lat, "lng": lng, "created_at": _iso(now - timedelta(days=random.randint(1, 120))), "updated_at": _iso(now),
+            "representadas": [r["id"] for r in reps], # Vincula a todos para facilitar
+            "created_at": _iso(now - timedelta(days=random.randint(10, 90))), "updated_at": _iso(now),
         })
     await db.clientes.insert_many(clientes)
 
-    # Produtos
+    # ==========================================
+    # 3. PRODUTOS
+    # ==========================================
     prod_data = [
-        ("Camisa Polo Bella Verão", "Vestuário", "Bella Moda", reps[0]["id"], 89.90, 129.90),
-        ("Vestido Midi Estampado", "Vestuário", "Bella Moda", reps[0]["id"], 149.90, 219.90),
-        ("Blusa Cropped Tricot", "Vestuário", "Bella Moda", reps[0]["id"], 69.90, 99.90),
-        ("Arroz Terra Boa 5kg", "Alimentos", "Terra Boa", reps[1]["id"], 24.90, 34.90),
-        ("Feijão Carioca Terra Boa 1kg", "Alimentos", "Terra Boa", reps[1]["id"], 8.90, 12.90),
-        ("Café Terra Boa Torrado 500g", "Alimentos", "Terra Boa", reps[1]["id"], 18.90, 27.90),
-        ("Jogo de Panelas TecnoLar 5pçs", "Utilidades", "TecnoLar", reps[2]["id"], 199.90, 299.90),
-        ("Liquidificador TecnoLar Pro", "Utilidades", "TecnoLar", reps[2]["id"], 249.90, 349.90),
-        ("Batedeira Planetária TecnoLar", "Utilidades", "TecnoLar", reps[2]["id"], 449.90, 649.90),
-        ("Sérum Facial Aura Beauty 30ml", "Cosméticos", "Aura Beauty", reps[3]["id"], 79.90, 119.90),
-        ("Máscara Capilar Aura 300g", "Cosméticos", "Aura Beauty", reps[3]["id"], 49.90, 79.90),
-        ("Kit Skincare Aura 4 Passos", "Cosméticos", "Aura Beauty", reps[3]["id"], 199.90, 299.90),
+        ("Camisa Polo Bella", "BELLA-01", "Bella Moda", reps[0]["id"], 89.90),
+        ("Vestido Midi", "BELLA-02", "Bella Moda", reps[0]["id"], 149.90),
+        ("Arroz 5kg", "TERRA-01", "Terra Boa", reps[1]["id"], 24.90),
+        ("Feijão 1kg", "TERRA-02", "Terra Boa", reps[1]["id"], 8.90),
+        ("Jogo de Panelas", "TEC-01", "TecnoLar", reps[2]["id"], 199.90),
+        ("Liquidificador Pro", "TEC-02", "TecnoLar", reps[2]["id"], 249.90),
     ]
     produtos = []
-    for i, (nome, cat, marca, rid, custo, preco) in enumerate(prod_data):
+    for nome, cod, marca, rid, preco in prod_data:
         produtos.append({
-            "id": _id(), "nome": nome, "codigo": f"P{1000 + i}", "sku": f"SKU-{i+1:04d}",
-            "ean": f"789{random.randint(1000000000, 9999999999)}", "categoria": cat, "marca": marca,
-            "representada_id": rid, "custo": custo, "preco_tabela": preco, "preco_sugerido": preco * 1.1,
-            "unidade": "UN", "qtd_por_caixa": 12, "status": "ativo",
+            "id": _id(), "nome": nome, "codigo": cod, "marca": marca,
+            "representada_id": rid, "preco_tabela": preco, "status": "ativo",
             "created_at": _iso(now), "updated_at": _iso(now),
         })
     await db.produtos.insert_many(produtos)
 
-    # Pedidos - alguns faturados nos últimos 6 meses
+    # ==========================================
+    # 4. PEDIDOS, COMISSÕES E CONTAS A RECEBER
+    # ==========================================
     pedidos = []
-    contas_receber = []
     comissoes = []
-    for i in range(14):
-        c = random.choice([c for c in clientes if c["status"] == "ativo"])
-        rid = random.choice(c["representadas"])
-        rep = next(r for r in reps if r["id"] == rid)
-        prods = [p for p in produtos if p["representada_id"] == rid]
-        if not prods:
-            continue
-        chosen = random.sample(prods, k=min(len(prods), random.randint(1, 3)))
+    contas_receber = []
+    contas_pagar = []
+    oportunidades = []
+    visitas = []
+
+    for i in range(1, 7): # Cria 6 pedidos
+        c = random.choice(clientes)
+        r = random.choice(reps)
+        r_prods = [p for p in produtos if p["representada_id"] == r["id"]]
+        
         itens = []
         subtotal = 0.0
-        for p in chosen:
-            qtd = random.randint(10, 60)
-            preco = p["preco_tabela"]
-            desc = random.choice([0, 0, 5, 10])
-            sub = qtd * preco * (1 - desc/100)
-            itens.append({"produto_id": p["id"], "nome": p["nome"], "quantidade": qtd, "preco_unitario": preco, "desconto": desc, "subtotal": round(sub, 2)})
+        for p in random.sample(r_prods, k=random.randint(1, 2)):
+            qtd = random.randint(10, 50)
+            sub = qtd * p["preco_tabela"]
+            itens.append({"produto_id": p["id"], "nome": p["nome"], "quantidade": qtd, "preco_unitario": p["preco_tabela"], "desconto": 0, "subtotal": round(sub, 2)})
             subtotal += sub
-        total = subtotal
+
+        total = round(subtotal, 2)
         pid = _id()
-        d = now - timedelta(days=random.randint(3, 150))
-        status = random.choices(["faturado", "aprovado", "enviado", "rascunho"], weights=[6, 2, 1, 1])[0]
-        ped = {
-            "id": pid, "numero": f"PED-{i+1:05d}", "cliente_id": c["id"], "representada_id": rid,
-            "condicao_pagamento": rep["prazo_pagamento"], "itens": itens, "subtotal": round(subtotal, 2),
-            "desconto_geral": 0.0, "frete": 0.0, "total": round(total, 2),
-            "comissao_percentual": rep["comissao_padrao"], "comissao_valor": round(total * rep["comissao_padrao"] / 100, 2),
-            "status": status, "data_pedido": _iso(d), "created_at": _iso(d), "updated_at": _iso(d),
-            "observacoes": ""
+        data_ped = now - timedelta(days=random.randint(5, 40))
+        
+        # Define status (alguns faturados para gerar comissão, outros em andamento)
+        status = random.choices(["rascunho", "enviado", "aprovado", "faturado"], weights=[1, 1, 2, 6])[0]
+        
+        pedido = {
+            "id": pid, "numero": f"PED-{i:05d}", "cliente_id": c["id"], "representada_id": r["id"],
+            "condicao_pagamento": r["prazo_pagamento"], "itens": itens, "subtotal": total,
+            "desconto_geral": 0.0, "frete": 0.0, "total": total,
+            "comissao_percentual": r["comissao_padrao"], 
+            "comissao_valor": round(total * r["comissao_padrao"] / 100, 2),
+            "status": status, "data_pedido": _iso(data_ped), "created_at": _iso(data_ped), "updated_at": _iso(data_ped),
+            "nf_numero": f"{random.randint(1000, 9999)}" if status == "faturado" else "",
+            "parcelas": [] # Vamos gerar as parcelas reais abaixo se for faturado
         }
-        pedidos.append(ped)
+        pedidos.append(pedido)
+
+        # Se foi faturado, gera a Comissão e as Contas a Receber (Parceladas)
         if status == "faturado":
-            vencimento = d + timedelta(days=30)
-            ar_status = "recebido" if d < now - timedelta(days=35) else "aberto"
-            contas_receber.append({
-                "id": _id(), "cliente_id": c["id"], "representada_id": rid, "pedido_id": pid,
-                "numero_documento": ped["numero"], "valor": ped["total"], "vencimento": _iso(vencimento),
-                "data_recebimento": _iso(vencimento) if ar_status == "recebido" else None,
-                "status": ar_status, "forma_pagamento": "Boleto", "created_at": _iso(d), "updated_at": _iso(d),
-            })
-            com_status = "paga" if d < now - timedelta(days=45) else random.choice(["prevista", "faturada"])
-            comissoes.append({
-                "id": _id(), "pedido_id": pid, "pedido_numero": ped["numero"],
-                "cliente_id": c["id"], "representada_id": rid,
-                "valor_faturado": ped["total"], "percentual": rep["comissao_padrao"],
-                "valor": ped["comissao_valor"], "status": com_status,
-                "data_prevista": _iso(vencimento), "data_pagamento": _iso(vencimento) if com_status == "paga" else None,
-                "created_at": _iso(d), "updated_at": _iso(d),
-            })
+            valor_comissao = pedido["comissao_valor"]
+            # Divide em 2 parcelas (50% cada) para simular 30/60
+            val_p1 = round(valor_comissao / 2, 2)
+            val_p2 = round(valor_comissao - val_p1, 2)
+            
+            venc_p1 = data_ped + timedelta(days=30)
+            venc_p2 = data_ped + timedelta(days=60)
+            
+            # Atualiza o pedido com as parcelas
+            pedido["parcelas"] = [
+                {"vencimento": _iso(venc_p1), "valor": val_p1},
+                {"vencimento": _iso(venc_p2), "valor": val_p2}
+            ]
+
+            # Status da comissão
+            c_status = "pendente"
+            c_recebido = 0.0
+            c_saldo = valor_comissao
+            
+            # Simula algumas comissões já parcialmente recebidas
+            if i % 3 == 0:
+                c_status = "parcialmente_recebida"
+                c_recebido = val_p1
+                c_saldo = val_p2
+
+            cid = _id()
+            comissao = {
+                "id": cid, "pedido_id": pid, "pedido_numero": pedido["numero"],
+                "cliente_id": c["id"], "representada_id": r["id"],
+                "nf_numero": pedido["nf_numero"], "valor_total_pedido": total,
+                "percentual": r["comissao_padrao"], "valor_liquido": valor_comissao,
+                "valor_recebido": c_recebido, "saldo_pendente": c_saldo,
+                "modalidade": r["modalidade_comissao"], "status": c_status,
+                "historico_recebimentos": [],
+                "data_prevista": _iso(venc_p1),
+                "created_at": _iso(data_ped), "updated_at": _iso(now)
+            }
+            
+            if c_recebido > 0:
+                comissao["historico_recebimentos"].append({"data": _iso(venc_p1), "valor": c_recebido, "saldo_restante": c_saldo})
+            
+            comissoes.append(comissao)
+
+            # Cria as parcelas no Contas a Receber
+            for idx, parc in enumerate(pedido["parcelas"]):
+                p_status = "aberto"
+                p_recebido = 0.0
+                
+                # Se a comissão está parcial, a primeira parcela já foi paga
+                if c_status == "parcialmente_recebida" and idx == 0:
+                    p_status = "recebido"
+                    p_recebido = parc["valor"]
+
+                contas_receber.append({
+                    "id": _id(), "comissao_id": cid, "cliente_id": c["id"], "representada_id": r["id"],
+                    "pedido_id": pid, "numero_documento": f"{pedido['numero']} (Parc {idx+1})",
+                    "valor": parc["valor"], "valor_recebido": p_recebido, "saldo_pendente": parc["valor"] - p_recebido,
+                    "vencimento": parc["vencimento"], "status": p_status,
+                    "historico_recebimentos": [], "created_at": _iso(data_ped), "updated_at": _iso(now)
+                })
+
     await db.pedidos.insert_many(pedidos)
-    if contas_receber:
-        await db.contas_receber.insert_many(contas_receber)
-    if comissoes:
-        await db.comissoes.insert_many(comissoes)
+    if comissoes: await db.comissoes.insert_many(comissoes)
+    if contas_receber: await db.contas_receber.insert_many(contas_receber)
 
-    # Contas a Pagar
-    ap = []
-    cats = ["Combustível", "Viagem", "Hotel", "Alimentação", "Telefone", "Escritório", "Marketing"]
-    for i in range(10):
-        d = now - timedelta(days=random.randint(1, 60))
-        ap.append({
-            "id": _id(), "descricao": f"{random.choice(cats)} - {d.strftime('%b/%Y')}",
-            "categoria": random.choice(cats), "fornecedor": random.choice(["Posto Shell", "Hotel Ibis", "Vivo", "Ifood"]),
-            "valor": round(random.uniform(80, 1500), 2), "vencimento": _iso(d + timedelta(days=random.randint(-10, 20))),
-            "status": random.choice(["aberto", "pago", "pago"]), "forma_pagamento": "Débito",
-            "created_at": _iso(d), "updated_at": _iso(d),
-        })
-    await db.contas_pagar.insert_many(ap)
-
-    # Oportunidades
-    ops = []
-    estagios = ["prospeccao", "contato", "apresentacao", "proposta", "negociacao", "ganho", "perdido"]
-    for i in range(9):
-        c = random.choice(clientes)
-        rid = c["representadas"][0] if c["representadas"] else reps[0]["id"]
-        ops.append({
-            "id": _id(), "titulo": f"Oportunidade {c['nome_fantasia']}",
-            "cliente_id": c["id"], "representada_id": rid,
-            "valor_estimado": round(random.uniform(3000, 45000), 2),
-            "probabilidade": random.choice([25, 50, 75, 90]),
-            "estagio": random.choice(estagios),
-            "proxima_acao": random.choice(["Ligar amanhã", "Enviar catálogo", "Agendar visita", "Follow-up e-mail"]),
-            "data_prevista": _iso(now + timedelta(days=random.randint(3, 45))),
-            "created_at": _iso(now - timedelta(days=random.randint(1, 30))), "updated_at": _iso(now),
-        })
-    await db.oportunidades.insert_many(ops)
-
-    # Visitas
-    vis = []
+    # ==========================================
+    # 5. CONTAS A PAGAR (Despesas)
+    # ==========================================
+    cats = ["Combustível", "Viagem", "Alimentação", "Marketing"]
     for i in range(8):
-        c = random.choice(clientes)
-        d = now + timedelta(days=random.randint(-15, 15))
-        vis.append({
-            "id": _id(), "cliente_id": c["id"], "representada_id": c["representadas"][0] if c["representadas"] else reps[0]["id"],
-            "tipo": random.choice(["visita", "reuniao_online", "ligacao", "whatsapp"]),
-            "data": _iso(d), "horario": f"{random.randint(9, 17):02d}:00",
-            "objetivo": random.choice(["Apresentar coleção", "Fechamento de pedido", "Cobrança amigável", "Prospecção"]),
-            "status": "realizada" if d < now else "agendada",
-            "created_at": _iso(now), "updated_at": _iso(now),
+        d = now - timedelta(days=random.randint(1, 30))
+        contas_pagar.append({
+            "id": _id(), "descricao": f"{random.choice(cats)} - Ref {i+1}",
+            "categoria": random.choice(cats), "fornecedor": "Fornecedor Local",
+            "valor": round(random.uniform(150, 800), 2), 
+            "vencimento": _iso(d + timedelta(days=random.randint(5, 20))),
+            "status": random.choice(["aberto", "pago"]), "created_at": _iso(d), "updated_at": _iso(d),
         })
-    await db.visitas.insert_many(vis)
+    await db.contas_pagar.insert_many(contas_pagar)
+
+    # ==========================================
+    # 6. OPORTUNIDADES E VISITAS
+    # ==========================================
+    estagios = ["prospeccao", "proposta", "negociacao", "ganho"]
+    for i in range(5):
+        c = random.choice(clientes)
+        oportunidades.append({
+            "id": _id(), "titulo": f"Negociação {c['nome_fantasia']}", "cliente_id": c["id"],
+            "representada_id": random.choice(reps)["id"], "valor_estimado": round(random.uniform(5000, 20000), 2),
+            "probabilidade": random.choice([20, 50, 80]), "estagio": random.choice(estagios),
+            "data_prevista": _iso(now + timedelta(days=random.randint(5, 30))),
+            "created_at": _iso(now), "updated_at": _iso(now)
+        })
+    await db.oportunidades.insert_many(oportunidades)
+
+    for i in range(4):
+        c = random.choice(clientes)
+        visitas.append({
+            "id": _id(), "cliente_id": c["id"], "tipo": "visita", "data": _iso(now + timedelta(days=random.randint(1, 10))),
+            "horario": "14:00", "objetivo": "Apresentar novos produtos", "status": "agendada",
+            "created_at": _iso(now), "updated_at": _iso(now)
+        })
+    await db.visitas.insert_many(visitas)
