@@ -68,11 +68,14 @@ export default function AppShell({ children }) {
       <aside className="w-64 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col hidden md:flex">
         
         {/* Logo / Header */}
-        <div className="h-16 flex items-center px-6 border-b border-slate-200 dark:border-slate-800">
+        <div className="h-16 flex items-center px-6 border-b border-slate-200 dark:border-slate-800 relative">
           <div className="flex items-center gap-2 text-[#075BFF] font-bold text-xl tracking-tight">
-            <div className="w-8 h-8 rounded-lg bg-[#075BFF] flex items-center justify-center text-white">O</div>
+            <div className="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center text-white">🚀</div>
             OMNIREP<span className="text-slate-900 dark:text-white">MAX</span>
           </div>
+          <span className="absolute right-4 top-4 text-[10px] font-bold bg-rose-500 text-white px-2 py-0.5 rounded-full animate-pulse">
+            v2.0
+          </span>
         </div>
 
         {/* Links de Navegação */}
