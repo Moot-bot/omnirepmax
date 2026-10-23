@@ -1,14 +1,15 @@
 import React from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext"; // Presumindo que você tem esse contexto
 import { 
   LayoutDashboard, Sparkles, BarChart3, Building2, Users, 
   Filter, Calendar, ShoppingCart, Percent, TrendingUp, 
-  TrendingDown, Map, UploadCloud, Settings, LogOut, FileText
+  TrendingDown, Map, UploadCloud, Settings, LogOut, FileText,
+  Sun, Moon, Bell
 } from "lucide-react";
 import { Button } from "./ui/button";
 
-// Estrutura do Menu
 const MENU_SECTIONS = [
   {
     title: "Principal",
@@ -52,8 +53,9 @@ const MENU_SECTIONS = [
   }
 ];
 
-export default function AppShell({ children }) {
+export default function AppShell() {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme(); // Assumindo que seu ThemeContext tem isso
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -62,10 +64,10 @@ export default function AppShell({ children }) {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden transition-colors duration-300">
       
       {/* SIDEBAR */}
-      <aside className="w-64 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col hidden md:flex">
+      <aside className="w-64 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col hidden md:flex z-10">
         
         {/* Logo / Header */}
         <div className="h-16 flex items-center px-6 border-b border-slate-200 dark:border-slate-800 relative">
@@ -133,15 +135,21 @@ export default function AppShell({ children }) {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950">
-        {/* Top Bar para Mobile (Opcional, mas recomendado) */}
-        <div className="md:hidden h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4">
-          <div className="font-bold text-[#075BFF]">OMNIREPMAX</div>
-          <Button variant="ghost" size="sm" onClick={handleLogout}><LogOut className="w-4 h-4" /></Button>
-        </div>
+      <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950 transition-colors duration-300">
         
-        <div className="p-4 sm:p-6 lg:p-8">
-          {children}
+        {/* Topbar com Toggle de Tema */}
+        <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-end px-6 gap-4">
+           <Button variant="ghost" size="icon" onClick={toggleTheme}>
+             {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-700" />}
+           </Button>
+           <Button variant="ghost" size="icon">
+             <Bell className="w-5 h-5 text-slate-500" />
+           </Button>
+        </header>
+
+        {/* Aqui é onde as páginas são renderizadas! */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+          <Outlet /> 
         </div>
       </main>
     </div>
