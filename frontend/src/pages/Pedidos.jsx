@@ -274,3 +274,220 @@ export default function Pedidos() {
     </div>
   );
 }
+import React, { useEffect, useState, useCallback } from "react";
+import api from "../lib/api";
+import { PageHeader, StatusBadge } from "../components/Common";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Plus, Trash2, FileText, Send, CheckCircle, Package } from "lucide-react";
+import { fmtBRL } from "../lib/format";
+import { toast } from "sonner";
+
+export default function Pedidos() {
+  const [list, setList] = useState([]);
+  const [reps, setReps] = useState([]);
+  const [clientes, setClientes] = useState([]);
+  const [produtos, setProdutos] = useState([]);
+  
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ cliente_id: "", representada_id: "", condicao_pagamento: "30 dias", itens: [], parcelas: [] });
+  const [selectedProd, setSelectedProd] = useState("");
+  const [qtd, setQtd] = useState(1);
+
+  // Estados para Faturamento
+  const [fatOpen, setFatOpen] = useState(false);
+  const [selectedPed, setSelectedPed] = useState(null);
+  const [nfNum, setNfNum] = useState("");
+
+  const load = useCallback(async () => {
+    const [pRes, rRes, cRes] = await Promise.all([api.get("/pedidos"), api.get("/representadas"), api.get("/clientes")]);
+    setList(pRes.data);
+    setReps(rRes.data);
+    setClientes(cRes.data);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Carrega produtos quando muda a representada
+  useEffect(() => {
+    if (form.representada_id) {
+      api.get(`/produtos?representada_id=${form.representada_id}`).then(r => setProdutos(r.data));
+    } else {
+      setProdutos([]);
+    }
+  }, [form.representada_id]);
+
+  const addItem = () => {
+    const p = produtos.find(x => x.id === selectedProd);
+    if (!p) return;
+    const newItem = { produto_id: p.id, nome: p.nome, quantidade: qtd, preco_unitario: p.preco_tabela, desconto: 0 };
+    setForm({ ...form, itens: [...form.itens, newItem] });
+    setSelectedProd(""); setQtd(1);
+  };
+
+  const removeItem = (idx) => {
+    const newItens = [...form.itens];
+    newItens.splice(idx, 1);
+    setForm({ ...form, itens: newItens });
+  };
+
+  // Gera as parcelas automaticamente com base na condição de pagamento
+  const gerarParcelas = () => {
+    const total = form.itens.reduce((acc, i) => acc + (i.quantidade * i.preco_unitario), 0);
+    const parcelas = [];
+    const cond = form.condicao_pagamento;
+    
+    // Exemplo simples: "30/60/90" ou "30"
+    const dias = cond.split("/").map(d => parseInt(d.trim()) || 30);
+    const valorParcela = total / dias.length;
+
+    dias.forEach(d => {
+      const dt = new Date();
+      dt.setDate(dt.getDate() + d);
+      parcelas.push({ vencimento: dt.toISOString(), valor: valorParcela });
+    });
+
+    setForm({ ...form, parcelas });
+    toast.success(`${parcelas.length} parcelas geradas!`);
+  };
+
+  const save = async () => {
+    if (!form.cliente_id || !form.representada_id || form.itens.length === 0) return toast.error("Preencha todos os campos");
+    try {
+      await api.post("/pedidos", form);
+      toast.success("Pedido criado!");
+      setOpen(false); load();
+    } catch { toast.error("Erro ao criar pedido"); }
+  };
+
+  const faturar = async () => {
+    try {
+      await api.patch(`/pedidos/${selectedPed.id}/status`, { status: "faturado", nf_numero: nfNum });
+      toast.success("Pedido faturado e comissões geradas!");
+      setFatOpen(false); load();
+    } catch { toast.error("Erro ao faturar"); }
+  };
+
+  const gerarPDF = (ped) => {
+    toast.info("Gerando PDF do pedido... (Em breve implementação real)");
+    // Aqui você usaria jsPDF ou react-pdf
+  };
+
+  return (
+    <div className="pb-10">
+      <PageHeader title="Pedidos" subtitle="Lançamento e Faturamento" actions={
+        <Button onClick={() => { setForm({ cliente_id: "", representada_id: "", condicao_pagamento: "30 dias", itens: [], parcelas: [] }); setOpen(true); }} className="bg-[#075BFF]"><Plus className="w-4 h-4 mr-2" /> Novo Pedido</Button>
+      } />
+
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 border-b">
+            <tr>
+              <th className="px-5 py-4 text-left">Nº Pedido</th>
+              <th className="px-5 py-4 text-left">Cliente / Representada</th>
+              <th className="px-5 py-4 text-right">Valor</th>
+              <th className="px-5 py-4 text-center">Status</th>
+              <th className="px-5 py-4 text-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map(p => (
+              <tr key={p.id} className="border-b hover:bg-slate-50">
+                <td className="px-5 py-3 font-mono font-bold">{p.numero}</td>
+                <td className="px-5 py-3">
+                  <div className="font-semibold">{clientes.find(c => c.id === p.cliente_id)?.nome_fantasia}</div>
+                  <div className="text-xs text-slate-500">{reps.find(r => r.id === p.representada_id)?.nome_fantasia}</div>
+                </td>
+                <td className="px-5 py-3 text-right font-mono">{fmtBRL(p.total)}</td>
+                <td className="px-5 py-3 text-center"><StatusBadge status={p.status} /></td>
+                <td className="px-5 py-3 text-right space-x-1">
+                  <Button variant="outline" size="sm" onClick={() => gerarPDF(p)}><FileText className="w-4 h-4" /></Button>
+                  {p.status !== "faturado" && (
+                    <Button size="sm" onClick={() => { setSelectedPed(p); setNfNum(""); setFatOpen(true); }} className="bg-emerald-600"><CheckCircle className="w-4 h-4 mr-1" /> Faturar</Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal de Novo Pedido */}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader><DialogTitle>Novo Pedido</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Representada (Fábrica)</Label>
+                <Select value={form.representada_id} onValueChange={v => setForm({...form, representada_id: v})}>
+                  <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                  <SelectContent>{reps.map(r => <SelectItem key={r.id} value={r.id}>{r.nome_fantasia}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Cliente</Label>
+                <Select value={form.cliente_id} onValueChange={v => setForm({...form, cliente_id: v})}>
+                  <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                  <SelectContent>{clientes.map(c => <SelectItem key={c.id} value={c.id}>{c.nome_fantasia}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Adicionar Itens */}
+            <div className="border p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 space-y-3">
+              <Label>Adicionar Produtos</Label>
+              <div className="flex gap-2">
+                <Select value={selectedProd} onValueChange={setSelectedProd} disabled={!form.representada_id}>
+                  <SelectTrigger className="flex-1"><SelectValue placeholder="Produto..." /></SelectTrigger>
+                  <SelectContent>{produtos.map(p => <SelectItem key={p.id} value={p.id}>{p.nome} - {fmtBRL(p.preco_tabela)}</SelectItem>)}</SelectContent>
+                </Select>
+                <Input type="number" className="w-20" value={qtd} onChange={e => setQtd(parseInt(e.target.value))} min={1} />
+                <Button onClick={addItem} variant="outline">Add</Button>
+              </div>
+              <div className="space-y-1">
+                {form.itens.map((it, i) => (
+                  <div key={i} className="flex justify-between text-sm bg-white dark:bg-slate-900 p-2 rounded">
+                    <span>{it.quantidade}x {it.nome}</span>
+                    <span className="font-mono">{fmtBRL(it.quantidade * it.preco_unitario)} <Trash2 className="w-3 h-3 inline ml-2 text-rose-500 cursor-pointer" onClick={() => removeItem(i)}/></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 items-end">
+              <div className="space-y-1.5">
+                <Label>Condição de Pagamento</Label>
+                <Input value={form.condicao_pagamento} onChange={e => setForm({...form, condicao_pagamento: e.target.value})} placeholder="Ex: 30/60/90" />
+              </div>
+              <Button onClick={gerarParcelas} variant="secondary">Calcular Parcelas</Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={save} className="bg-[#075BFF] w-full">Salvar Pedido</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Faturamento */}
+      <Dialog open={fatOpen} onOpenChange={setFatOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Confirmar Faturamento</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-slate-500">Ao confirmar, a comissão de {fmtBRL((selectedPed?.total || 0) * 0.05)} será gerada no Contas a Receber.</p>
+            <div className="space-y-1.5">
+              <Label>Número da Nota Fiscal</Label>
+              <Input value={nfNum} onChange={e => setNfNum(e.target.value)} placeholder="Ex: 12345" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={faturar} className="bg-emerald-600">Confirmar e Faturar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

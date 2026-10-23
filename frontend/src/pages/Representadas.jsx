@@ -4,13 +4,29 @@ import { PageHeader } from "../components/Common";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { Textarea } from "../components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Plus, Edit2, Trash2, Package, FileText, Upload, Building2, Download } from "lucide-react";
+import { 
+  Plus, Edit2, Trash2, Package, FileText, Upload, 
+  Building2, Download, Loader2, MapPin, Phone
+} from "lucide-react";
 import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
 
-const emptyRep = { razao_social: "", nome_fantasia: "", cnpj: "", comissao_padrao: 5.0, cidade: "", estado: "" };
+// Formulário expandido com o campo de modalidade
+const emptyRep = { 
+  razao_social: "", nome_fantasia: "", cnpj: "", logo: "",
+  inscricao_estadual: "", segmento: "",
+  cep: "", endereco: "", cidade: "", estado: "",
+  telefone: "", email: "", site: "", 
+  contato_nome: "", contato_cargo: "",
+  comissao_padrao: 5.0, 
+  modalidade_comissao: "faturamento", // <-- NOVO CAMPO AQUI
+  prazo_pagamento: "30 dias", 
+  observacoes: ""
+};
 const emptyProd = { nome: "", codigo: "", preco_tabela: 0, unidade: "UN" };
 
 export default function Representadas() {
@@ -18,8 +34,9 @@ export default function Representadas() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyRep);
   const [editing, setEditing] = useState(null);
+  const [loadingCnpj, setLoadingCnpj] = useState(false);
 
-  // Estados do Modal de Detalhes
+  // Estados do Modal de Detalhes (Catálogo & Docs)
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedRep, setSelectedRep] = useState(null);
   
@@ -34,18 +51,70 @@ export default function Representadas() {
   const [uploading, setUploading] = useState(false);
 
   const load = useCallback(async () => {
-    const { data } = await api.get("/representadas");
-    setList(data);
+    try {
+      const { data } = await api.get("/representadas");
+      setList(data);
+    } catch {
+      toast.error("Erro ao carregar representadas.");
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
+  // --- Lógica de Busca de CNPJ ---
+  const buscarCNPJ = async (cnpjRaw) => {
+    const cnpj = cnpjRaw.replace(/\D/g, '');
+    if (cnpj.length !== 14) return;
+    
+    setLoadingCnpj(true);
+    try {
+      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+      if (!res.ok) throw new Error("CNPJ não encontrado");
+      const data = await res.json();
+      
+      setForm(prev => ({
+        ...prev,
+        razao_social: data.razao_social || prev.razao_social,
+        nome_fantasia: data.nome_fantasia || prev.nome_fantasia,
+        email: data.email || prev.email,
+        telefone: data.ddd_telefone_1 || prev.telefone,
+        cep: data.cep || prev.cep,
+        endereco: data.logradouro ? `${data.logradouro}, ${data.numero || "S/N"}` : prev.endereco,
+        cidade: data.municipio || prev.cidade,
+        estado: data.uf || prev.estado,
+      }));
+      toast.success("Dados preenchidos via CNPJ!");
+    } catch (err) {
+      toast.error("Não foi possível buscar os dados deste CNPJ.");
+    } finally {
+      setLoadingCnpj(false);
+    }
+  };
+
+  // --- Lógica de Upload de Logo ---
+  const handleLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 700_000) return toast.error("Logo muito grande. Máximo 500KB.");
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setForm({ ...form, logo: event.target.result });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // --- Salvar Representada ---
   const save = async () => {
     if (!form.razao_social) return toast.error("Razão Social é obrigatória");
     try {
       if (editing) await api.put(`/representadas/${editing}`, form);
       else await api.post("/representadas", form);
-      toast.success("Salvo com sucesso!"); setOpen(false); setForm(emptyRep); setEditing(null); load();
+      toast.success("Salvo com sucesso!"); 
+      setOpen(false); 
+      setForm(emptyRep); 
+      setEditing(null); 
+      load();
     } catch { toast.error("Erro ao salvar"); }
   };
 
@@ -131,13 +200,26 @@ export default function Representadas() {
         {list.map(rep => (
           <div key={rep.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col">
             <div className="flex justify-between items-start mb-4">
-              <div className="w-12 h-12 rounded-xl bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600 dark:text-blue-400">
-                <Building2 className="w-6 h-6" />
-              </div>
-              <Button variant="ghost" size="sm" onClick={() => { setForm(rep); setEditing(rep.id); setOpen(true); }}><Edit2 className="w-4 h-4" /></Button>
+              {rep.logo ? (
+                <img src={rep.logo} alt="logo" className="w-12 h-12 rounded-xl object-contain bg-white border border-slate-100 p-1" />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                  <Building2 className="w-6 h-6" />
+                </div>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => { setForm({...emptyRep, ...rep}); setEditing(rep.id); setOpen(true); }}><Edit2 className="w-4 h-4" /></Button>
             </div>
             <h3 className="font-bold text-lg text-slate-900 dark:text-white truncate">{rep.nome_fantasia || rep.razao_social}</h3>
-            <p className="text-sm text-slate-500 mb-4">{rep.cnpj} · Comissão: {rep.comissao_padrao}%</p>
+            <p className="text-sm text-slate-500 mb-2">{rep.cnpj}</p>
+            
+            <div className="flex flex-col gap-1 mb-4">
+              <p className="text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 inline-block px-2 py-1 rounded w-fit">
+                Comissão: {rep.comissao_padrao}%
+              </p>
+              <p className="text-xs text-slate-500 capitalize">
+                Modalidade: {rep.modalidade_comissao === "faturamento" ? "No Faturamento" : "Na Liquidez"}
+              </p>
+            </div>
             
             <div className="mt-auto pt-4 border-t border-slate-100 dark:border-slate-800">
               <Button onClick={() => openDetails(rep)} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
@@ -148,11 +230,126 @@ export default function Representadas() {
         ))}
       </div>
 
-      {/* MODAL: Detalhes da Representada (Produtos e Documentos) */}
+      {/* MODAL 1: CADASTRO COMPLETO DA REPRESENTADA */}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>{editing ? "Editar Representada" : "Nova Representada"}</DialogTitle></DialogHeader>
+          
+          <div className="space-y-6 py-4">
+            {/* Seção 1: Logo e Dados Principais */}
+            <div className="flex gap-6 items-start">
+              <div className="space-y-2 flex flex-col items-center">
+                <Label>Logo</Label>
+                <div className="w-24 h-24 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden bg-slate-50 dark:bg-slate-800/50 relative">
+                  {form.logo ? (
+                    <img src={form.logo} alt="Logo" className="w-full h-full object-contain" />
+                  ) : (
+                    <Building2 className="w-8 h-8 text-slate-400" />
+                  )}
+                  <input type="file" accept="image/*" onChange={handleLogoUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                </div>
+                <span className="text-[10px] text-slate-500">Máx 500KB</span>
+              </div>
+              
+              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>Razão Social <span className="text-rose-500">*</span></Label>
+                  <Input value={form.razao_social} onChange={e => setForm({...form, razao_social: e.target.value})} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Nome Fantasia</Label>
+                  <Input value={form.nome_fantasia} onChange={e => setForm({...form, nome_fantasia: e.target.value})} />
+                </div>
+                <div className="space-y-1.5 relative">
+                  <Label>CNPJ <span className="text-xs text-blue-500">(Busca automática)</span></Label>
+                  <div className="relative">
+                    <Input 
+                      value={form.cnpj} 
+                      onChange={e => setForm({...form, cnpj: e.target.value})} 
+                      onBlur={(e) => buscarCNPJ(e.target.value)}
+                      placeholder="00.000.000/0000-00"
+                    />
+                    {loadingCnpj && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-blue-500" />}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Seção 2: Contato */}
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><Phone className="w-4 h-4 text-[#08D5F5]" /> Contato</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="space-y-1.5"><Label>Telefone</Label><Input value={form.telefone} onChange={e => setForm({...form, telefone: e.target.value})} /></div>
+                <div className="space-y-1.5"><Label>E-mail</Label><Input value={form.email} onChange={e => setForm({...form, email: e.target.value})} /></div>
+                <div className="space-y-1.5"><Label>Site</Label><Input value={form.site} onChange={e => setForm({...form, site: e.target.value})} /></div>
+                <div className="space-y-1.5"><Label>Nome do Contato</Label><Input value={form.contato_nome} onChange={e => setForm({...form, contato_nome: e.target.value})} /></div>
+              </div>
+            </div>
+
+            {/* Seção 3: Endereço */}
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><MapPin className="w-4 h-4 text-amber-500" /> Endereço</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="space-y-1.5"><Label>CEP</Label><Input value={form.cep} onChange={e => setForm({...form, cep: e.target.value})} /></div>
+                <div className="space-y-1.5 sm:col-span-2"><Label>Endereço</Label><Input value={form.endereco} onChange={e => setForm({...form, endereco: e.target.value})} /></div>
+                <div className="space-y-1.5"><Label>Cidade</Label><Input value={form.cidade} onChange={e => setForm({...form, cidade: e.target.value})} /></div>
+                <div className="space-y-1.5"><Label>UF</Label><Input value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} maxLength={2} /></div>
+              </div>
+            </div>
+
+            {/* Seção 4: Regras Comerciais */}
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><FileText className="w-4 h-4 text-emerald-500" /> Regras Comerciais</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Comissão Padrão (%)</Label>
+                  <Input type="number" value={form.comissao_padrao} onChange={e => setForm({...form, comissao_padrao: parseFloat(e.target.value || 0)})} />
+                </div>
+                
+                {/* NOVO CAMPO: Modalidade de Comissão */}
+                <div className="space-y-1.5">
+                  <Label>Modalidade de Comissão</Label>
+                  <Select value={form.modalidade_comissao} onValueChange={(v) => setForm({...form, modalidade_comissao: v})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="faturamento">No Faturamento</SelectItem>
+                      <SelectItem value="liquidez">Na Liquidez</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>Prazo de Pagamento</Label>
+                  <Input value={form.prazo_pagamento} onChange={e => setForm({...form, prazo_pagamento: e.target.value})} placeholder="Ex: 30/60 dias" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Segmento</Label>
+                  <Input value={form.segmento} onChange={e => setForm({...form, segmento: e.target.value})} />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Observações</Label>
+              <Textarea value={form.observacoes} onChange={e => setForm({...form, observacoes: e.target.value})} />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
+            <Button onClick={save} className="bg-[#075BFF]">Salvar Representada</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL 2: DETALHES (PRODUTOS E DOCUMENTOS) */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Gerenciando: {selectedRep?.nome_fantasia || selectedRep?.razao_social}</DialogTitle>
+            <DialogTitle className="flex items-center gap-3">
+              {selectedRep?.logo && <img src={selectedRep.logo} className="w-8 h-8 rounded object-contain" alt="logo"/>}
+              Gerenciando: {selectedRep?.nome_fantasia || selectedRep?.razao_social}
+            </DialogTitle>
           </DialogHeader>
           
           <Tabs defaultValue="produtos" className="mt-4">
@@ -230,7 +427,7 @@ export default function Representadas() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL: Cadastro de Produto */}
+      {/* MODAL 3: CADASTRO DE PRODUTO */}
       <Dialog open={prodOpen} onOpenChange={setProdOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>{prodEditing ? "Editar" : "Novo"} Produto</DialogTitle></DialogHeader>
@@ -244,28 +441,6 @@ export default function Representadas() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setProdOpen(false)}>Cancelar</Button>
             <Button onClick={saveProd} className="bg-[#075BFF]">Salvar Produto</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* MODAL: Cadastro de Representada */}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>{editing ? "Editar Representada" : "Nova Representada"}</DialogTitle></DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5"><Label>Razão Social</Label><Input value={form.razao_social} onChange={e => setForm({...form, razao_social: e.target.value})} /></div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5"><Label>Nome Fantasia</Label><Input value={form.nome_fantasia} onChange={e => setForm({...form, nome_fantasia: e.target.value})} /></div>
-              <div className="space-y-1.5"><Label>CNPJ</Label><Input value={form.cnpj} onChange={e => setForm({...form, cnpj: e.target.value})} /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5"><Label>Comissão Padrão (%)</Label><Input type="number" value={form.comissao_padrao} onChange={e => setForm({...form, comissao_padrao: parseFloat(e.target.value || 0)})} /></div>
-              <div className="space-y-1.5"><Label>Cidade</Label><Input value={form.cidade} onChange={e => setForm({...form, cidade: e.target.value})} /></div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
-            <Button onClick={save} className="bg-[#075BFF]">Salvar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

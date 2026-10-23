@@ -199,6 +199,7 @@ class RepresentadaIn(BaseModel):
     contato_nome: Optional[str] = ""
     contato_cargo: Optional[str] = ""
     comissao_padrao: float = 5.0
+    modalidade_comissao: str = "faturamento" # <-- NOVO CAMPO
     prazo_pagamento: Optional[str] = "30 dias"
     logo: Optional[str] = ""
     observacoes: Optional[str] = ""
@@ -278,6 +279,7 @@ class PedidoIn(BaseModel):
     desconto_geral: float = 0.0
     observacoes: Optional[str] = ""
     itens: List[PedidoItemIn]
+    parcelas: List[dict] = [] # <-- NOVO CAMPO: Ex: [{"vencimento": "2026-11-30T00:00:00", "valor": 500.0}]
     status: str = "rascunho"
 
 class OportunidadeIn(BaseModel):
@@ -628,57 +630,60 @@ async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_us
 async def status_pedido(pid: str, body: dict, current=Depends(get_current_user)):
     novo = body.get("status")
     if not novo: raise HTTPException(400, "status obrigatório")
-    ped = await t_update("pedidos", current, pid, {"status": novo})
+    
+    # Atualiza o status do pedido e, se existir, o número da NF
+    updates = {"status": novo}
+    if "nf_numero" in body: updates["nf_numero"] = body["nf_numero"]
+    ped = await t_update("pedidos", current, pid, updates)
     
     if novo == "faturado":
         tid = tid_of(current)
         exists = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid})
+        
         if not exists:
-            valor_total = ped.get("total", 0)
-            base_calculo = valor_total 
-            percentual = ped.get("comissao_percentual", 0)
-            valor_bruto = round(base_calculo * (percentual / 100), 2)
-            descontos = 0.0
-            valor_liquido = valor_bruto - descontos
+            rep = await db.representadas.find_one({"id": ped["representada_id"], "tenant_id": tid})
+            valor_total_pedido = ped.get("total", 0)
+            percentual = rep.get("comissao_padrao", 5.0)
+            valor_liquido = round(valor_total_pedido * (percentual / 100), 2)
             
             comissao_data = {
                 "pedido_id": pid, 
                 "pedido_numero": ped.get("numero"),
                 "cliente_id": ped.get("cliente_id"), 
                 "representada_id": ped.get("representada_id"),
-                "data_pedido": ped.get("data_pedido"),
-                "nf_numero": ped.get("nf_numero", ""),
-                "valor_total_pedido": valor_total,
-                "base_calculo": base_calculo,
+                "nf_numero": updates.get("nf_numero", ""),
+                "valor_total_pedido": valor_total_pedido,
                 "percentual": percentual,
-                "valor_bruto": valor_bruto,
-                "descontos": descontos,
                 "valor_liquido": valor_liquido,
                 "valor_recebido": 0.0,
                 "saldo_pendente": valor_liquido,
-                "data_prevista": iso(now_utc() + timedelta(days=30)),
-                "condicao_pagamento": ped.get("condicao_pagamento", "30 dias"),
-                "status": "pendente",
+                "modalidade": rep.get("modalidade_comissao", "faturamento"),
+                "status": "pendente" if rep.get("modalidade_comissao") == "faturamento" else "aguardando_liquidez",
                 "historico_recebimentos": [],
-                "observacoes": ""
             }
             comissao = await t_insert("comissoes", current, comissao_data)
             
-            # Gera Título Financeiro (Contas a Receber)
-            await t_insert("contas_receber", current, {
-                "comissao_id": comissao["id"],
-                "cliente_id": ped.get("cliente_id"), 
-                "representada_id": ped.get("representada_id"),
-                "pedido_id": pid, 
-                "numero_documento": ped.get("numero"),
-                "valor": valor_liquido, 
-                "valor_recebido": 0.0,
-                "saldo_pendente": valor_liquido,
-                "vencimento": comissao_data["data_prevista"],
-                "status": "aberto", 
-                "historico_recebimentos": [],
-                "forma_pagamento": "Boleto",
-            })
+            # Gera as parcelas no Contas a Receber
+            parcelas = ped.get("parcelas", [])
+            if not parcelas:
+                # Fallback: se não definiu parcelas, joga o valor total para 30 dias
+                parcelas = [{"vencimento": iso(now_utc() + timedelta(days=30)), "valor": valor_liquido}]
+            
+            for p in parcelas:
+                await t_insert("contas_receber", current, {
+                    "comissao_id": comissao["id"],
+                    "cliente_id": ped.get("cliente_id"), 
+                    "representada_id": ped.get("representada_id"),
+                    "pedido_id": pid, 
+                    "numero_documento": f"{ped.get('numero')} (Parcela)",
+                    "valor": p["valor"], 
+                    "valor_recebido": 0.0,
+                    "saldo_pendente": p["valor"],
+                    "vencimento": p["vencimento"],
+                    "status": "aberto", 
+                    "historico_recebimentos": [],
+                    "forma_pagamento": "Boleto",
+                })
     return ped
 
 @api.delete("/pedidos/{pid}")
@@ -1272,7 +1277,7 @@ async def _match_or_create_pedido(current: dict, parsed: dict,
         "cliente_id": cli_match["id"], 
         "representada_id": rep_match["id"],
         "pedido_id": pedido["id"], 
-        "numero_documento": pedido["numero"],
+        "numero_documento": f"{pedido['numero']} (XML)",
         "valor": valor_bruto,
         "valor_recebido": 0.0,
         "saldo_pendente": valor_bruto,

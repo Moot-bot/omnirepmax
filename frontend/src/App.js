@@ -15,7 +15,7 @@ import PaymentSuccess from "./pages/PaymentSuccess";
 import Representadas from "./pages/Representadas";
 import Clientes from "./pages/Clientes";
 import Kanban from "./pages/Kanban";
-import Produtos from "./pages/Produtos";
+
 import Pedidos from "./pages/Pedidos";
 import Comissoes from "./pages/Comissoes";
 import ContasReceber from "./pages/ContasReceber";
@@ -24,8 +24,8 @@ import Agenda from "./pages/Agenda";
 import Insights from "./pages/Insights";
 import ImportacaoXML from "./pages/ImportacaoXML";
 import Mapa from "./pages/Mapa";
-import Documentos from "./pages/Documentos";
 import Configuracoes from "./pages/Configuracoes";
+import Relatorios from "./pages/Relatorios"; // <-- Adicionado se você criou a tela de relatórios
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -45,6 +45,7 @@ export default function App() {
             <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
+            
             <Route element={<Protected><AppShell /></Protected>}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/max-ai" element={<MaxAI />} />
@@ -52,7 +53,6 @@ export default function App() {
               <Route path="/representadas" element={<Representadas />} />
               <Route path="/clientes" element={<Clientes />} />
               <Route path="/funil" element={<Kanban />} />
-              <Route path="/produtos" element={<Produtos />} />
               <Route path="/pedidos" element={<Pedidos />} />
               <Route path="/comissoes" element={<Comissoes />} />
               <Route path="/contas-receber" element={<ContasReceber />} />
@@ -61,9 +61,10 @@ export default function App() {
               <Route path="/insights" element={<Insights />} />
               <Route path="/xml" element={<ImportacaoXML />} />
               <Route path="/mapa" element={<Mapa />} />
-              <Route path="/documentos" element={<Documentos />} />
+              <Route path="/relatorios" element={<Relatorios />} /> {/* <-- Rota adicionada */}
               <Route path="/configuracoes" element={<Configuracoes />} />
             </Route>
+            
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </BrowserRouter>
