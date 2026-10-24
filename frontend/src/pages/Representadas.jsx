@@ -24,7 +24,7 @@ const emptyRep = {
   contato_nome: "", contato_cargo: "",
   comissao_padrao: 5.0, 
   modalidade_comissao: "faturamento",
-  base_calculo_comissao: "faturado", // <-- NOVO CAMPO
+  base_calculo_comissao: "faturado",
   prazo_pagamento: "30 dias", 
   observacoes: ""
 };
@@ -216,14 +216,14 @@ export default function Representadas() {
           <div key={rep.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col">
             <div className="flex justify-between items-start mb-4">
               {rep.logo ? <img src={rep.logo} alt="logo" className="w-12 h-12 rounded-xl object-contain bg-white border border-slate-100 p-1" /> : 
-                <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600"><Building2 className="w-6 h-6" /></div>}
+                <div className="w-12 h-12 rounded-xl bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600 dark:text-blue-400"><Building2 className="w-6 h-6" /></div>}
               <Button variant="ghost" size="sm" onClick={() => { setForm({...emptyRep, ...rep}); setEditing(rep.id); setOpen(true); }}><Edit2 className="w-4 h-4" /></Button>
             </div>
             <h3 className="font-bold text-lg text-slate-900 dark:text-white truncate">{rep.nome_fantasia || rep.razao_social}</h3>
             <p className="text-sm text-slate-500 mb-2">{rep.cnpj}</p>
             
             <div className="flex flex-col gap-1 mb-4">
-              <p className="text-xs font-semibold text-emerald-600 bg-emerald-50 inline-block px-2 py-1 rounded w-fit">Comissão: {rep.comissao_padrao}%</p>
+              <p className="text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 inline-block px-2 py-1 rounded w-fit">Comissão: {rep.comissao_padrao}%</p>
               <p className="text-xs text-slate-500 capitalize">Modalidade: {rep.modalidade_comissao === "faturamento" ? "No Faturamento" : "Na Liquidez"}</p>
               <p className="text-xs text-slate-500">Base: {rep.base_calculo_comissao || "Faturado"}</p>
               {rep.whatsapp && <p className="text-xs text-slate-500">📱 {rep.whatsapp}</p>}
@@ -243,7 +243,7 @@ export default function Representadas() {
             <div className="flex gap-6 items-start">
               <div className="space-y-2 flex flex-col items-center">
                 <Label>Logo</Label>
-                <div className="w-24 h-24 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden bg-slate-50 relative">
+                <div className="w-24 h-24 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden bg-slate-50 dark:bg-slate-800/50 dark:border-slate-700 relative">
                   {form.logo ? <img src={form.logo} alt="Logo" className="w-full h-full object-contain" /> : <Building2 className="w-8 h-8 text-slate-400" />}
                   <input type="file" accept="image/*" onChange={handleLogoUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
                 </div>
@@ -288,7 +288,6 @@ export default function Representadas() {
                     <SelectContent><SelectItem value="faturamento">No Faturamento</SelectItem><SelectItem value="liquidez">Na Liquidez</SelectItem></SelectContent>
                   </Select>
                 </div>
-                {/* NOVO CAMPO: BASE DE CALCULO */}
                 <div className="space-y-1.5"><Label>Base de Cálculo</Label>
                   <Select value={form.base_calculo_comissao} onValueChange={(v) => setForm({...form, base_calculo_comissao: v})}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -310,7 +309,6 @@ export default function Representadas() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAIS DE DETALHES E PRODUTOS (Mantidos exatamente como você enviou) */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-3">{selectedRep?.logo && <img src={selectedRep.logo} className="w-8 h-8 rounded object-contain" alt="logo"/>}Gerenciando: {selectedRep?.nome_fantasia || selectedRep?.razao_social}</DialogTitle></DialogHeader>
@@ -328,27 +326,28 @@ export default function Representadas() {
                   <Button onClick={() => { setProdForm(emptyProd); setProdEditing(null); setProdOpen(true); }} className="bg-[#075BFF]"><Plus className="w-4 h-4 mr-2"/> Novo Produto</Button>
                 </div>
               </div>
-              <div className="border rounded-xl overflow-hidden">
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
                 <table className="w-full text-sm">
-                  <thead className="bg-slate-50 border-b">
+                  {/* CORREÇÃO DO DARK MODE NO CABEÇALHO */}
+                  <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
                     <tr>
-                      <th className="px-4 py-3 text-left">Nome / Marca</th>
-                      <th className="px-4 py-3 text-left">Cód / SKU</th>
-                      <th className="px-4 py-3 text-left">EAN</th>
-                      <th className="px-4 py-3 text-right">Preço</th>
-                      <th className="px-4 py-3 text-right">Ações</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-300">Nome / Marca</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-300">Cód / SKU</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-300">EAN</th>
+                      <th className="px-4 py-3 text-right font-semibold text-slate-700 dark:text-slate-300">Preço</th>
+                      <th className="px-4 py-3 text-right font-semibold text-slate-700 dark:text-slate-300">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {produtos.map(p => (
-                      <tr key={p.id} className="border-b last:border-0 hover:bg-slate-50">
+                      <tr key={p.id} className="border-b border-slate-100 dark:border-slate-800 last:border-0 hover:bg-slate-50 dark:hover:bg-slate-800/30">
                         <td className="px-4 py-3">
-                          <div className="font-semibold text-slate-900">{p.nome}</div>
+                          <div className="font-semibold text-slate-900 dark:text-white">{p.nome}</div>
                           <div className="text-xs text-slate-500">{p.marca} {p.categoria && `· ${p.categoria}`}</div>
                         </td>
-                        <td className="px-4 py-3 font-mono text-xs">{p.codigo || p.sku}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{p.codigo || p.sku}</td>
                         <td className="px-4 py-3 font-mono text-xs text-slate-500">{p.ean || "-"}</td>
-                        <td className="px-4 py-3 text-right font-bold">{fmtBRL(p.preco_tabela)}</td>
+                        <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{fmtBRL(p.preco_tabela)}</td>
                         <td className="px-4 py-3 text-right">
                           <Button variant="ghost" size="sm" onClick={() => { setProdForm(p); setProdEditing(p.id); setProdOpen(true); }}><Edit2 className="w-4 h-4"/></Button>
                           <Button variant="ghost" size="sm" onClick={() => delProd(p.id)} className="text-rose-500"><Trash2 className="w-4 h-4"/></Button>
@@ -370,12 +369,12 @@ export default function Representadas() {
                 </Button>
               </div>
               {docs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-xl bg-slate-50"><FileText className="w-10 h-10 text-slate-400 mb-3" /><h3 className="font-semibold text-lg text-slate-700">Nenhum contrato anexado</h3></div>
+                <div className="flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-xl bg-slate-50 dark:bg-slate-800/30 dark:border-slate-700"><FileText className="w-10 h-10 text-slate-400 mb-3" /><h3 className="font-semibold text-lg text-slate-700 dark:text-slate-300">Nenhum contrato anexado</h3></div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {docs.map(d => (
-                    <div key={d.id} className="flex items-center justify-between p-3 border rounded-xl bg-white">
-                      <div className="flex items-center gap-3 overflow-hidden"><FileText className="w-5 h-5 text-blue-500 shrink-0" /><span className="text-sm font-medium truncate">{d.nome}</span></div>
+                    <div key={d.id} className="flex items-center justify-between p-3 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900">
+                      <div className="flex items-center gap-3 overflow-hidden"><FileText className="w-5 h-5 text-blue-500 shrink-0" /><span className="text-sm font-medium truncate text-slate-900 dark:text-white">{d.nome}</span></div>
                       <div className="flex gap-1"><Button variant="ghost" size="sm" onClick={() => downloadDoc(d.id, d.nome)}><Download className="w-4 h-4 text-slate-500" /></Button><Button variant="ghost" size="sm" onClick={() => delDoc(d.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button></div>
                     </div>
                   ))}
@@ -390,13 +389,13 @@ export default function Representadas() {
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{prodEditing ? "Editar" : "Novo"} Produto</DialogTitle></DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-4">
-            <div className="space-y-1.5 col-span-2"><Label>Nome do Produto *</Label><Input value={prodForm.nome} onChange={e => setProdForm({...prodForm, nome: e.target.value})} /></div>
-            <div className="space-y-1.5"><Label>Código Interno / SKU</Label><Input value={prodForm.codigo} onChange={e => setProdForm({...prodForm, codigo: e.target.value})} /></div>
-            <div className="space-y-1.5"><Label>EAN (Cód. Barras)</Label><Input value={prodForm.ean} onChange={e => setProdForm({...prodForm, ean: e.target.value})} /></div>
-            <div className="space-y-1.5"><Label>Marca</Label><Input value={prodForm.marca} onChange={e => setProdForm({...prodForm, marca: e.target.value})} /></div>
-            <div className="space-y-1.5"><Label>Categoria</Label><Input value={prodForm.categoria} onChange={e => setProdForm({...prodForm, categoria: e.target.value})} /></div>
-            <div className="space-y-1.5"><Label>Preço Tabela (R$)</Label><Input type="number" step="0.01" value={prodForm.preco_tabela} onChange={e => setProdForm({...prodForm, preco_tabela: parseFloat(e.target.value || 0)})} /></div>
-            <div className="space-y-1.5"><Label>Unidade</Label><Select value={prodForm.unidade} onValueChange={v => setProdForm({...prodForm, unidade: v})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="UN">UN</SelectItem><SelectItem value="CX">CX</SelectItem><SelectItem value="KG">KG</SelectItem><SelectItem value="L">L</SelectItem></SelectContent></Select></div>
+            <div className="space-y-1.5 col-span-2"><Label>Nome do Produto *</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={prodForm.nome} onChange={e => setProdForm({...prodForm, nome: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Código Interno / SKU</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={prodForm.codigo} onChange={e => setProdForm({...prodForm, codigo: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>EAN (Cód. Barras)</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={prodForm.ean} onChange={e => setProdForm({...prodForm, ean: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Marca</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={prodForm.marca} onChange={e => setProdForm({...prodForm, marca: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Categoria</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={prodForm.categoria} onChange={e => setProdForm({...prodForm, categoria: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Preço Tabela (R$)</Label><Input type="number" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" step="0.01" value={prodForm.preco_tabela} onChange={e => setProdForm({...prodForm, preco_tabela: parseFloat(e.target.value || 0)})} /></div>
+            <div className="space-y-1.5"><Label>Unidade</Label><Select value={prodForm.unidade} onValueChange={v => setProdForm({...prodForm, unidade: v})}><SelectTrigger className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="UN">UN</SelectItem><SelectItem value="CX">CX</SelectItem><SelectItem value="KG">KG</SelectItem><SelectItem value="L">L</SelectItem></SelectContent></Select></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setProdOpen(false)}>Cancelar</Button><Button onClick={saveProd} className="bg-[#075BFF]">Salvar Produto</Button></DialogFooter>
         </DialogContent>
@@ -406,15 +405,30 @@ export default function Representadas() {
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Importar Produtos (Excel/CSV)</DialogTitle></DialogHeader>
           <div className="py-4 space-y-4">
-            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-sm text-blue-800"><p className="font-semibold mb-1">Colunas esperadas na planilha:</p><code className="block bg-white/50 p-2 rounded">Nome | Código | EAN | Marca | Categoria | Preço | Unidade</code></div>
-            <div className="border-2 border-dashed rounded-xl p-8 text-center"><FileSpreadsheet className="w-8 h-8 text-slate-400 mx-auto mb-2" /><Input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} className="max-w-xs mx-auto" /></div>
+            <div className="bg-blue-50 dark:bg-blue-500/10 p-4 rounded-xl border border-blue-100 dark:border-blue-500/20 text-sm text-blue-800 dark:text-blue-300"><p className="font-semibold mb-1">Colunas esperadas na planilha:</p><code className="block bg-white/50 dark:bg-black/20 p-2 rounded">Nome | Código | EAN | Marca | Categoria | Preço | Unidade</code></div>
+            <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-8 text-center"><FileSpreadsheet className="w-8 h-8 text-slate-400 mx-auto mb-2" /><Input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} className="max-w-xs mx-auto bg-white dark:bg-slate-900 text-slate-900 dark:text-white" /></div>
             {importPreview.length > 0 && (
               <div className="mt-6">
                 <h4 className="font-semibold mb-2">Conferência ({importPreview.length} itens)</h4>
-                <div className="border rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-slate-50 border-b sticky top-0"><tr><th className="px-4 py-2 text-left">Nome</th><th className="px-4 py-2 text-left">Código</th><th className="px-4 py-2 text-right">Preço</th></tr></thead>
-                    <tbody>{importPreview.map(p => (<tr key={p.tempId} className={p.isDuplicate ? "bg-amber-50" : ""}><td className="px-4 py-2 truncate max-w-[200px]">{p.nome}</td><td className="px-4 py-2 font-mono text-xs">{p.codigo}</td><td className="px-4 py-2 text-right">{fmtBRL(p.preco)}</td></tr>))}</tbody>
+                    {/* CORREÇÃO DO DARK MODE NO PREVIEW */}
+                    <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-semibold text-slate-700 dark:text-slate-300">Nome</th>
+                        <th className="px-4 py-2 text-left font-semibold text-slate-700 dark:text-slate-300">Código</th>
+                        <th className="px-4 py-2 text-right font-semibold text-slate-700 dark:text-slate-300">Preço</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.map(p => (
+                        <tr key={p.tempId} className={p.isDuplicate ? "bg-amber-50 dark:bg-amber-500/10" : "border-b border-slate-100 dark:border-slate-800"}>
+                          <td className="px-4 py-2 truncate max-w-[200px] text-slate-900 dark:text-white">{p.nome}</td>
+                          <td className="px-4 py-2 font-mono text-xs text-slate-600 dark:text-slate-400">{p.codigo}</td>
+                          <td className="px-4 py-2 text-right text-slate-900 dark:text-white">{fmtBRL(p.preco)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
                   </table>
                 </div>
               </div>

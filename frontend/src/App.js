@@ -15,7 +15,6 @@ import PaymentSuccess from "./pages/PaymentSuccess";
 import Representadas from "./pages/Representadas";
 import Clientes from "./pages/Clientes";
 import Kanban from "./pages/Kanban";
-
 import Pedidos from "./pages/Pedidos";
 import Comissoes from "./pages/Comissoes";
 import ContasReceber from "./pages/ContasReceber";
@@ -25,7 +24,7 @@ import Insights from "./pages/Insights";
 import ImportacaoXML from "./pages/ImportacaoXML";
 import Mapa from "./pages/Mapa";
 import Configuracoes from "./pages/Configuracoes";
-import Relatorios from "./pages/Relatorios"; // <-- Adicionado se você criou a tela de relatórios
+import Relatorios from "./pages/Relatorios";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -40,14 +39,16 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
-            <Route path="/lp" element={<Landing />} />
+            {/* Agora a raiz é a Landing Page */}
+            <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
             
             <Route element={<Protected><AppShell /></Protected>}>
-              <Route path="/" element={<Dashboard />} />
+              {/* Dashboard mudou para /dashboard */}
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/max-ai" element={<MaxAI />} />
               <Route path="/planos" element={<Plans />} />
               <Route path="/representadas" element={<Representadas />} />
@@ -61,7 +62,7 @@ export default function App() {
               <Route path="/insights" element={<Insights />} />
               <Route path="/xml" element={<ImportacaoXML />} />
               <Route path="/mapa" element={<Mapa />} />
-              <Route path="/relatorios" element={<Relatorios />} /> {/* <-- Rota adicionada */}
+              <Route path="/relatorios" element={<Relatorios />} />
               <Route path="/configuracoes" element={<Configuracoes />} />
             </Route>
             

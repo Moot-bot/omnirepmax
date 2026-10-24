@@ -6,7 +6,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Plus, Trash2, CheckCircle, Calculator, UserPlus, Loader2, Edit2, Landmark, PlusCircle, MinusCircle, FileText } from "lucide-react";
+import { Plus, Trash2, Calculator, UserPlus, Loader2, Edit2, Landmark, PlusCircle, MinusCircle, FileText } from "lucide-react";
 import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
 
@@ -22,7 +22,6 @@ export default function Pedidos() {
   const [selectedProd, setSelectedProd] = useState("");
   const [qtd, setQtd] = useState(1);
 
-  // NOVOS ESTADOS PARA FATURAMENTO PARCIAL
   const [fatOpen, setFatOpen] = useState(false);
   const [selectedPed, setSelectedPed] = useState(null);
   const [fatForm, setFatForm] = useState({ nf_numero: "", nf_serie: "", valor_faturado: 0, parcelas: [] });
@@ -76,7 +75,6 @@ export default function Pedidos() {
   };
 
   const removeItem = (idx) => { const n = [...form.itens]; n.splice(idx, 1); setForm({ ...form, itens: n }); };
-
   const calcTotal = () => form.itens.reduce((acc, i) => acc + (i.quantidade * i.preco_unitario), 0);
 
   const gerarParcelas = () => {
@@ -99,9 +97,7 @@ export default function Pedidos() {
   };
 
   const updateParcela = (idx, field, value) => {
-    const novas = [...form.parcelas];
-    novas[idx][field] = value;
-    setForm({ ...form, parcelas: novas });
+    const novas = [...form.parcelas]; novas[idx][field] = value; setForm({ ...form, parcelas: novas });
   };
 
   const removeParcela = (idx) => {
@@ -124,17 +120,9 @@ export default function Pedidos() {
     setEditingId(p.id); setOpen(true);
   };
 
-  // --- LÓGICA DE FATURAMENTO PARCIAL ---
   const handleOpenFat = (p) => {
     setSelectedPed(p);
-    const rep = reps.find(r => r.id === p.representada_id);
-    setFatForm({ 
-      nf_numero: "", 
-      nf_serie: "", 
-      valor_faturado: p.total, 
-      data_faturamento: new Date().toISOString().split('T')[0],
-      parcelas: [] 
-    });
+    setFatForm({ nf_numero: "", nf_serie: "", valor_faturado: p.total, data_faturamento: new Date().toISOString().split('T')[0], parcelas: [] });
     setFatOpen(true);
   };
 
@@ -157,7 +145,7 @@ export default function Pedidos() {
     if (fatForm.valor_faturado <= 0) return toast.error("Informe o valor faturado");
     try {
       await api.post(`/pedidos/${selectedPed.id}/faturamento`, fatForm);
-      toast.success("Faturamento registrado com sucesso!"); 
+      toast.success("Faturamento registrado!"); 
       setFatOpen(false); load();
     } catch (e) { toast.error(e.response?.data?.detail || "Erro ao registrar faturamento"); }
   };
@@ -176,28 +164,28 @@ export default function Pedidos() {
     <div className="pb-10">
       <PageHeader title="Pedidos" subtitle="Lançamento e Faturamento" actions={<Button onClick={() => { setForm({ cliente_id: "", representada_id: "", condicao_pagamento: "30/60", itens: [], parcelas: [] }); setEditingId(null); setOpen(true); }} className="bg-[#075BFF]"><Plus className="w-4 h-4 mr-2" /> Novo Pedido</Button>} />
 
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 border-b">
+          <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
             <tr>
-              <th className="px-5 py-4 text-left">Nº Pedido</th>
-              <th className="px-5 py-4 text-left">Cliente / Representada</th>
-              <th className="px-5 py-4 text-right">Total</th>
-              <th className="px-5 py-4 text-center">Status</th>
-              <th className="px-5 py-4 text-right">Ações</th>
+              <th className="px-5 py-4 text-left text-slate-700 dark:text-slate-300">Nº Pedido</th>
+              <th className="px-5 py-4 text-left text-slate-700 dark:text-slate-300">Cliente / Representada</th>
+              <th className="px-5 py-4 text-right text-slate-700 dark:text-slate-300">Total</th>
+              <th className="px-5 py-4 text-center text-slate-700 dark:text-slate-300">Status</th>
+              <th className="px-5 py-4 text-right text-slate-700 dark:text-slate-300">Ações</th>
             </tr>
           </thead>
           <tbody>
             {list.map(p => {
               const isLiquidezPendente = p.status === "faturado" && getRepModalidade(p.representada_id) === "liquidez";
               return (
-                <tr key={p.id} className="border-b hover:bg-slate-50">
-                  <td className="px-5 py-3 font-mono font-bold">{p.numero}</td>
+                <tr key={p.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                  <td className="px-5 py-3 font-mono font-bold text-slate-900 dark:text-white">{p.numero}</td>
                   <td className="px-5 py-3">
-                    <div className="font-semibold">{clientes.find(c => c.id === p.cliente_id)?.nome_fantasia}</div>
+                    <div className="font-semibold text-slate-900 dark:text-white">{clientes.find(c => c.id === p.cliente_id)?.nome_fantasia}</div>
                     <div className="text-xs text-slate-500">{reps.find(r => r.id === p.representada_id)?.nome_fantasia}</div>
                   </td>
-                  <td className="px-5 py-3 text-right font-mono">{fmtBRL(p.total)}</td>
+                  <td className="px-5 py-3 text-right font-mono text-slate-900 dark:text-white">{fmtBRL(p.total)}</td>
                   <td className="px-5 py-3 text-center">
                     <StatusBadge status={p.status} />
                     {isLiquidezPendente && <div className="text-[10px] text-amber-600 font-bold mt-1">Aguard. Fábrica</div>}
@@ -214,7 +202,7 @@ export default function Pedidos() {
         </table>
       </div>
 
-      {/* MODAL DE PEDIDO (Mantido) */}
+      {/* MODAL DE PEDIDO */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editingId ? "Editar Pedido" : "Novo Pedido"}</DialogTitle></DialogHeader>
@@ -238,19 +226,19 @@ export default function Pedidos() {
                 </div>
               </div>
 
-              <div className="border p-4 rounded-xl bg-slate-50 space-y-3">
+              <div className="border border-slate-200 dark:border-slate-800 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/50 space-y-3">
                 <Label>Itens do Pedido</Label>
                 <div className="flex gap-2">
                   <Select value={selectedProd} onValueChange={setSelectedProd} disabled={!form.representada_id}>
                     <SelectTrigger className="flex-1"><SelectValue placeholder="Produto..." /></SelectTrigger>
                     <SelectContent>{produtos.map(p => <SelectItem key={p.id} value={p.id}>{p.nome} - {fmtBRL(p.preco_tabela)}</SelectItem>)}</SelectContent>
                   </Select>
-                  <Input type="number" className="w-20" value={qtd} onChange={e => setQtd(parseInt(e.target.value) || 1)} min={1} />
+                  <Input type="number" className="w-20 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" value={qtd} onChange={e => setQtd(parseInt(e.target.value) || 1)} min={1} />
                   <Button onClick={addItem} variant="outline">Add</Button>
                 </div>
                 <div className="space-y-1">
                   {form.itens.map((it, i) => (
-                    <div key={i} className="flex justify-between text-sm bg-white p-2 rounded border">
+                    <div key={i} className="flex justify-between text-sm bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
                       <span>{it.quantidade}x {it.nome}</span>
                       <div className="flex items-center gap-2 font-mono">{fmtBRL(it.quantidade * it.preco_unitario)} <Trash2 className="w-3.5 h-3.5 text-rose-500 cursor-pointer" onClick={() => removeItem(i)}/></div>
                     </div>
@@ -260,21 +248,21 @@ export default function Pedidos() {
               </div>
             </div>
 
-            <div className="border p-4 rounded-xl bg-slate-50 space-y-4">
+            <div className="border border-slate-200 dark:border-slate-800 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/50 space-y-4">
               <div className="flex justify-between items-center">
                 <Label className="text-base">Parcelamento</Label>
                 <Button onClick={gerarParcelas} variant="secondary" size="sm" disabled={form.itens.length === 0}><Calculator className="w-4 h-4 mr-1" /> Auto-Calcular</Button>
               </div>
               <div className="space-y-1.5">
                 <Label>Condição para Auto-Cálculo</Label>
-                <Input value={form.condicao_pagamento} onChange={e => setForm({...form, condicao_pagamento: e.target.value})} placeholder="Ex: 30/60/90" />
+                <Input className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white" value={form.condicao_pagamento} onChange={e => setForm({...form, condicao_pagamento: e.target.value})} placeholder="Ex: 30/60/90" />
               </div>
               <div className="space-y-2 mt-2 max-h-[300px] overflow-y-auto pr-2">
                 {form.parcelas.map((p, i) => (
-                  <div key={i} className="flex gap-2 items-center bg-white p-2 rounded border">
+                  <div key={i} className="flex gap-2 items-center bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
                     <span className="text-xs font-bold text-slate-400 w-6">{i+1}ª</span>
-                    <Input type="date" value={p.vencimento.split('T')[0]} onChange={e => updateParcela(i, "vencimento", e.target.value)} className="flex-1 h-8 text-xs" />
-                    <Input type="number" value={p.valor} onChange={e => updateParcela(i, "valor", parseFloat(e.target.value))} className="w-24 h-8 text-xs font-mono" />
+                    <Input type="date" value={p.vencimento.split('T')[0]} onChange={e => updateParcela(i, "vencimento", e.target.value)} className="flex-1 h-8 text-xs bg-transparent border-none p-0 text-slate-900 dark:text-white" />
+                    <Input type="number" value={p.valor} onChange={e => updateParcela(i, "valor", parseFloat(e.target.value))} className="w-24 h-8 text-xs font-mono bg-transparent border-none p-0 text-slate-900 dark:text-white" />
                     <MinusCircle className="w-4 h-4 text-rose-500 cursor-pointer" onClick={() => removeParcela(i)} />
                   </div>
                 ))}
@@ -289,52 +277,53 @@ export default function Pedidos() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL DE FATURAMENTO PARCIAL (NOVO) */}
+      {/* MODAL DE FATURAMENTO (CORRIGIDO) */}
       <Dialog open={fatOpen} onOpenChange={setFatOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Registrar Faturamento</DialogTitle></DialogHeader>
           <div className="space-y-4 py-4">
-            <div className="bg-slate-50 p-4 rounded-lg flex justify-between">
+            {/* Correção do fundo branco no modo escuro */}
+            <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-lg flex justify-between">
               <div>
-                <p className="text-sm text-slate-500">Valor Total do Pedido</p>
-                <p className="text-xl font-bold">{fmtBRL(selectedPed?.total || 0)}</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Valor Total do Pedido</p>
+                <p className="text-xl font-bold text-slate-900 dark:text-white">{fmtBRL(selectedPed?.total || 0)}</p>
               </div>
             </div>
             
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>Nº Nota Fiscal</Label>
-                <Input value={fatForm.nf_numero} onChange={e => setFatForm({...fatForm, nf_numero: e.target.value})} />
+                <Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-slate-300 dark:border-slate-700" value={fatForm.nf_numero} onChange={e => setFatForm({...fatForm, nf_numero: e.target.value})} />
               </div>
               <div className="space-y-1.5">
                 <Label>Série</Label>
-                <Input value={fatForm.nf_serie} onChange={e => setFatForm({...fatForm, nf_serie: e.target.value})} placeholder="Ex: 1" />
+                <Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-slate-300 dark:border-slate-700" value={fatForm.nf_serie} onChange={e => setFatForm({...fatForm, nf_serie: e.target.value})} placeholder="Ex: 1" />
               </div>
               <div className="space-y-1.5">
                 <Label>Data Faturamento</Label>
-                <Input type="date" value={fatForm.data_faturamento} onChange={e => setFatForm({...fatForm, data_faturamento: e.target.value})} />
+                <Input type="date" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-slate-300 dark:border-slate-700" value={fatForm.data_faturamento} onChange={e => setFatForm({...fatForm, data_faturamento: e.target.value})} />
               </div>
               <div className="space-y-1.5">
                 <Label>Valor Faturado (R$)</Label>
-                <Input type="number" step="0.01" value={fatForm.valor_faturado} onChange={e => setFatForm({...fatForm, valor_faturado: parseFloat(e.target.value || 0)})} />
+                <Input type="number" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-slate-300 dark:border-slate-700" step="0.01" value={fatForm.valor_faturado} onChange={e => setFatForm({...fatForm, valor_faturado: parseFloat(e.target.value || 0)})} />
               </div>
             </div>
-            <p className="text-[10px] text-slate-500 text-center">Altere o valor acima se a indústria emitiu nota parcial.</p>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 text-center">Altere o valor acima se a indústria emitiu nota parcial.</p>
 
-            <div className="border-t pt-4 mt-2">
+            <div className="border-t border-slate-200 dark:border-slate-800 pt-4 mt-2">
               <div className="flex justify-between items-center mb-2">
                 <Label>Parcelas da Comissão</Label>
                 <Button variant="outline" size="sm" onClick={gerarParcelasFaturamento}><Calculator className="w-3 h-3 mr-1"/> Calcular</Button>
               </div>
               <div className="space-y-2 max-h-40 overflow-y-auto">
                 {fatForm.parcelas.map((p, i) => (
-                  <div key={i} className="flex gap-2 items-center bg-slate-50 p-2 rounded">
+                  <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-800/50 p-2 rounded border border-slate-200 dark:border-slate-700">
                     <Input type="date" value={p.vencimento} onChange={e => {
                       const novas = [...fatForm.parcelas]; novas[i].vencimento = e.target.value; setFatForm({...fatForm, parcelas: novas});
-                    }} className="flex-1 h-8 text-xs" />
+                    }} className="flex-1 h-8 text-xs bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-slate-300 dark:border-slate-700" />
                     <Input type="number" value={p.valor} onChange={e => {
                       const novas = [...fatForm.parcelas]; novas[i].valor = parseFloat(e.target.value); setFatForm({...fatForm, parcelas: novas});
-                    }} className="w-24 h-8 text-xs font-mono" />
+                    }} className="w-24 h-8 text-xs font-mono bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-slate-300 dark:border-slate-700" />
                   </div>
                 ))}
               </div>
@@ -347,14 +336,14 @@ export default function Pedidos() {
         </DialogContent>
       </Dialog>
 
-      {/* Modais Cliente Rápido (Mantido) */}
+      {/* Modais Cliente Rápido */}
       <Dialog open={cliOpen} onOpenChange={setCliOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Cadastro Rápido de Cliente</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
-            <div className="space-y-1.5 relative"><Label>CNPJ</Label><Input value={newCli.cnpj_cpf} onChange={e => setNewCli({...newCli, cnpj_cpf: e.target.value})} onBlur={e => buscarCNPJ(e.target.value)} />{loadingCnpj && <Loader2 className="absolute right-3 top-8 w-4 h-4 animate-spin text-blue-500" />}</div>
-            <div className="space-y-1.5"><Label>Razão Social *</Label><Input value={newCli.razao_social} onChange={e => setNewCli({...newCli, razao_social: e.target.value})} /></div>
-            <div className="space-y-1.5"><Label>Nome Fantasia</Label><Input value={newCli.nome_fantasia} onChange={e => setNewCli({...newCli, nome_fantasia: e.target.value})} /></div>
+            <div className="space-y-1.5 relative"><Label>CNPJ</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={newCli.cnpj_cpf} onChange={e => setNewCli({...newCli, cnpj_cpf: e.target.value})} onBlur={e => buscarCNPJ(e.target.value)} />{loadingCnpj && <Loader2 className="absolute right-3 top-8 w-4 h-4 animate-spin text-blue-500" />}</div>
+            <div className="space-y-1.5"><Label>Razão Social *</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={newCli.razao_social} onChange={e => setNewCli({...newCli, razao_social: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Nome Fantasia</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={newCli.nome_fantasia} onChange={e => setNewCli({...newCli, nome_fantasia: e.target.value})} /></div>
           </div>
           <DialogFooter><Button onClick={saveNewCli} className="bg-[#075BFF]">Salvar</Button></DialogFooter>
         </DialogContent>
