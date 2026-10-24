@@ -30,7 +30,7 @@ import Feedback from "./pages/Feedback";
 function Protected({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="p-12 text-slate-500">Carregando...</div>;
-  if (!user) return <Navigate to="/login" />;
+  if (!user) return <Navigate to="/login" replace />;
   return children;
 }
 
@@ -40,17 +40,17 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
-            {/* Agora a raiz é a Landing Page */}
+            {/* ROTA RAIZ É A LANDING PAGE */}
             <Route path="/" element={<Landing />} />
+            
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
             
+            {/* ROTAS PROTEGIDAS (Exigem Login) */}
             <Route element={<Protected><AppShell /></Protected>}>
-              {/* Dashboard mudou para /dashboard */}
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/feedback" element={<Feedback />} />
               <Route path="/max-ai" element={<MaxAI />} />
               <Route path="/planos" element={<Plans />} />
               <Route path="/representadas" element={<Representadas />} />
@@ -66,9 +66,10 @@ export default function App() {
               <Route path="/mapa" element={<Mapa />} />
               <Route path="/relatorios" element={<Relatorios />} />
               <Route path="/configuracoes" element={<Configuracoes />} />
+              <Route path="/feedback" element={<Feedback />} />
             </Route>
             
-            <Route path="*" element={<Navigate to="/" />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

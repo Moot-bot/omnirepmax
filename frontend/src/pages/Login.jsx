@@ -16,13 +16,25 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
 
   if (loading) return null;
-  if (user) return <Navigate to="/" />;
+  
+  // ✅ CORREÇÃO 1: Se já estiver logado, vai direto pro Dashboard e não pra Landing
+  if (user) return <Navigate to="/dashboard" replace />;
 
   const submit = async (e) => {
-    e.preventDefault(); setBusy(true);
-    try { await login(email, password); toast.success("Bem-vindo!"); nav("/"); }
-    catch (err) { toast.error(err?.response?.data?.detail || "Falha no login"); }
-    finally { setBusy(false); }
+    e.preventDefault(); 
+    setBusy(true);
+    try { 
+      await login(email, password); 
+      toast.success("Bem-vindo!"); 
+      // ✅ CORREÇÃO 2: Após logar, redireciona para o Dashboard
+      nav("/dashboard"); 
+    }
+    catch (err) { 
+      toast.error(err?.response?.data?.detail || "Falha no login"); 
+    }
+    finally { 
+      setBusy(false); 
+    }
   };
 
   return (
