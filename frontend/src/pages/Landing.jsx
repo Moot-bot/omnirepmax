@@ -1,15 +1,13 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { 
   Building2, Users, Package, Sparkles, TrendingUp, 
   ArrowRight, CheckCircle2, PlayCircle, Database, 
   Bot, Zap, FileSpreadsheet, ShieldCheck, Percent,
-  ChevronDown, Check, Lock, LayoutDashboard,  Factory 
+  ChevronDown, Check, Lock, LayoutDashboard, Factory 
 } from "lucide-react";
-import { Button } from "../components/ui/button";
 
 export default function Landing() {
-  const navigate = useNavigate();
   const [faqOpen, setFaqOpen] = useState(null);
 
   const toggleFaq = (index) => {
@@ -22,14 +20,14 @@ export default function Landing() {
       {/* HEADER / NAVBAR */}
       <header className="fixed top-0 w-full z-50 bg-[#09090B]/80 backdrop-blur-xl border-b border-slate-800/50">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/")}>
+          <Link to="/" className="flex items-center gap-2 cursor-pointer">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#075BFF] to-cyan-400 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-blue-500/30">
               O
             </div>
             <span className="font-extrabold text-2xl tracking-tight text-white">
               OMNIREP<span className="text-[#075BFF]">MAX</span>
             </span>
-          </div>
+          </Link>
 
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
             <a href="#features" className="hover:text-white transition-colors">Funcionalidades</a>
@@ -39,25 +37,24 @@ export default function Landing() {
           </nav>
 
           <div className="flex items-center gap-4">
-            <button 
-              onClick={() => navigate("/login")} 
+            <Link 
+              to="/login" 
               className="text-sm font-medium text-slate-300 hover:text-white transition-colors hidden sm:block"
             >
               Entrar
-            </button>
-            <Button 
-              onClick={() => navigate("/signup")} 
-              className="bg-white text-[#09090B] hover:bg-slate-200 font-semibold rounded-full px-6 transition-all"
+            </Link>
+            <Link 
+              to="/signup" 
+              className="bg-white text-[#09090B] hover:bg-slate-200 font-semibold rounded-full px-6 py-2.5 transition-all"
             >
               Começar Grátis
-            </Button>
+            </Link>
           </div>
         </div>
       </header>
 
       {/* HERO SECTION */}
       <section className="relative pt-40 pb-20 lg:pt-48 lg:pb-32 overflow-hidden">
-        {/* Glow Effects */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[500px] bg-[#075BFF]/20 rounded-full blur-[120px] -z-10"></div>
         
         <div className="relative max-w-7xl mx-auto px-6 text-center">
@@ -79,19 +76,18 @@ export default function Landing() {
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Button 
-              onClick={() => navigate("/signup")} 
-              className="w-full sm:w-auto bg-[#075BFF] hover:bg-blue-600 text-white text-lg px-8 py-6 rounded-full font-bold shadow-[0_0_40px_-10px_rgba(7,91,255,0.5)] transition-all hover:scale-105"
+            <Link 
+              to="/signup" 
+              className="w-full sm:w-auto bg-[#075BFF] hover:bg-blue-600 text-white text-lg px-8 py-4 rounded-full font-bold shadow-[0_0_40px_-10px_rgba(7,91,255,0.5)] transition-all hover:scale-105 flex items-center justify-center"
             >
               Experimentar Grátis por 7 Dias <ArrowRight className="ml-2 w-5 h-5" />
-            </Button>
-            <Button 
-              onClick={() => navigate("/login")} 
-              variant="outline" 
-              className="w-full sm:w-auto border-slate-700 text-slate-300 hover:bg-slate-800 text-lg px-8 py-6 rounded-full"
+            </Link>
+            <Link 
+              to="/login" 
+              className="w-full sm:w-auto border border-slate-700 text-slate-300 hover:bg-slate-800 text-lg px-8 py-4 rounded-full flex items-center justify-center transition-all"
             >
               <PlayCircle className="mr-2 w-5 h-5" /> Ver o Sistema
-            </Button>
+            </Link>
           </div>
 
           <div className="flex items-center justify-center gap-6 mt-8 text-sm text-slate-500">
@@ -104,13 +100,11 @@ export default function Landing() {
         <div className="relative max-w-5xl mx-auto px-6 mt-20">
           <div className="absolute inset-0 bg-gradient-to-t from-[#09090B] via-transparent to-transparent z-10"></div>
           <div className="rounded-2xl border border-slate-700/50 bg-[#1E293B]/50 backdrop-blur-xl p-2 shadow-2xl overflow-hidden relative">
-            {/* Browser dots */}
             <div className="flex gap-2 p-3 border-b border-slate-700/50">
               <div className="w-3 h-3 rounded-full bg-rose-500"></div>
               <div className="w-3 h-3 rounded-full bg-amber-500"></div>
               <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
             </div>
-            {/* Fake Dashboard Content */}
             <div className="grid grid-cols-4 gap-4 p-6 bg-[#09090B]/80">
               <div className="col-span-1 border-r border-slate-800 pr-4 space-y-4">
                 <div className="h-8 bg-slate-800 rounded-md w-full"></div>
@@ -146,7 +140,6 @@ export default function Landing() {
             Utilizado por representantes das maiores indústrias
           </p>
           <div className="flex flex-wrap justify-center gap-8 md:gap-16 opacity-50 grayscale">
-            {/* Simulação de logos */}
             <div className="flex items-center gap-2 font-bold text-xl"><Building2 className="w-6 h-6" /> Indústria A</div>
             <div className="flex items-center gap-2 font-bold text-xl"><Factory className="w-6 h-6" /> Fábrica B</div>
             <div className="flex items-center gap-2 font-bold text-xl"><Package className="w-6 h-6" /> Distribuidora C</div>
@@ -164,7 +157,6 @@ export default function Landing() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Feature 1 - Large */}
             <div className="md:col-span-2 bg-gradient-to-br from-[#1E293B] to-[#0F172A] border border-slate-800 p-8 rounded-3xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-64 h-64 bg-[#075BFF]/10 rounded-full blur-3xl"></div>
               <div className="w-12 h-12 bg-blue-500/20 rounded-2xl flex items-center justify-center mb-6">
@@ -180,7 +172,6 @@ export default function Landing() {
               </div>
             </div>
 
-            {/* Feature 2 */}
             <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl relative overflow-hidden">
               <div className="w-12 h-12 bg-cyan-500/20 rounded-2xl flex items-center justify-center mb-6">
                 <Bot className="w-6 h-6 text-cyan-400" />
@@ -189,7 +180,6 @@ export default function Landing() {
               <p className="text-slate-400 text-sm">Seu analista comercial com IA. Pergunte sobre clientes inativos, produtos ou vendas e receba respostas em segundos.</p>
             </div>
 
-            {/* Feature 3 */}
             <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl">
               <div className="w-12 h-12 bg-emerald-500/20 rounded-2xl flex items-center justify-center mb-6">
                 <Database className="w-6 h-6 text-emerald-400" />
@@ -198,7 +188,6 @@ export default function Landing() {
               <p className="text-slate-400 text-sm">Cansado de digitar? Importe catálogos de produtos via Excel/CSV e notas fiscais via XML em segundos.</p>
             </div>
 
-            {/* Feature 4 */}
             <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl">
               <div className="w-12 h-12 bg-amber-500/20 rounded-2xl flex items-center justify-center mb-6">
                 <Zap className="w-6 h-6 text-amber-400" />
@@ -207,7 +196,6 @@ export default function Landing() {
               <p className="text-slate-400 text-sm">Digite o CNPJ do cliente e o sistema preenche automaticamente razão social, endereço e contatos via BrasilAPI.</p>
             </div>
 
-            {/* Feature 5 */}
             <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl">
               <div className="w-12 h-12 bg-purple-500/20 rounded-2xl flex items-center justify-center mb-6">
                 <ShieldCheck className="w-6 h-6 text-purple-400" />
@@ -228,7 +216,6 @@ export default function Landing() {
           </div>
 
           <div className="grid md:grid-cols-3 gap-8 relative">
-            {/* Connecting Line */}
             <div className="hidden md:block absolute top-1/2 left-0 w-full h-0.5 bg-slate-800 -z-10 -translate-y-1/2"></div>
 
             {[
@@ -257,7 +244,6 @@ export default function Landing() {
           </div>
 
           <div className="grid md:grid-cols-3 gap-6">
-            {/* Plan 1 */}
             <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl flex flex-col">
               <h3 className="text-xl font-bold mb-2">Solo</h3>
               <p className="text-slate-400 text-sm mb-6">Para quem está começando.</p>
@@ -268,10 +254,9 @@ export default function Landing() {
                 <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Funil Kanban</li>
                 <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Pedidos e comissões</li>
               </ul>
-              <Button onClick={() => navigate("/signup")} className="w-full bg-slate-800 hover:bg-slate-700 text-white">Começar Teste</Button>
+              <Link to="/signup" className="w-full bg-slate-800 hover:bg-slate-700 text-white text-center py-2.5 rounded-lg transition-colors">Começar Teste</Link>
             </div>
 
-            {/* Plan 2 - Featured */}
             <div className="bg-gradient-to-b from-[#075BFF]/20 to-[#1E293B] border-2 border-[#075BFF] p-8 rounded-3xl flex flex-col relative">
               <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#075BFF] text-white text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">Mais Popular</div>
               <h3 className="text-xl font-bold mb-2">Profissional</h3>
@@ -284,10 +269,9 @@ export default function Landing() {
                 <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Contas a pagar/receber</li>
                 <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Até 5 usuários</li>
               </ul>
-              <Button onClick={() => navigate("/signup")} className="w-full bg-[#075BFF] hover:bg-blue-600 text-white font-bold">Começar Teste</Button>
+              <Link to="/signup" className="w-full bg-[#075BFF] hover:bg-blue-600 text-white font-bold text-center py-2.5 rounded-lg transition-colors">Começar Teste</Link>
             </div>
 
-            {/* Plan 3 */}
             <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl flex flex-col">
               <h3 className="text-xl font-bold mb-2">Equipe</h3>
               <p className="text-slate-400 text-sm mb-6">Para grandes operações.</p>
@@ -299,7 +283,7 @@ export default function Landing() {
                 <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Relatórios exportáveis</li>
                 <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Suporte WhatsApp</li>
               </ul>
-              <Button onClick={() => navigate("/signup")} className="w-full bg-slate-800 hover:bg-slate-700 text-white">Começar Teste</Button>
+              <Link to="/signup" className="w-full bg-slate-800 hover:bg-slate-700 text-white text-center py-2.5 rounded-lg transition-colors">Começar Teste</Link>
             </div>
           </div>
         </div>
@@ -347,12 +331,12 @@ export default function Landing() {
           <p className="text-lg text-slate-300 mb-10 max-w-2xl mx-auto">
             Junte-se a centenas de representantes que já economizam tempo e aumentam seus lucros com o OmniRepMax.
           </p>
-          <Button 
-            onClick={() => navigate("/signup")} 
-            className="bg-white text-[#09090B] hover:bg-slate-200 text-lg px-10 py-7 rounded-full font-bold shadow-xl transition-transform hover:scale-105"
+          <Link 
+            to="/signup" 
+            className="bg-white text-[#09090B] hover:bg-slate-200 text-lg px-10 py-4 rounded-full font-bold shadow-xl transition-transform hover:scale-105 inline-block"
           >
             Criar Minha Conta Grátis
-          </Button>
+          </Link>
           <p className="mt-6 text-sm text-slate-400 flex items-center justify-center gap-2">
             <Lock className="w-4 h-4" /> Ambiente 100% seguro
           </p>

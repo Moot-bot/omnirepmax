@@ -34,11 +34,14 @@ export function AuthProvider({ children }) {
       try {
           await api.post("/auth/logout");
       } catch (e) {
-          console.error(e);
+          console.log("Erro ao deslogar no servidor", e);
       } finally {
-          // ✅ FIX: Apaga o token do navegador independentemente de a API responder ou não
+          // Força a limpeza do navegador
           localStorage.removeItem("omnirep_token");
-          setUser(null); 
+          localStorage.clear(); // Limpa tudo por garantia
+          setUser(null);
+          // Opcional: Redirecionar forçando recarregamento da página
+          window.location.href = "/login";
       }
   };
 
