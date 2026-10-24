@@ -2,7 +2,11 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { fmtBRL, fmtNum } from "../lib/format";
 import { useAuth } from "../context/AuthContext";
-import { TrendingUp, TrendingDown, Wallet, AlertCircle, Sparkles, BarChart3, PieChart as PieIcon, Target, ArrowUpRight, ArrowDownRight, Users, ShoppingCart, Percent } from "lucide-react";
+import { 
+  TrendingUp, Wallet, AlertCircle, Sparkles, BarChart3, 
+  PieChart as PieIcon, Target, ArrowUpRight, ArrowDownRight, 
+  Users, ShoppingCart, Percent, FileText 
+} from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 
 const CAT_COLORS = ["#075BFF", "#08D5F5", "#F59E0B", "#8B5CF6", "#10B981", "#EC4899", "#06B6D4", "#F43F5E"];
@@ -35,7 +39,8 @@ function Chip({ label, value, color = "emerald", icon: Icon, isZero }) {
     emerald: "from-emerald-500 to-emerald-600 shadow-emerald-500/20", 
     rose: "from-rose-500 to-rose-600 shadow-rose-500/20", 
     teal: "from-teal-500 to-teal-600 shadow-teal-500/20", 
-    amber: "from-amber-500 to-amber-600 shadow-amber-500/20" 
+    amber: "from-amber-500 to-amber-600 shadow-amber-500/20",
+    blue: "from-[#075BFF] to-blue-600 shadow-blue-500/20" // ✅ NOVA COR AZUL
   }[color];
   
   return (
@@ -72,7 +77,7 @@ function Gauge({ score, label }) {
       </div>
       <div>
         <div className="font-display text-xl font-extrabold" style={{ color }}>{label}</div>
-        <div className="text-xs text-slate-500 mt-1 max-w-[180px] leading-snug">Equilíbrio entre receitas, despesas e inadimplência deste mês.</div>
+        <div className="text-xs text-slate-500 mt-1 max-w-[180px] leading-snug">Equilíbrio entre faturamento, despesas e inadimplência deste mês.</div>
       </div>
     </div>
   );
@@ -91,7 +96,6 @@ export default function Dashboard() {
   const greet = (() => { const h = new Date().getHours(); return h < 12 ? "Bom dia" : h < 18 ? "Boa tarde" : "Boa noite"; })();
   const firstName = (user?.name || "Usuário").split(" ")[0];
   
-  // Correção da data forçada no frontend para garantir PT-BR
   const mes = traduzirTexto(d.mes_atual);
 
   return (
@@ -135,10 +139,10 @@ export default function Dashboard() {
 
       {/* 4 chips coloridas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Chip label="Receitas" value={fmtBRL(d.faturamento_mes)} color="emerald" icon={TrendingUp} isZero={d.faturamento_mes === 0} />
-        <Chip label="Despesas" value={fmtBRL(d.despesas_mes)} color="rose" icon={TrendingDown} isZero={d.despesas_mes === 0} />
-        <Chip label="Saldo" value={fmtBRL(d.saldo_mes)} color="teal" icon={Wallet} isZero={d.saldo_mes === 0} />
-        <Chip label="Em atraso" value={fmtBRL(d.em_atraso)} color="amber" icon={AlertCircle} isZero={d.em_atraso === 0} />
+        <Chip label="Volume de Vendas (Mês)" value={fmtBRL(d.volume_vendas_mes)} color="blue" icon={TrendingUp} isZero={d.volume_vendas_mes === 0} />
+        <Chip label="Faturamento Real (Mês)" value={fmtBRL(d.valor_faturado_mes)} color="emerald" icon={FileText} isZero={d.valor_faturado_mes === 0} />
+        <Chip label="Comissões Previstas" value={fmtBRL(d.comissoes_previstas)} color="teal" icon={Percent} isZero={d.comissoes_previstas === 0} />
+        <Chip label="Em atraso" value={fmtBRL(d.em_atraso)} color="rose" icon={AlertCircle} isZero={d.em_atraso === 0} />
       </div>
 
       {/* Saúde + Projeção */}
@@ -163,9 +167,11 @@ export default function Dashboard() {
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
           <div className="text-sm font-semibold mb-4">Resumo do mês</div>
           <div className="space-y-1">
-            <ResumoRow icon={<ArrowUpRight className="w-4 h-4 text-emerald-500" />} label="Entradas" value={fmtBRL(d.faturamento_mes)} valueClass="text-emerald-600 dark:text-emerald-400" />
-            <ResumoRow icon={<ArrowDownRight className="w-4 h-4 text-rose-500" />} label="Saídas" value={fmtBRL(d.despesas_mes)} valueClass="text-rose-600 dark:text-rose-400" />
-            <ResumoRow icon={<Wallet className="w-4 h-4 text-blue-500" />} label="Diferença" value={fmtBRL(d.saldo_mes)} valueClass={d.saldo_mes >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"} />
+            {/* ✅ NOVO: Separando Volume e Faturamento Real no Resumo */}
+            <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-blue-500" />} label="Volume de Vendas" value={fmtBRL(d.volume_vendas_mes)} valueClass="text-slate-900 dark:text-white" />
+            <ResumoRow icon={<FileText className="w-4 h-4 text-emerald-500" />} label="Faturamento Real (NFs)" value={fmtBRL(d.valor_faturado_mes)} valueClass="text-emerald-600 dark:text-emerald-400" />
+            <ResumoRow icon={<ArrowDownRight className="w-4 h-4 text-rose-500" />} label="Saídas (Despesas)" value={fmtBRL(d.despesas_mes)} valueClass="text-rose-600 dark:text-rose-400" />
+            <ResumoRow icon={<Wallet className="w-4 h-4 text-blue-500" />} label="Diferença (Saldo)" value={fmtBRL(d.saldo_mes)} valueClass={d.saldo_mes >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"} />
             <ResumoRow icon={<Users className="w-4 h-4 text-indigo-500" />} label="Clientes ativos / Novos" value={`${fmtNum(d.clientes_ativos)} / ${fmtNum(d.novos_clientes)}`} />
             <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-amber-500" />} label="Pedidos abertos / Faturados" value={`${fmtNum(d.pedidos_abertos)} / ${fmtNum(d.pedidos_faturados)}`} />
             <ResumoRow icon={<Percent className="w-4 h-4 text-emerald-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_abertas)} valueClass="text-emerald-600 dark:text-emerald-400" />
@@ -205,21 +211,22 @@ export default function Dashboard() {
 
       {/* Evolução de faturamento */}
       <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
-        <div className="font-display font-bold text-lg mb-1">Evolução de faturamento</div>
-        <div className="text-xs text-slate-500 mb-6">Últimos 6 meses</div>
+        <div className="font-display font-bold text-lg mb-1">Evolução de Faturamento Real</div>
+        <div className="text-xs text-slate-500 mb-6">Baseado nas Notas Fiscais emitidas (Últimos 6 meses)</div>
         <ResponsiveContainer width="100%" height={260}>
           <AreaChart data={d.serie_faturamento} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#075BFF" stopOpacity={0.4}/>
-                <stop offset="95%" stopColor="#075BFF" stopOpacity={0}/>
+                <stop offset="5%" stopColor="#10B981" stopOpacity={0.4}/>
+                <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" className="dark:stroke-slate-800" vertical={false} />
             <XAxis dataKey="mes" fontSize={12} stroke="#64748B" tickLine={false} axisLine={false} dy={10} tickFormatter={traduzirTexto} />
             <YAxis fontSize={12} stroke="#64748B" tickLine={false} axisLine={false} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
             <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={tooltipStyle} itemStyle={{ color: "#f8fafc" }} labelFormatter={traduzirTexto} />
-            <Area type="monotone" dataKey="valor" stroke="#075BFF" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" activeDot={{ r: 6, strokeWidth: 0, fill: "#075BFF" }} />
+            {/* ✅ NOVO: Cor verde para representar o dinheiro que entrou de verdade */}
+            <Area type="monotone" dataKey="valor" stroke="#10B981" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" activeDot={{ r: 6, strokeWidth: 0, fill: "#10B981" }} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -237,7 +244,7 @@ function Row({ label, value, good, bad }) {
   );
 }
 
-// Componente novo para o Resumo do Mês (deixando mais espaçado e bonito)
+// Componente para o Resumo do Mês
 function ResumoRow({ icon, label, value, valueClass = "text-slate-900 dark:text-white" }) {
   return (
     <div className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">

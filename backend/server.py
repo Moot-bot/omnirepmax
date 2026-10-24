@@ -1014,20 +1014,35 @@ def _in_year(s, y):
 
 @api.get("/dashboard")
 async def dashboard(current=Depends(get_current_user)):
-    pedidos, reps, comissoes, ap, ar, clientes, visitas, ops = await asyncio.gather(
+    # ✅ NOVO: Adicionado 'faturamentos' no gather
+    pedidos, reps, comissoes, ap, ar, clientes, visitas, ops, faturamentos = await asyncio.gather(
         t_list("pedidos", current), t_list("representadas", current), t_list("comissoes", current),
         t_list("contas_pagar", current), t_list("contas_receber", current), t_list("clientes", current),
-        t_list("visitas", current), t_list("oportunidades", current)
+        t_list("visitas", current), t_list("oportunidades", current), t_list("faturamentos", current)
     )
 
     faturados = [p for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")]
     now = now_utc(); mes = now.month; ano = now.year
 
-    fat_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
-    fat_ano = sum(p.get("total", 0) for p in faturados if _in_year(p.get("data_pedido"), ano))
-    fat_por_rep = [{"nome": r.get("nome_fantasia") or r.get("razao_social"),
-                    "valor": round(sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"]), 2)}
-                   for r in reps]
+    # ✅ NOVO: Volume de Vendas (Valor dos Pedidos)
+    volume_vendas_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
+    volume_vendas_ano = sum(p.get("total", 0) for p in faturados if _in_year(p.get("data_pedido"), ano))
+
+    # ✅ NOVO: Faturamento Real (Soma das NFs emitidas)
+    valor_faturado_mes = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_month(f.get("data_faturamento"), ano, mes))
+    valor_faturado_ano = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_year(f.get("data_faturamento"), ano))
+
+    fat_por_rep = []
+    for r in reps:
+        v_vendas = sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"])
+        # Calcula o faturamento real por rep cruzando os IDs
+        p_ids = [p["id"] for p in pedidos if p.get("representada_id") == r["id"]]
+        v_fat = sum(f.get("valor_faturado", 0) for f in faturamentos if f.get("pedido_id") in p_ids)
+        fat_por_rep.append({
+            "nome": r.get("nome_fantasia") or r.get("razao_social"),
+            "volume": round(v_vendas, 2),
+            "faturado": round(v_fat, 2)
+        })
 
     com_recebidas = sum(c.get("valor_recebido", 0) for c in comissoes)
     com_abertas = sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") not in ("recebida", "aguardando_liquidez"))
@@ -1036,7 +1051,9 @@ async def dashboard(current=Depends(get_current_user)):
     ar_abertas = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
 
     despesas_mes = sum(a.get("valor", 0) for a in ap if a.get("status") == "pago" and _in_month(a.get("vencimento"), ano, mes))
-    saldo_mes = fat_mes - despesas_mes
+    
+    # ✅ NOVO: O saldo do mês agora usa o faturamento real (dinheiro que entrou) e não o volume
+    saldo_mes = valor_faturado_mes - despesas_mes
 
     em_atraso_valor = 0.0; em_atraso_count = 0
     for a in ap + ar:
@@ -1056,10 +1073,11 @@ async def dashboard(current=Depends(get_current_user)):
     visitas_realizadas = sum(1 for v in visitas if v.get("status") == "realizada")
     propostas_neg = sum(1 for o in ops if o.get("estagio") in ("proposta", "negociacao"))
 
+    # ✅ NOVO: Série histórica baseada no Faturamento Real (Faturamentos) e não nos Pedidos
     serie = []
     for i in range(5, -1, -1):
         d = (now.replace(day=1) - timedelta(days=30 * i))
-        val = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), d.year, d.month))
+        val = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_month(f.get("data_faturamento"), d.year, d.month))
         serie.append({"mes": f"{MESES_ABR[d.month-1]}/{d.strftime('%y')}", "valor": round(val, 2)})
 
     prod_total: Dict[str, float] = {}
@@ -1073,10 +1091,11 @@ async def dashboard(current=Depends(get_current_user)):
         c = a.get("categoria", "Outros"); cat_total[c] = cat_total.get(c, 0) + a.get("valor", 0)
     gastos_por_categoria = sorted([{"categoria": k, "valor": round(v, 2)} for k, v in cat_total.items()], key=lambda x: -x["valor"])
 
-    if fat_mes <= 0: saude = 50
+    if valor_faturado_mes <= 0: 
+        saude = 50
     else:
-        margem = max(0.0, min(1.0, (fat_mes - despesas_mes) / fat_mes))
-        pen_atraso = min(0.4, em_atraso_valor / max(1.0, fat_mes))
+        margem = max(0.0, min(1.0, (valor_faturado_mes - despesas_mes) / valor_faturado_mes))
+        pen_atraso = min(0.4, em_atraso_valor / max(1.0, valor_faturado_mes))
         saude = int(round(max(0, min(100, (margem * 0.7 + 0.3) * 100 - pen_atraso * 100))))
     saude_label = "Excelente" if saude >= 80 else ("Boa" if saude >= 60 else ("Regular" if saude >= 40 else "Ruim"))
 
@@ -1100,22 +1119,35 @@ async def dashboard(current=Depends(get_current_user)):
 
     return {
         "mes_atual": f"{MESES_PT[mes]} de {ano}",
-        "faturamento_mes": round(fat_mes, 2), "faturamento_ano": round(fat_ano, 2),
+        "volume_vendas_mes": round(volume_vendas_mes, 2), 
+        "volume_vendas_ano": round(volume_vendas_ano, 2),
+        "valor_faturado_mes": round(valor_faturado_mes, 2), 
+        "valor_faturado_ano": round(valor_faturado_ano, 2),
         "faturamento_por_representada": fat_por_rep,
-        "comissoes_previstas": round(com_abertas, 2), "comissoes_recebidas": round(com_recebidas, 2),
+        "comissoes_previstas": round(com_abertas, 2), 
+        "comissoes_recebidas": round(com_recebidas, 2),
         "comissoes_abertas": round(com_abertas, 2),
-        "contas_pagar_abertas": round(ap_abertas, 2), "contas_receber_abertas": round(ar_abertas, 2),
-        "despesas_mes": round(despesas_mes, 2), "saldo_mes": round(saldo_mes, 2),
-        "em_atraso": round(em_atraso_valor, 2), "em_atraso_count": em_atraso_count,
-        "projecao_valor": round(projecao_valor, 2), "projecao_comissao": round(projecao_comissao, 2),
-        "pedidos_abertos": pedidos_abertos, "pedidos_faturados": pedidos_faturados,
-        "clientes_ativos": clientes_ativos, "novos_clientes": novos,
-        "visitas_realizadas": visitas_realizadas, "propostas_negociacao": propostas_neg,
-        "serie_faturamento": serie, "top_produtos": top_produtos,
+        "contas_pagar_abertas": round(ap_abertas, 2), 
+        "contas_receber_abertas": round(ar_abertas, 2),
+        "despesas_mes": round(despesas_mes, 2), 
+        "saldo_mes": round(saldo_mes, 2),
+        "em_atraso": round(em_atraso_valor, 2), 
+        "em_atraso_count": em_atraso_count,
+        "projecao_valor": round(projecao_valor, 2), 
+        "projecao_comissao": round(projecao_comissao, 2),
+        "pedidos_abertos": pedidos_abertos, 
+        "pedidos_faturados": pedidos_faturados,
+        "clientes_ativos": clientes_ativos, 
+        "novos_clientes": novos,
+        "visitas_realizadas": visitas_realizadas, 
+        "propostas_negociacao": propostas_neg,
+        "serie_faturamento": serie, 
+        "top_produtos": top_produtos,
         "gastos_por_categoria": gastos_por_categoria,
-        "saude_financeira": saude, "saude_label": saude_label, "avisos": avisos,
+        "saude_financeira": saude, 
+        "saude_label": saude_label, 
+        "avisos": avisos,
     }
-
 # ------------------------------------------------------------
 # Insights & IA
 # ------------------------------------------------------------

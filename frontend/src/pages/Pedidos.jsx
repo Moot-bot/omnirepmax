@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { 
   Plus, Trash2, Calculator, UserPlus, Loader2, Edit2, 
   PlusCircle, MinusCircle, Download, FileCheck, 
-  Ban, AlertCircle // <-- Ícones novos adicionados aqui
+  Ban, AlertCircle, Check
 } from "lucide-react";
 import { fmtBRL, fmtDate } from "../lib/format";
 import { toast } from "sonner";
@@ -156,14 +156,12 @@ export default function Pedidos() {
     } catch (e) { toast.error(e.response?.data?.detail || "Erro ao registrar faturamento"); }
   };
 
-  // ✅ NOVO: Função para calcular os dias parados
   const getDiasEspera = (dataPedido) => {
     if (!dataPedido) return 0;
     const diff = new Date() - new Date(dataPedido);
     return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
 
-  // ✅ NOVO: Função de Cancelar Pedido com Estorno
   const cancelarPedido = async (p) => {
     if (!window.confirm(`Tem certeza que deseja CANCELAR o pedido ${p.numero}? Isso estornará as comissões e contas a receber pendentes.`)) return;
     try {
@@ -175,14 +173,27 @@ export default function Pedidos() {
     }
   };
 
+  // ✅ NOVO: Aprovar Orçamento
+  const aprovarOrcamento = async (p) => {
+    if (!window.confirm(`Aprovar o orçamento ${p.numero}? Ele será convertido em Pedido.`)) return;
+    try {
+      await api.patch(`/pedidos/${p.id}/status`, { status: "aprovado" });
+      toast.success("Orçamento aprovado e convertido em Pedido!");
+      load();
+    } catch (e) {
+      toast.error("Erro ao aprovar orçamento.");
+    }
+  };
+
   const gerarPDF = (p) => {
     const cliente = clientes.find(c => c.id === p.cliente_id);
     const rep = reps.find(r => r.id === p.representada_id);
     
     const doc = new jsPDF();
+    const titulo = p.status === "orcamento" ? "Orçamento" : "Pedido";
     
     doc.setFontSize(20);
-    doc.text(`Pedido: ${p.numero}`, 14, 20);
+    doc.text(`${titulo}: ${p.numero}`, 14, 20);
     doc.setFontSize(10);
     doc.text(`Data: ${fmtDate(p.data_pedido)}`, 14, 28);
     doc.text(`Status: ${p.status.toUpperCase()}`, 14, 33);
@@ -223,11 +234,12 @@ export default function Pedidos() {
       doc.text(`Saldo a Faturar: ${fmtBRL(p.saldo_a_faturar)}`, 14, finalY + 14);
     }
 
-    doc.save(`Pedido_${p.numero}.pdf`);
+    doc.save(`${titulo}_${p.numero}.pdf`);
     toast.success("PDF gerado com sucesso!");
   };
 
   const pedidosFiltrados = list.filter(p => {
+    if (tab === "orcamentos") return p.status === "orcamento";
     if (tab === "aguardando") return p.status === "aprovado" || p.status === "enviado" || p.status === "faturado_parcial" || p.status === "rascunho";
     if (tab === "faturados") return p.status === "faturado";
     return true;
@@ -242,8 +254,9 @@ export default function Pedidos() {
       } />
 
       <Tabs value={tab} onValueChange={setTab} className="mb-6">
-        <TabsList className="grid w-full grid-cols-3 max-w-lg">
+        <TabsList className="grid w-full grid-cols-4 max-w-2xl">
           <TabsTrigger value="todos">Todos</TabsTrigger>
+          <TabsTrigger value="orcamentos">Orçamentos</TabsTrigger>
           <TabsTrigger value="aguardando">Aguardando Faturamento</TabsTrigger>
           <TabsTrigger value="faturados">Totalmente Faturados</TabsTrigger>
         </TabsList>
@@ -275,7 +288,6 @@ export default function Pedidos() {
                 </td>
                 <td className="px-5 py-3 text-center">
                   <StatusBadge status={p.status} />
-                  {/* ✅ ALERTA DE DIAS PARADOS */}
                   {p.status !== "faturado" && p.status !== "cancelado" && p.status !== "orcamento" && getDiasEspera(p.data_pedido) > 15 && (
                     <div className="text-[10px] text-rose-600 font-bold mt-1 flex items-center justify-center gap-1 bg-rose-50 dark:bg-rose-500/10 py-0.5 px-2 rounded-full w-fit mx-auto">
                       <AlertCircle className="w-3 h-3" /> {getDiasEspera(p.data_pedido)} dias parado
@@ -288,8 +300,13 @@ export default function Pedidos() {
                       <Download className="w-4 h-4" />
                     </Button>
                     
-                    {/* ✅ BOTÃO DE CANCELAR */}
-                    {p.status !== "cancelado" && p.status !== "faturado" && (
+                    {p.status === "orcamento" && (
+                      <Button size="sm" onClick={() => aprovarOrcamento(p)} className="bg-[#075BFF] hover:bg-blue-600 h-8">
+                        <Check className="w-3.5 h-3.5 mr-1" /> Aprovar
+                      </Button>
+                    )}
+
+                    {p.status !== "cancelado" && p.status !== "faturado" && p.status !== "orcamento" && (
                       <Button size="sm" variant="ghost" onClick={() => cancelarPedido(p)} title="Cancelar Pedido" className="text-slate-500 hover:text-rose-600">
                         <Ban className="w-4 h-4" />
                       </Button>
