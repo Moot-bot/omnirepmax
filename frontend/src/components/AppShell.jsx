@@ -9,7 +9,7 @@ import {
   Percent, TrendingUp, TrendingDown, 
   FileText, Map, Settings, LogOut,
   Search, Menu, X, ExternalLink, UserPlus, 
-  Sun, Moon, Bell, Package
+  Sun, Moon, Bell, Package,  Factory 
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
