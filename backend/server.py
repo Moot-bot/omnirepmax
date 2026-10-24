@@ -683,7 +683,23 @@ async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = 
     if status: f["status"] = status
     if cliente_id: f["cliente_id"] = cliente_id
     if representada_id: f["representada_id"] = representada_id
-    return await t_list("pedidos", current, f)
+    
+    pedidos = await t_list("pedidos", current, f)
+    faturamentos = await t_list("faturamentos", current)
+
+    # ✅ NOVO: Calcula o valor total faturado e o saldo pendente de cada pedido
+    fat_dict = {}
+    for fat in faturamentos:
+        pid = fat.get("pedido_id")
+        if pid:
+            fat_dict[pid] = fat_dict.get(pid, 0) + fat.get("valor_faturado", 0)
+
+    for p in pedidos:
+        valor_faturado = fat_dict.get(p["id"], 0)
+        p["valor_faturado_total"] = round(valor_faturado, 2)
+        p["saldo_a_faturar"] = round(p["total"] - valor_faturado, 2)
+
+    return pedidos
 
 @api.post("/pedidos")
 async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
