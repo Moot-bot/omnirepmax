@@ -3,6 +3,7 @@ import api from "../lib/api";
 import { PageHeader } from "../components/Common";
 import { Card } from "../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { Button } from "../components/ui/button";
 import { fmtBRL } from "../lib/format";
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, 
@@ -10,7 +11,7 @@ import {
 } from "recharts";
 import { 
   TrendingUp, DollarSign, Users, Package, Activity, 
-  AlertTriangle, ShoppingCart
+  AlertTriangle, Download, FileText, ShoppingCart
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,10 +23,10 @@ export default function Relatorios() {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.get("/relatorios/geral");
+      const res = await api.get("/relatorios/geral"); // Certifique-se de ter essa rota no backend
       setData(res.data);
     } catch (e) {
-      toast.error("Erro ao carregar relatórios. Verifique se a rota /relatorios/geral existe no backend.");
+      toast.error("Erro ao carregar relatórios. Verifique o backend.");
     } finally {
       setLoading(false);
     }
@@ -33,25 +34,59 @@ export default function Relatorios() {
 
   useEffect(() => { load(); }, [load]);
 
+  // ✅ NOVO: Função para exportar os dados para CSV (Excel)
+  const exportToCSV = (arrayData, filename) => {
+    if (!arrayData || arrayData.length === 0) return toast.error("Sem dados para exportar.");
+    
+    // Pega as chaves do primeiro objeto para o cabeçalho
+    const headers = Object.keys(arrayData[0]);
+    const csvRows = [];
+    
+    // Cabeçalho
+    csvRows.push(headers.join(';'));
+    
+    // Linhas
+    for (const row of arrayData) {
+      const values = headers.map(header => {
+        const val = row[header] === null || row[header] === undefined ? '' : row[header];
+        return `"${String(val).replace(/"/g, '""')}"`; // Escapa aspas
+      });
+      csvRows.push(values.join(';'));
+    }
+    
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + csvRows.join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `${filename}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("Planilha exportada!");
+  };
+
   if (loading) return <div className="p-10 text-center text-slate-500">Gerando relatórios...</div>;
-  if (!data) return <div className="p-10 text-center text-rose-500">Não foi possível carregar os relatórios. Verifique o deploy do backend.</div>;
+  if (!data) return <div className="p-10 text-center text-rose-500">Não foi possível carregar os relatórios.</div>;
 
   return (
     <div className="pb-10">
-      <PageHeader title="Relatórios Gerenciais" subtitle="Visão estratégica da sua operação" />
+      <PageHeader 
+        title="Relatórios Gerenciais" 
+        subtitle="Visão estratégica da sua operação" 
+      />
 
       {/* PAINEL DE CICLO COMPLETO */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
         <Card className="p-4 border-l-4 border-l-blue-500 shadow-sm">
-          <div className="text-[10px] font-bold text-slate-500 uppercase">Pedidos Pendentes</div>
-          <div className="text-xl font-bold">{data.comercial.qtd_pendentes}</div>
+          <div className="text-[10px] font-bold text-slate-500 uppercase">Volume de Vendas</div>
+          <div className="text-xl font-bold">{fmtBRL(data.comercial.volume_vendas || 0)}</div>
         </Card>
         <Card className="p-4 border-l-4 border-l-slate-400 shadow-sm">
           <div className="text-[10px] font-bold text-slate-500 uppercase">Tempo Méd. Faturar</div>
           <div className="text-xl font-bold">{data.comercial.tempo_medio_faturamento_dias} dias</div>
         </Card>
         <Card className="p-4 border-l-4 border-l-amber-500 shadow-sm">
-          <div className="text-[10px] font-bold text-slate-500 uppercase">Valor Faturado</div>
+          <div className="text-[10px] font-bold text-slate-500 uppercase">Faturamento Real</div>
           <div className="text-xl font-bold text-amber-600">{fmtBRL(data.financeiro.valor_faturado)}</div>
         </Card>
         <Card className="p-4 border-l-4 border-l-indigo-500 shadow-sm">
@@ -77,7 +112,13 @@ export default function Relatorios() {
         <TabsContent value="vendas" className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Card className="p-5 md:col-span-2">
-              <h3 className="font-semibold mb-4">Vendas por Representada</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold">Vendas por Representada</h3>
+                {/* ✅ BOTÃO DE EXPORTAR */}
+                <Button variant="outline" size="sm" onClick={() => exportToCSV(data.comercial.por_representada, 'vendas_por_representada')}>
+                  <Download className="w-4 h-4 mr-2" /> Exportar CSV
+                </Button>
+              </div>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={data.comercial.por_representada}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -90,7 +131,7 @@ export default function Relatorios() {
             </Card>
             <div className="space-y-4">
               <Card className="p-5 bg-gradient-to-br from-[#075BFF] to-blue-600 text-white">
-                <div className="text-xs font-semibold opacity-80 uppercase">Vendas do Mês</div>
+                <div className="text-xs font-semibold opacity-80 uppercase">Volume de Vendas do Mês</div>
                 <div className="text-3xl font-bold mt-1">{fmtBRL(data.comercial.fat_mes)}</div>
               </Card>
               <Card className="p-5">
@@ -109,8 +150,9 @@ export default function Relatorios() {
         <TabsContent value="financeiro" className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card className="p-5">
-              <h3 className="font-semibold mb-4">Conciliação de Faturamento</h3>
-              {/* Tabela HTML PURA (sem Shadcn) */}
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold">Conciliação de Faturamento</h3>
+              </div>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b">
@@ -119,7 +161,7 @@ export default function Relatorios() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b"><td className="py-2">Valor Total dos Pedidos</td><td className="py-2 text-right font-mono">{fmtBRL(data.financeiro.valor_pedido)}</td></tr>
+                  <tr className="border-b"><td className="py-2">Volume Total de Pedidos</td><td className="py-2 text-right font-mono">{fmtBRL(data.financeiro.valor_pedido)}</td></tr>
                   <tr className="border-b"><td className="py-2">Valor Efetivamente Faturado</td><td className="py-2 text-right font-mono text-amber-600">{fmtBRL(data.financeiro.valor_faturado)}</td></tr>
                   <tr className="border-b"><td className="py-2">Comissões Previstas</td><td className="py-2 text-right font-mono text-indigo-600">{fmtBRL(data.financeiro.com_prevista)}</td></tr>
                   <tr className="border-b"><td className="py-2">Comissões a Receber</td><td className="py-2 text-right font-mono text-rose-600">{fmtBRL(data.financeiro.com_a_receber)}</td></tr>
@@ -138,6 +180,7 @@ export default function Relatorios() {
                     <Cell fill="#10B981" /><Cell fill="#F59E0B" />
                   </Pie>
                   <Tooltip formatter={(v) => fmtBRL(v)} />
+                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             </Card>
@@ -148,7 +191,13 @@ export default function Relatorios() {
         <TabsContent value="clientes" className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card className="p-5 lg:col-span-2">
-              <h3 className="font-semibold mb-4">Curva ABC (Top Clientes)</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold">Curva ABC (Top Clientes)</h3>
+                {/* ✅ BOTÃO DE EXPORTAR */}
+                <Button variant="outline" size="sm" onClick={() => exportToCSV(data.clientes.curva_abc.A, 'top_clientes')}>
+                  <Download className="w-4 h-4 mr-2" /> Exportar CSV
+                </Button>
+              </div>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b">
@@ -189,7 +238,12 @@ export default function Relatorios() {
         <TabsContent value="produtos" className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card className="p-5">
-              <h3 className="font-semibold mb-4 text-emerald-600">Top 10 Produtos Vendidos</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold text-emerald-600">Top 10 Produtos Vendidos</h3>
+                <Button variant="outline" size="sm" onClick={() => exportToCSV(data.produtos.top_produtos, 'top_produtos')}>
+                  <Download className="w-4 h-4 mr-2" /> Exportar CSV
+                </Button>
+              </div>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b">
