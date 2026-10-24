@@ -5,9 +5,13 @@ import { useAuth } from "../context/AuthContext";
 import { 
   TrendingUp, Wallet, AlertCircle, Sparkles, BarChart3, 
   PieChart as PieIcon, Target, ArrowUpRight, ArrowDownRight, 
-  Users, ShoppingCart, Percent, FileText 
+  Users, ShoppingCart, Percent, FileText,
+  Building2, Package, Calendar, CheckCircle2
 } from "lucide-react";
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
+import { 
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, 
+  CartesianGrid, PieChart, Pie, Cell, BarChart, Bar
+} from "recharts";
 
 const CAT_COLORS = ["#075BFF", "#08D5F5", "#F59E0B", "#8B5CF6", "#10B981", "#EC4899", "#06B6D4", "#F43F5E"];
 
@@ -34,13 +38,13 @@ const tooltipStyle = {
   fontSize: "12px"
 };
 
-function Chip({ label, value, color = "emerald", icon: Icon, isZero }) {
+function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, badge }) {
   const bg = { 
     emerald: "from-emerald-500 to-emerald-600 shadow-emerald-500/20", 
     rose: "from-rose-500 to-rose-600 shadow-rose-500/20", 
     teal: "from-teal-500 to-teal-600 shadow-teal-500/20", 
     amber: "from-amber-500 to-amber-600 shadow-amber-500/20",
-    blue: "from-[#075BFF] to-blue-600 shadow-blue-500/20" // ✅ NOVA COR AZUL
+    blue: "from-[#075BFF] to-blue-600 shadow-blue-500/20"
   }[color];
   
   return (
@@ -48,11 +52,19 @@ function Chip({ label, value, color = "emerald", icon: Icon, isZero }) {
       <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-white/10 group-hover:scale-110 transition-transform duration-500" />
       <div className="relative flex items-center justify-between">
         <Icon className="w-5 h-5 opacity-90 group-hover:opacity-100 transition-opacity" />
+        {badge && (
+          <span className="text-[10px] font-bold bg-white/25 px-2 py-0.5 rounded-full">
+            {badge}
+          </span>
+        )}
       </div>
       <div className="relative text-xs font-semibold uppercase tracking-wider opacity-90 mt-3">{label}</div>
       <div className="relative font-display text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight">
         {value}
       </div>
+      {subtitle && (
+        <div className="relative text-[10px] text-white/75 mt-1 font-medium">{subtitle}</div>
+      )}
       {isZero && <div className="text-[10px] text-white/70 mt-1">Nenhum registro</div>}
     </div>
   );
@@ -98,6 +110,16 @@ export default function Dashboard() {
   
   const mes = traduzirTexto(d.mes_atual);
 
+  // Novos dados do backend que já vinham mas não eram exibidos
+  const fatPorRep = (d.faturamento_por_representada || []).map(r => ({
+    nome: r.nome,
+    volume: r.volume ?? r.valor ?? 0,
+    faturado: r.faturado ?? 0
+  }));
+
+  const topProdutos = d.top_produtos || [];
+  const emAtrasoCount = d.em_atraso_count || 0;
+
   return (
     <div className="space-y-6 pb-10">
       {/* Hero / Greeting */}
@@ -137,12 +159,40 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 4 chips coloridas */}
+      {/* 4 chips coloridas (com subtítulos anuais e contagem) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Chip label="Volume de Vendas (Mês)" value={fmtBRL(d.volume_vendas_mes)} color="blue" icon={TrendingUp} isZero={d.volume_vendas_mes === 0} />
-        <Chip label="Faturamento Real (Mês)" value={fmtBRL(d.valor_faturado_mes)} color="emerald" icon={FileText} isZero={d.valor_faturado_mes === 0} />
-        <Chip label="Comissões Previstas" value={fmtBRL(d.comissoes_previstas)} color="teal" icon={Percent} isZero={d.comissoes_previstas === 0} />
-        <Chip label="Em atraso" value={fmtBRL(d.em_atraso)} color="rose" icon={AlertCircle} isZero={d.em_atraso === 0} />
+        <Chip 
+          label="Volume de Vendas (Mês)" 
+          value={fmtBRL(d.volume_vendas_mes)} 
+          color="blue" 
+          icon={TrendingUp} 
+          isZero={d.volume_vendas_mes === 0}
+          subtitle={d.volume_vendas_ano ? `Ano: ${fmtBRL(d.volume_vendas_ano)}` : undefined}
+        />
+        <Chip 
+          label="Faturamento Real (Mês)" 
+          value={fmtBRL(d.valor_faturado_mes)} 
+          color="emerald" 
+          icon={FileText} 
+          isZero={d.valor_faturado_mes === 0}
+          subtitle={d.valor_faturado_ano ? `Ano: ${fmtBRL(d.valor_faturado_ano)}` : undefined}
+        />
+        <Chip 
+          label="Comissões Previstas" 
+          value={fmtBRL(d.comissoes_previstas)} 
+          color="teal" 
+          icon={Percent} 
+          isZero={d.comissoes_previstas === 0}
+          subtitle={d.comissoes_recebidas ? `Recebido: ${fmtBRL(d.comissoes_recebidas)}` : undefined}
+        />
+        <Chip 
+          label="Em atraso" 
+          value={fmtBRL(d.em_atraso)} 
+          color="rose" 
+          icon={AlertCircle} 
+          isZero={d.em_atraso === 0}
+          badge={emAtrasoCount > 0 ? `${emAtrasoCount} título${emAtrasoCount > 1 ? 's' : ''}` : undefined}
+        />
       </div>
 
       {/* Saúde + Projeção */}
@@ -167,20 +217,21 @@ export default function Dashboard() {
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
           <div className="text-sm font-semibold mb-4">Resumo do mês</div>
           <div className="space-y-1">
-            {/* ✅ NOVO: Separando Volume e Faturamento Real no Resumo */}
             <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-blue-500" />} label="Volume de Vendas" value={fmtBRL(d.volume_vendas_mes)} valueClass="text-slate-900 dark:text-white" />
             <ResumoRow icon={<FileText className="w-4 h-4 text-emerald-500" />} label="Faturamento Real (NFs)" value={fmtBRL(d.valor_faturado_mes)} valueClass="text-emerald-600 dark:text-emerald-400" />
             <ResumoRow icon={<ArrowDownRight className="w-4 h-4 text-rose-500" />} label="Saídas (Despesas)" value={fmtBRL(d.despesas_mes)} valueClass="text-rose-600 dark:text-rose-400" />
             <ResumoRow icon={<Wallet className="w-4 h-4 text-blue-500" />} label="Diferença (Saldo)" value={fmtBRL(d.saldo_mes)} valueClass={d.saldo_mes >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"} />
             <ResumoRow icon={<Users className="w-4 h-4 text-indigo-500" />} label="Clientes ativos / Novos" value={`${fmtNum(d.clientes_ativos)} / ${fmtNum(d.novos_clientes)}`} />
             <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-amber-500" />} label="Pedidos abertos / Faturados" value={`${fmtNum(d.pedidos_abertos)} / ${fmtNum(d.pedidos_faturados)}`} />
+            {/* NOVO: linha de comissão recebida */}
+            <ResumoRow icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} label="Comissão recebida" value={fmtBRL(d.comissoes_recebidas)} valueClass="text-emerald-600 dark:text-emerald-400" />
             <ResumoRow icon={<Percent className="w-4 h-4 text-emerald-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_abertas)} valueClass="text-emerald-600 dark:text-emerald-400" />
           </div>
         </div>
 
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
           <div className="flex items-center gap-2 text-sm font-semibold mb-4"><PieIcon className="w-4 h-4 text-[#075BFF]" />Gastos por categoria</div>
-          {d.gastos_por_categoria.length === 0 ? (
+          {!d.gastos_por_categoria?.length ? (
             <div className="flex flex-col items-center justify-center py-12 text-slate-400 dark:text-slate-500">
               <PieIcon className="w-10 h-10 mb-2 opacity-20" />
               <span className="text-sm">Sem despesas cadastradas.</span>
@@ -209,12 +260,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Evolução de faturamento */}
+      {/* Evolução de faturamento (mantido) */}
       <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
         <div className="font-display font-bold text-lg mb-1">Evolução de Faturamento Real</div>
         <div className="text-xs text-slate-500 mb-6">Baseado nas Notas Fiscais emitidas (Últimos 6 meses)</div>
         <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={d.serie_faturamento} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+          <AreaChart data={d.serie_faturamento || []} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#10B981" stopOpacity={0.4}/>
@@ -225,10 +276,93 @@ export default function Dashboard() {
             <XAxis dataKey="mes" fontSize={12} stroke="#64748B" tickLine={false} axisLine={false} dy={10} tickFormatter={traduzirTexto} />
             <YAxis fontSize={12} stroke="#64748B" tickLine={false} axisLine={false} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
             <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={tooltipStyle} itemStyle={{ color: "#f8fafc" }} labelFormatter={traduzirTexto} />
-            {/* ✅ NOVO: Cor verde para representar o dinheiro que entrou de verdade */}
             <Area type="monotone" dataKey="valor" stroke="#10B981" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" activeDot={{ r: 6, strokeWidth: 0, fill: "#10B981" }} />
           </AreaChart>
         </ResponsiveContainer>
+      </div>
+
+      {/* NOVO: Faturamento por Representada */}
+      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
+        <div className="flex items-center gap-2 text-sm font-semibold mb-1">
+          <Building2 className="w-4 h-4 text-[#075BFF]" />Faturamento por Representada
+        </div>
+        <div className="text-xs text-slate-500 mb-6">Comparativo entre volume de pedidos e valor efetivamente faturado</div>
+        {fatPorRep.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-500">
+            <Building2 className="w-10 h-10 mb-2 opacity-20" />
+            <span className="text-sm">Nenhuma representada com faturamento ainda.</span>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={fatPorRep} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" className="dark:stroke-slate-800" vertical={false} />
+              <XAxis dataKey="nome" fontSize={11} stroke="#64748B" tickLine={false} axisLine={false} interval={0} angle={-15} textAnchor="end" height={60} />
+              <YAxis fontSize={12} stroke="#64748B" tickLine={false} axisLine={false} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
+              <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={tooltipStyle} cursor={{ fill: 'rgba(0,0,0,0.05)' }} />
+              <Bar dataKey="volume" name="Volume" fill="#075BFF" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="faturado" name="Faturado" fill="#10B981" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* NOVO: Top Produtos + Produtividade (lado a lado) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
+          <div className="flex items-center gap-2 text-sm font-semibold mb-4">
+            <Package className="w-4 h-4 text-emerald-500" />Top 5 Produtos
+          </div>
+          {topProdutos.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-500">
+              <Package className="w-10 h-10 mb-2 opacity-20" />
+              <span className="text-sm">Nenhum produto vendido ainda.</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {topProdutos.slice(0, 5).map((p, i) => (
+                <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <span className="w-6 h-6 rounded-md bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-[11px] font-bold shrink-0">
+                      {i + 1}
+                    </span>
+                    <span className="text-sm text-slate-700 dark:text-slate-300 truncate">{p.nome}</span>
+                  </div>
+                  <span className="text-xs font-mono font-semibold text-slate-900 dark:text-white ml-2">
+                    {fmtBRL(p.valor)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
+          <div className="flex items-center gap-2 text-sm font-semibold mb-4">
+            <Calendar className="w-4 h-4 text-[#08D5F5]" />Produtividade
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
+              <Calendar className="w-5 h-5 mx-auto mb-2 text-blue-500" />
+              <div className="text-2xl font-bold text-slate-900 dark:text-white">{fmtNum(d.visitas_realizadas)}</div>
+              <div className="text-[10px] uppercase text-slate-500 mt-1 font-semibold">Visitas realizadas</div>
+            </div>
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
+              <Target className="w-5 h-5 mx-auto mb-2 text-amber-500" />
+              <div className="text-2xl font-bold text-slate-900 dark:text-white">{fmtNum(d.propostas_negociacao)}</div>
+              <div className="text-[10px] uppercase text-slate-500 mt-1 font-semibold">Propostas em negociação</div>
+            </div>
+            <div className="col-span-2 p-3 rounded-xl bg-gradient-to-r from-[#075BFF]/10 to-cyan-500/10 border border-[#075BFF]/20">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-600 dark:text-slate-400">Taxa de conversão (visitas → pedidos)</span>
+                <span className="font-mono font-bold text-[#075BFF] dark:text-cyan-400">
+                  {d.visitas_realizadas > 0 
+                    ? `${Math.round((d.pedidos_faturados / d.visitas_realizadas) * 100)}%` 
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

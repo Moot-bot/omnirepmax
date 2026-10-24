@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { 
   Plus, Trash2, Calculator, UserPlus, Loader2, Edit2, 
   PlusCircle, MinusCircle, Download, FileCheck, 
-  Ban, AlertCircle, Check
+  Ban, AlertCircle, Check, Share2, MessageCircle, Mail // ✅ NOVOS ÍCONES
 } from "lucide-react";
 import { fmtBRL, fmtDate } from "../lib/format";
 import { toast } from "sonner";
@@ -23,7 +23,6 @@ export default function Pedidos() {
   const [clientes, setClientes] = useState([]);
   const [produtos, setProdutos] = useState([]);
   
-  // Filtro de Abas
   const [tab, setTab] = useState("todos");
 
   const [open, setOpen] = useState(false);
@@ -39,6 +38,10 @@ export default function Pedidos() {
   const [cliOpen, setCliOpen] = useState(false);
   const [newCli, setNewCli] = useState({ razao_social: "", nome_fantasia: "", cnpj_cpf: "", cidade: "", estado: "" });
   const [loadingCnpj, setLoadingCnpj] = useState(false);
+
+  // ✅ NOVOS ESTADOS DE COMPARTILHAMENTO
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharePedido, setSharePedido] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -173,7 +176,6 @@ export default function Pedidos() {
     }
   };
 
-  // ✅ NOVO: Aprovar Orçamento
   const aprovarOrcamento = async (p) => {
     if (!window.confirm(`Aprovar o orçamento ${p.numero}? Ele será convertido em Pedido.`)) return;
     try {
@@ -183,6 +185,30 @@ export default function Pedidos() {
     } catch (e) {
       toast.error("Erro ao aprovar orçamento.");
     }
+  };
+
+  // ✅ NOVO: Abrir Modal de Compartilhamento
+  const handleOpenShare = (p) => {
+    setSharePedido(p);
+    setShareOpen(true);
+  };
+
+  // ✅ NOVO: Gerar Texto para WhatsApp/E-mail
+  const gerarTextoCompartilhamento = (p) => {
+    const cliente = clientes.find(c => c.id === p.cliente_id);
+    const rep = reps.find(r => r.id === p.representada_id);
+    let texto = `*Resumo do Pedido ${p.numero}*\n\n`;
+    texto += `Olá, ${cliente?.nome_fantasia || 'cliente'}!\n`;
+    texto += `Segue o resumo do seu pedido com a fábrica *${rep?.nome_fantasia}*:\n\n`;
+    
+    p.itens.forEach(it => {
+      texto += `▪ ${it.quantidade}x ${it.nome} - ${fmtBRL(it.quantidade * it.preco_unitario)}\n`;
+    });
+    
+    texto += `\n*Total do Pedido: ${fmtBRL(p.total)}*\n`;
+    texto += `Condição de Pagamento: ${p.condicao_pagamento || 'A combinar'}\n\n`;
+    texto += `Qualquer dúvida, estou à disposição!`;
+    return encodeURIComponent(texto);
   };
 
   const gerarPDF = (p) => {
@@ -296,6 +322,11 @@ export default function Pedidos() {
                 </td>
                 <td className="px-5 py-3 text-right">
                   <div className="flex items-center justify-end gap-1">
+                    {/* ✅ NOVO BOTÃO DE COMPARTILHAR */}
+                    <Button variant="ghost" size="sm" onClick={() => handleOpenShare(p)} title="Compartilhar" className="text-slate-500 hover:text-emerald-600">
+                      <Share2 className="w-4 h-4" />
+                    </Button>
+
                     <Button variant="ghost" size="sm" onClick={() => gerarPDF(p)} title="Gerar PDF" className="text-slate-500 hover:text-[#075BFF]">
                       <Download className="w-4 h-4" />
                     </Button>
@@ -406,6 +437,56 @@ export default function Pedidos() {
             <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button variant="outline" onClick={() => save("orcamento")} className="border-[#075BFF] text-[#075BFF] hover:bg-blue-50">Salvar como Orçamento</Button>
             <Button onClick={() => save("aprovado")} className="bg-[#075BFF]">Criar Pedido (Aprovado)</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ NOVO MODAL DE COMPARTILHAMENTO */}
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Compartilhar Pedido {sharePedido?.numero}</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            <p className="text-sm text-slate-500 text-center">Escolha por onde deseja enviar o resumo do pedido para o cliente.</p>
+            
+            {(() => {
+              if (!sharePedido) return null;
+              const cliente = clientes.find(c => c.id === sharePedido.cliente_id);
+              const textoEncoded = gerarTextoCompartilhamento(sharePedido);
+              const telefone = (cliente?.whatsapp || cliente?.telefone || "").replace(/\D/g, '');
+
+              return (
+                <div className="grid grid-cols-2 gap-4">
+                  {/* BOTÃO WHATSAPP */}
+                  <a 
+                    href={`https://wa.me/${telefone ? '55' + telefone : ''}?text=${textoEncoded}`} 
+                    target="_blank" 
+                    rel="noreferrer"
+                    onClick={() => setShareOpen(false)}
+                    className={`flex flex-col items-center justify-center p-6 rounded-xl border-2 transition-all ${telefone ? 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700' : 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'}`}
+                  >
+                    <MessageCircle className="w-8 h-8 mb-2" />
+                    <span className="font-semibold">WhatsApp</span>
+                    {!telefone && <span className="text-[10px] text-center mt-1">Cliente sem telefone</span>}
+                  </a>
+
+                  {/* BOTÃO E-MAIL */}
+                  <a 
+                    href={`mailto:${cliente?.email || ''}?subject=Pedido ${sharePedido.numero}&body=${textoEncoded}`}
+                    onClick={() => setShareOpen(false)}
+                    className={`flex flex-col items-center justify-center p-6 rounded-xl border-2 transition-all ${cliente?.email ? 'border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700' : 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'}`}
+                  >
+                    <Mail className="w-8 h-8 mb-2" />
+                    <span className="font-semibold">E-mail</span>
+                    {!cliente?.email && <span className="text-[10px] text-center mt-1">Cliente sem e-mail</span>}
+                  </a>
+                </div>
+              );
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShareOpen(false)}>Fechar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
