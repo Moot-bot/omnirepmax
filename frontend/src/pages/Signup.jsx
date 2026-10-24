@@ -14,21 +14,31 @@ export default function Signup() {
   const nav = useNavigate();
   const [form, setForm] = useState({ name: "", email: "", password: "", empresa: "", telefone: "" });
   const [busy, setBusy] = useState(false);
+
   if (loading) return null;
-  if (user) return <Navigate to="/" />;
+  
+  // ✅ CORREÇÃO 1: Se já estiver logado, manda pro Dashboard em vez da Landing
+  if (user) return <Navigate to="/dashboard" replace />;
 
   const submit = async (e) => {
     e.preventDefault();
-    if (form.password.length < 6) return toast.error("Senha precisa ter ao menos 6 caracteres");
+    
+    // ✅ CORREÇÃO 2: Backend exige 8 caracteres
+    if (form.password.length < 8) return toast.error("A senha precisa ter ao menos 8 caracteres");
+    
     setBusy(true);
     try {
       const { data } = await api.post("/auth/signup", form);
       if (data.token) localStorage.setItem("omnirep_token", data.token);
       toast.success("Conta criada! Bem-vindo ao OMNIREP MAX.");
-      window.location.href = "/";
+      
+      // ✅ CORREÇÃO 3: Redireciona para o Dashboard forçando recarregamento da sessão
+      window.location.href = "/dashboard";
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Erro ao criar conta");
-    } finally { setBusy(false); }
+    } finally { 
+      setBusy(false); 
+    }
   };
 
   return (
@@ -62,7 +72,7 @@ export default function Signup() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1 sm:col-span-2"><Label>Nome completo *</Label><Input data-testid="sign-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Seu nome" /></div>
             <div className="space-y-1 sm:col-span-2"><Label>E-mail *</Label><Input data-testid="sign-email" type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-            <div className="space-y-1 sm:col-span-2"><Label>Senha * (mín. 6)</Label><Input data-testid="sign-password" type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
+            <div className="space-y-1 sm:col-span-2"><Label>Senha * (mín. 8)</Label><Input data-testid="sign-password" type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
             <div className="space-y-1"><Label>Empresa / Escritório</Label><Input data-testid="sign-empresa" value={form.empresa} onChange={(e) => setForm({ ...form, empresa: e.target.value })} placeholder="Opcional" /></div>
             <div className="space-y-1"><Label>Telefone</Label><Input data-testid="sign-telefone" value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })} placeholder="(11) 99999-0000" /></div>
           </div>
