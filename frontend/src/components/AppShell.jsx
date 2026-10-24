@@ -1,26 +1,28 @@
-import React, { useState } from "react";
-import { NavLink, useNavigate, Outlet, Link } from "react-router-dom";
+import React, { useState, useEffect, useRef } from "react";
+import { NavLink, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { 
-  LayoutDashboard, Sparkles, BarChart3, Building2, Users, 
-  Filter, Calendar, ShoppingCart, Percent, TrendingUp, 
-  TrendingDown, Map, UploadCloud, Settings, LogOut, FileText,
-  Sun, Moon, Bell, Search, Menu, X, ExternalLink, UserPlus, MessageSquare
+  LayoutDashboard, Sparkles, BarChart3, MessageSquare, 
+  Building2, Users, Filter, Calendar, 
+  ShoppingCart, UploadCloud, 
+  Percent, TrendingUp, TrendingDown, 
+  FileText, Map, Settings, LogOut,
+  Search, Menu, X, ExternalLink, UserPlus, 
+  Sun, Moon, Bell, Package
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import api from "../lib/api"; // Importante para a busca
 import { toast } from "sonner";
 
 const MENU_SECTIONS = [
   {
     title: "Principal",
     items: [
-      { label: "Dashboard", icon: LayoutDashboard, path: "/" },
+      { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" }, // Corrigido para /dashboard
       { label: "MAX AI", icon: Sparkles, path: "/max-ai" },
       { label: "Insights", icon: BarChart3, path: "/insights" },
-      // No array MENU_SECTIONS, na seção Ferramentas:
-      { label: "Feedback", icon: MessageSquare, path: "/feedback" },
     ]
   },
   {
@@ -52,6 +54,7 @@ const MENU_SECTIONS = [
     items: [
       { label: "Relatórios", icon: FileText, path: "/relatorios" },
       { label: "Mapa Comercial", icon: Map, path: "/mapa" },
+      { label: "Feedback", icon: MessageSquare, path: "/feedback" }, // Movido para Ferramentas
       { label: "Configurações", icon: Settings, path: "/configuracoes" },
     ]
   }
@@ -62,32 +65,66 @@ export default function AppShell() {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   
-  // Estados do Menu Mobile e Busca
+  // Estados do Menu Mobile
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  
+  // Estados da Busca Global
   const [searchQuery, setSearchQuery] = useState("");
-  const [showCnpjActions, setShowCnpjActions] = useState(false);
+  const [searchResults, setSearchResults] = useState(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const searchRef = useRef(null);
 
   const handleLogout = async () => {
     await logout();
     navigate("/login");
   };
 
-  // Lógica do Search Engine (Verifica se é CNPJ)
+  // Fecha o dropdown de busca se clicar fora
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (searchRef.current && !searchRef.current.contains(event.target)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const isCNPJ = (str) => /^\d{14}$/.test(str.replace(/\D/g, ''));
-  
+
+  // Busca em tempo real no Backend
+  useEffect(() => {
+    if (!searchQuery || isCNPJ(searchQuery)) {
+      setSearchResults(null);
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const res = await api.get(`/search?q=${searchQuery}`);
+        setSearchResults(res.data);
+        setShowDropdown(true);
+      } catch (error) {
+        console.error("Erro na busca", error);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 500); // Espera 500ms após parar de digitar
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery]);
+
   const handleSearchChange = (e) => {
     const val = e.target.value;
     setSearchQuery(val);
-    // Se for CNPJ, mostra as ações rápidas
-    setShowCnpjActions(isCNPJ(val));
+    setShowDropdown(true);
   };
 
-  const handleSearchSubmit = (e) => {
-    e.preventDefault();
-    if (!searchQuery) return;
-    if (isCNPJ(searchQuery)) return; // Se for CNPJ, deixa as ações na tela
-    // Se for texto normal, poderia navegar para a tela de clientes com o filtro
-    navigate(`/clientes?q=${searchQuery}`);
+  const navigateToResult = (path) => {
+    navigate(path);
+    setShowDropdown(false);
     setSearchQuery("");
   };
 
@@ -110,7 +147,7 @@ export default function AppShell() {
         
         {/* Logo / Header */}
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800 relative">
-          <div className="flex items-center gap-2 text-[#075BFF] font-bold text-xl tracking-tight">
+          <div className="flex items-center gap-2 text-[#075BFF] font-bold text-xl tracking-tight cursor-pointer" onClick={() => navigate('/dashboard')}>
             <div className="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 animate-pulse">🚀</div>
             OMNIREP<span className="text-slate-900 dark:text-white">MAX</span>
           </div>
@@ -135,7 +172,7 @@ export default function AppShell() {
                   <NavLink
                     key={item.path}
                     to={item.path}
-                    onClick={() => setIsMobileOpen(false)} // Fecha o menu ao clicar no mobile
+                    onClick={() => setIsMobileOpen(false)}
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                         isActive
@@ -190,18 +227,21 @@ export default function AppShell() {
               <Menu className="w-6 h-6" />
             </button>
             
-            {/* BARRA DE PESQUISA GLOBAL */}
-            <form onSubmit={handleSearchSubmit} className="relative w-full max-w-md hidden sm:block">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <Input 
-                value={searchQuery}
-                onChange={handleSearchChange}
-                placeholder="Pesquisar clientes, CNPJ, pedidos..." 
-                className="pl-9 bg-slate-100 dark:bg-slate-800 border-transparent focus:border-[#075BFF] focus:bg-white dark:focus:bg-slate-900 transition-all rounded-full"
-              />
-              
+            {/* BARRA DE PESQUISA GLOBAL (NOVA E ROBUSTA) */}
+            <div className="relative w-full max-w-md hidden sm:block" ref={searchRef}>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <Input 
+                  value={searchQuery}
+                  onChange={handleSearchChange}
+                  onFocus={() => setShowDropdown(true)}
+                  placeholder="Pesquisar clientes, CNPJ, pedidos..." 
+                  className="pl-9 bg-slate-100 dark:bg-slate-800 border-transparent focus:border-[#075BFF] focus:bg-white dark:focus:bg-slate-900 transition-all rounded-full"
+                />
+              </div>
+
               {/* DROPDOWN DE AÇÕES RÁPIDAS PARA CNPJ */}
-              {showCnpjActions && (
+              {showDropdown && isCNPJ(searchQuery) && (
                 <div className="absolute top-full mt-2 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-3 z-50">
                   <p className="text-xs font-semibold text-slate-500 mb-2">Ações para o CNPJ digitado:</p>
                   <div className="flex flex-col gap-1">
@@ -211,13 +251,66 @@ export default function AppShell() {
                     <a href={`https://www.linkedin.com/search/results/companies/?keywords=${searchQuery}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-300">
                       <ExternalLink className="w-4 h-4 text-blue-700" /> Buscar no LinkedIn
                     </a>
-                    <button onClick={() => { navigate(`/clientes?cnpj=${searchQuery}`); setShowCnpjActions(false); }} className="flex items-center gap-2 text-sm p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-[#075BFF] font-medium text-left">
+                    <button onClick={() => { navigate(`/clientes?cnpj=${searchQuery}`); setShowDropdown(false); }} className="flex items-center gap-2 text-sm p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-[#075BFF] font-medium text-left">
                       <UserPlus className="w-4 h-4" /> Cadastrar Cliente com este CNPJ
                     </button>
                   </div>
                 </div>
               )}
-            </form>
+
+              {/* DROPDOWN DE RESULTADOS DE TEXTO (BUSCA REAL) */}
+              {showDropdown && !isCNPJ(searchQuery) && searchResults && (
+                <div className="absolute top-full mt-2 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden z-50 max-h-96 overflow-y-auto">
+                  {isSearching && <div className="p-4 text-center text-sm text-slate-500">Buscando...</div>}
+                  
+                  {!isSearching && searchResults.clientes?.length === 0 && searchResults.produtos?.length === 0 && searchResults.pedidos?.length === 0 && (
+                    <div className="p-4 text-center text-sm text-slate-500">Nenhum resultado encontrado.</div>
+                  )}
+
+                  {searchResults.clientes?.length > 0 && (
+                    <div className="border-b border-slate-100 dark:border-slate-700">
+                      <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase bg-slate-50 dark:bg-slate-900/50">Clientes</div>
+                      {searchResults.clientes.map(c => (
+                        <div key={c.id} onClick={() => navigateToResult(`/clientes`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer flex items-center gap-3">
+                          <Users className="w-4 h-4 text-blue-500" />
+                          <div>
+                            <div className="text-sm font-semibold">{c.nome_fantasia || c.razao_social}</div>
+                            <div className="text-xs text-slate-500">{c.cnpj_cpf}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {searchResults.produtos?.length > 0 && (
+                    <div className="border-b border-slate-100 dark:border-slate-700">
+                      <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase bg-slate-50 dark:bg-slate-900/50">Produtos</div>
+                      {searchResults.produtos.map(p => (
+                        <div key={p.id} onClick={() => navigateToResult(`/representadas`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer flex items-center gap-3">
+                          <Package className="w-4 h-4 text-emerald-500" />
+                          <div>
+                            <div className="text-sm font-semibold">{p.nome}</div>
+                            <div className="text-xs text-slate-500">{p.codigo || p.sku}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {searchResults.pedidos?.length > 0 && (
+                    <div>
+                      <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase bg-slate-50 dark:bg-slate-900/50">Pedidos</div>
+                      {searchResults.pedidos.map(p => (
+                        <div key={p.id} onClick={() => navigateToResult(`/pedidos`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer flex items-center gap-3">
+                          <ShoppingCart className="w-4 h-4 text-amber-500" />
+                          <div className="text-sm font-semibold">{p.numero}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Ações do Topbar */}
@@ -233,7 +326,7 @@ export default function AppShell() {
         </header>
 
         {/* AQUI É ONDE AS PÁGINAS SÃO RENDERIZADAS */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8" onClick={() => setShowCnpjActions(false)}>
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8" onClick={() => setShowDropdown(false)}>
           <Outlet /> 
         </div>
       </main>
