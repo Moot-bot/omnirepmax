@@ -1,6 +1,7 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
+import { Toaster } from "sonner"; // <-- IMPORTANTE: Importa o Toaster
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import AppShell from "./components/AppShell";
@@ -26,7 +27,7 @@ import Mapa from "./pages/Mapa";
 import Configuracoes from "./pages/Configuracoes";
 import Relatorios from "./pages/Relatorios";
 import Feedback from "./pages/Feedback";
-import ResetPassword from "./pages/ResetPassword"; // <-- IMPORTANTE: Essa linha deve existir
+import ResetPassword from "./pages/ResetPassword";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -45,7 +46,7 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
-            <Route path="/reset-password" element={<ResetPassword />} /> {/* <-- ESSA ROTA TAMBÉM */}
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
             
             <Route element={<Protected><AppShell /></Protected>}>
@@ -71,6 +72,8 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
+        {/* ✅ FIX: Adiciona o componente que desenha os toasts na tela */}
+        <Toaster position="top-right" richColors />
       </AuthProvider>
     </ThemeProvider>
   );
