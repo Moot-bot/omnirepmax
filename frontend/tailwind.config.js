@@ -1,8 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-    // `overline` is a Tailwind utility; without this an app's own eyebrow-label class draws a line above the text.
     blocklist: ["overline"],
-    darkMode: ["class"],
+    darkMode: 'class', // <-- AQUI ESTAVA O ERRO (estava como array ["class"])
     content: [
     "./src/**/*.{js,jsx,ts,tsx}",
     "./public/index.html"

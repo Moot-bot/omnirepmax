@@ -9,18 +9,18 @@ import {
   Percent, TrendingUp, TrendingDown, 
   FileText, Map, Settings, LogOut,
   Search, Menu, X, ExternalLink, UserPlus, 
-  Sun, Moon, Bell, Package,  Factory 
+  Sun, Moon, Bell, Package
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import api from "../lib/api"; // Importante para a busca
+import api from "../lib/api";
 import { toast } from "sonner";
 
 const MENU_SECTIONS = [
   {
     title: "Principal",
     items: [
-      { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" }, // Corrigido para /dashboard
+      { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
       { label: "MAX AI", icon: Sparkles, path: "/max-ai" },
       { label: "Insights", icon: BarChart3, path: "/insights" },
     ]
@@ -54,7 +54,7 @@ const MENU_SECTIONS = [
     items: [
       { label: "Relatórios", icon: FileText, path: "/relatorios" },
       { label: "Mapa Comercial", icon: Map, path: "/mapa" },
-      { label: "Feedback", icon: MessageSquare, path: "/feedback" }, // Movido para Ferramentas
+      { label: "Feedback", icon: MessageSquare, path: "/feedback" },
       { label: "Configurações", icon: Settings, path: "/configuracoes" },
     ]
   }
@@ -65,10 +65,8 @@ export default function AppShell() {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   
-  // Estados do Menu Mobile
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   
-  // Estados da Busca Global
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -80,7 +78,6 @@ export default function AppShell() {
     navigate("/login");
   };
 
-  // Fecha o dropdown de busca se clicar fora
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (searchRef.current && !searchRef.current.contains(event.target)) {
@@ -93,7 +90,6 @@ export default function AppShell() {
 
   const isCNPJ = (str) => /^\d{14}$/.test(str.replace(/\D/g, ''));
 
-  // Busca em tempo real no Backend
   useEffect(() => {
     if (!searchQuery || isCNPJ(searchQuery)) {
       setSearchResults(null);
@@ -111,7 +107,7 @@ export default function AppShell() {
       } finally {
         setIsSearching(false);
       }
-    }, 500); // Espera 500ms após parar de digitar
+    }, 500);
 
     return () => clearTimeout(delayDebounceFn);
   }, [searchQuery]);
@@ -131,7 +127,6 @@ export default function AppShell() {
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden transition-colors duration-300">
       
-      {/* OVERLAY PARA FECHAR MENU MOBILE */}
       {isMobileOpen && (
         <div 
           className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm" 
@@ -146,15 +141,20 @@ export default function AppShell() {
       `}>
         
         {/* Logo / Header */}
-        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800 relative">
-          <div className="flex items-center gap-2 text-[#075BFF] font-bold text-xl tracking-tight cursor-pointer" onClick={() => navigate('/dashboard')}>
-            <div className="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 animate-pulse">🚀</div>
-            OMNIREP<span className="text-slate-900 dark:text-white">MAX</span>
+        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('/dashboard')}>
+            <div className="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 animate-pulse">
+              🚀
+            </div>
+            <div className="flex items-center">
+              <span className="font-bold text-xl tracking-tight text-[#075BFF]">
+                OMNIREP<span className="text-slate-900 dark:text-white">MAX</span>
+              </span>
+              <span className="ml-2 text-[10px] font-bold bg-rose-500 text-white px-2 py-0.5 rounded-full">
+                v2.0
+              </span>
+            </div>
           </div>
-          <span className="absolute right-14 top-4 text-[10px] font-bold bg-rose-500 text-white px-2 py-0.5 rounded-full">
-            v2.0
-          </span>
-          {/* Botão Fechar Mobile */}
           <button className="md:hidden text-slate-500" onClick={() => setIsMobileOpen(false)}>
             <X className="w-5 h-5" />
           </button>
@@ -221,13 +221,12 @@ export default function AppShell() {
         {/* TOPBAR */}
         <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between px-4 sm:px-6 gap-4 z-30">
           
-          {/* Hamburger e Logo Mobile */}
           <div className="flex items-center gap-3 flex-1">
             <button className="md:hidden text-slate-600 dark:text-slate-300" onClick={() => setIsMobileOpen(true)}>
               <Menu className="w-6 h-6" />
             </button>
             
-            {/* BARRA DE PESQUISA GLOBAL (NOVA E ROBUSTA) */}
+            {/* BARRA DE PESQUISA */}
             <div className="relative w-full max-w-md hidden sm:block" ref={searchRef}>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -240,7 +239,6 @@ export default function AppShell() {
                 />
               </div>
 
-              {/* DROPDOWN DE AÇÕES RÁPIDAS PARA CNPJ */}
               {showDropdown && isCNPJ(searchQuery) && (
                 <div className="absolute top-full mt-2 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-3 z-50">
                   <p className="text-xs font-semibold text-slate-500 mb-2">Ações para o CNPJ digitado:</p>
@@ -258,7 +256,6 @@ export default function AppShell() {
                 </div>
               )}
 
-              {/* DROPDOWN DE RESULTADOS DE TEXTO (BUSCA REAL) */}
               {showDropdown && !isCNPJ(searchQuery) && searchResults && (
                 <div className="absolute top-full mt-2 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden z-50 max-h-96 overflow-y-auto">
                   {isSearching && <div className="p-4 text-center text-sm text-slate-500">Buscando...</div>}
@@ -318,14 +315,20 @@ export default function AppShell() {
             <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full">
               {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-700" />}
             </Button>
-            <Button variant="ghost" size="icon" className="rounded-full relative">
+            
+            {/* Botão de Notificação com Ação */}
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="rounded-full relative"
+              onClick={() => toast.info("Você não tem novas notificações no momento.")}
+            >
               <Bell className="w-5 h-5 text-slate-500" />
               <span className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900"></span>
             </Button>
           </div>
         </header>
 
-        {/* AQUI É ONDE AS PÁGINAS SÃO RENDERIZADAS */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8" onClick={() => setShowDropdown(false)}>
           <Outlet /> 
         </div>
