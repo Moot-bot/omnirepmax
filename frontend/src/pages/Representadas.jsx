@@ -10,24 +10,30 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { 
   Plus, Edit2, Trash2, Package, FileText, Upload, 
-  Building2, Download, Loader2, MapPin, Phone
+  Building2, Download, Loader2, MapPin, Phone, FileSpreadsheet
 } from "lucide-react";
 import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
+import * as XLSX from 'xlsx'; // Importação do Excel
 
-// Formulário expandido com WhatsApp
+// Formulário da Representada (Completo)
 const emptyRep = { 
   razao_social: "", nome_fantasia: "", cnpj: "", logo: "",
   inscricao_estadual: "", segmento: "",
   cep: "", endereco: "", cidade: "", estado: "",
-  telefone: "", whatsapp: "", email: "", site: "", // <-- WHATSAPP ADICIONADO
+  telefone: "", whatsapp: "", email: "", site: "", 
   contato_nome: "", contato_cargo: "",
   comissao_padrao: 5.0, 
   modalidade_comissao: "faturamento",
   prazo_pagamento: "30 dias", 
   observacoes: ""
 };
-const emptyProd = { nome: "", codigo: "", preco_tabela: 0, unidade: "UN" };
+
+// Formulário do Produto (Antigo + EAN, SKU, Marca, Categoria)
+const emptyProd = { 
+  nome: "", codigo: "", ean: "", sku: "", marca: "", categoria: "", 
+  preco_tabela: 0, unidade: "UN" 
+};
 
 export default function Representadas() {
   const [list, setList] = useState([]);
@@ -36,14 +42,22 @@ export default function Representadas() {
   const [editing, setEditing] = useState(null);
   const [loadingCnpj, setLoadingCnpj] = useState(false);
 
+  // Estados do Modal de Detalhes (Catálogo & Docs)
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedRep, setSelectedRep] = useState(null);
   
+  // Produtos
   const [produtos, setProdutos] = useState([]);
   const [prodOpen, setProdOpen] = useState(false);
   const [prodForm, setProdForm] = useState(emptyProd);
   const [prodEditing, setProdEditing] = useState(null);
 
+  // Importação Excel
+  const [importOpen, setImportOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState([]);
+  const [importing, setImporting] = useState(false);
+
+  // Documentos
   const [docs, setDocs] = useState([]);
   const [uploading, setUploading] = useState(false);
 
@@ -100,10 +114,7 @@ export default function Representadas() {
   };
 
   const openDetails = async (rep) => {
-    setSelectedRep(rep);
-    setDetailOpen(true);
-    loadProdutos(rep.id);
-    loadDocs(rep.id);
+    setSelectedRep(rep); setDetailOpen(true); loadProdutos(rep.id); loadDocs(rep.id);
   };
 
   const loadProdutos = async (repId) => {
@@ -127,6 +138,57 @@ export default function Representadas() {
     loadProdutos(selectedRep.id);
   };
 
+  // --- IMPORTAÇÃO EXCEL/CSV ---
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws);
+        
+        const parsed = data.map((row, idx) => ({
+          tempId: idx,
+          nome: row['Nome'] || row['Produto'] || row['nome'] || "",
+          codigo: row['Código'] || row['Codigo'] || row['SKU'] || row['codigo'] || "",
+          ean: row['EAN'] || row['Código de Barras'] || "",
+          marca: row['Marca'] || "",
+          categoria: row['Categoria'] || "",
+          preco: parseFloat(row['Preço'] || row['Preco'] || row['Valor'] || 0),
+          unidade: row['Unidade'] || row['UN'] || "UN",
+          isDuplicate: produtos.some(p => p.codigo === (row['Código'] || row['Codigo'] || row['SKU'] || row['codigo'] || ""))
+        })).filter(p => p.nome);
+
+        setImportPreview(parsed);
+        if (parsed.length === 0) toast.error("Nenhum produto válido encontrado.");
+      } catch (err) { toast.error("Erro ao ler arquivo."); }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const confirmarImportacao = async () => {
+    const novos = importPreview.filter(p => !p.isDuplicate);
+    if (novos.length === 0) return toast.error("Nenhum produto novo para importar.");
+
+    setImporting(true);
+    try {
+      await api.post("/produtos/import-txt", {
+        representada_id: selectedRep.id,
+        produtos: novos
+      });
+      toast.success(`${novos.length} produtos importados!`);
+      setImportOpen(false); setImportPreview([]);
+      loadProdutos(selectedRep.id);
+    } catch { toast.error("Erro ao importar."); }
+    finally { setImporting(false); }
+  };
+
+  // --- DOCUMENTOS ---
   const loadDocs = async (repId) => {
     const res = await api.get(`/representadas/${repId}/documentos`);
     setDocs(res.data);
@@ -135,7 +197,7 @@ export default function Representadas() {
   const handleUploadDoc = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 3 * 1024 * 1024) return toast.error("Arquivo muito grande. Máximo 3MB.");
+    if (file.size > 3 * 1024 * 1024) return toast.error("Arquivo muito grande (Máx 3MB).");
     setUploading(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -143,8 +205,7 @@ export default function Representadas() {
         await api.post(`/representadas/${selectedRep.id}/documentos`, {
           nome: file.name, arquivo_base64: event.target.result
         });
-        toast.success("Contrato anexado!");
-        loadDocs(selectedRep.id);
+        toast.success("Contrato anexado!"); loadDocs(selectedRep.id);
       } catch { toast.error("Erro ao anexar arquivo"); }
       finally { setUploading(false); }
     };
@@ -154,70 +215,52 @@ export default function Representadas() {
   const downloadDoc = async (docId, nome) => {
     const res = await api.get(`/documentos/${docId}/download`);
     const link = document.createElement("a");
-    link.href = res.data.arquivo_base64;
-    link.download = nome;
-    link.click();
+    link.href = res.data.arquivo_base64; link.download = nome; link.click();
   };
 
   const delDoc = async (docId) => {
     if (!window.confirm("Excluir este documento?")) return;
-    await api.delete(`/documentos/${docId}`);
-    loadDocs(selectedRep.id);
+    await api.delete(`/documentos/${docId}`); loadDocs(selectedRep.id);
   };
 
   return (
     <div className="pb-10">
-      <PageHeader 
-        title="Representadas" 
-        subtitle="Gerencie as indústrias, seus catálogos e contratos" 
-        actions={<Button onClick={() => { setForm(emptyRep); setEditing(null); setOpen(true); }} className="bg-[#075BFF] hover:bg-[#087BFF]"><Plus className="w-4 h-4 mr-2" />Nova Representada</Button>} 
-      />
+      <PageHeader title="Representadas" subtitle="Gerencie as indústrias, seus catálogos e contratos" 
+        actions={<Button onClick={() => { setForm(emptyRep); setEditing(null); setOpen(true); }} className="bg-[#075BFF] hover:bg-[#087BFF]"><Plus className="w-4 h-4 mr-2" />Nova Representada</Button>} />
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {list.map(rep => (
           <div key={rep.id} className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col">
             <div className="flex justify-between items-start mb-4">
-              {rep.logo ? (
-                <img src={rep.logo} alt="logo" className="w-12 h-12 rounded-xl object-contain bg-white border border-slate-100 p-1" />
-              ) : (
-                <div className="w-12 h-12 rounded-xl bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600 dark:text-blue-400">
-                  <Building2 className="w-6 h-6" />
-                </div>
-              )}
+              {rep.logo ? <img src={rep.logo} alt="logo" className="w-12 h-12 rounded-xl object-contain bg-white border border-slate-100 p-1" /> : 
+                <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600"><Building2 className="w-6 h-6" /></div>}
               <Button variant="ghost" size="sm" onClick={() => { setForm({...emptyRep, ...rep}); setEditing(rep.id); setOpen(true); }}><Edit2 className="w-4 h-4" /></Button>
             </div>
             <h3 className="font-bold text-lg text-slate-900 dark:text-white truncate">{rep.nome_fantasia || rep.razao_social}</h3>
             <p className="text-sm text-slate-500 mb-2">{rep.cnpj}</p>
             
             <div className="flex flex-col gap-1 mb-4">
-              <p className="text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 inline-block px-2 py-1 rounded w-fit">
-                Comissão: {rep.comissao_padrao}%
-              </p>
-              <p className="text-xs text-slate-500 capitalize">
-                Modalidade: {rep.modalidade_comissao === "faturamento" ? "No Faturamento" : "Na Liquidez"}
-              </p>
+              <p className="text-xs font-semibold text-emerald-600 bg-emerald-50 inline-block px-2 py-1 rounded w-fit">Comissão: {rep.comissao_padrao}%</p>
+              <p className="text-xs text-slate-500 capitalize">Modalidade: {rep.modalidade_comissao === "faturamento" ? "No Faturamento" : "Na Liquidez"}</p>
               {rep.whatsapp && <p className="text-xs text-slate-500">📱 {rep.whatsapp}</p>}
             </div>
             
             <div className="mt-auto pt-4 border-t border-slate-100 dark:border-slate-800">
-              <Button onClick={() => openDetails(rep)} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                Gerenciar Catálogo & Docs
-              </Button>
+              <Button onClick={() => openDetails(rep)} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">Gerenciar Catálogo & Docs</Button>
             </div>
           </div>
         ))}
       </div>
 
-      {/* MODAL 1: CADASTRO COMPLETO DA REPRESENTADA */}
+      {/* MODAL 1: CADASTRO DA REPRESENTADA (Intacto) */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editing ? "Editar Representada" : "Nova Representada"}</DialogTitle></DialogHeader>
-          
           <div className="space-y-6 py-4">
             <div className="flex gap-6 items-start">
               <div className="space-y-2 flex flex-col items-center">
                 <Label>Logo</Label>
-                <div className="w-24 h-24 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden bg-slate-50 dark:bg-slate-800/50 relative">
+                <div className="w-24 h-24 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden bg-slate-50 relative">
                   {form.logo ? <img src={form.logo} alt="Logo" className="w-full h-full object-contain" /> : <Building2 className="w-8 h-8 text-slate-400" />}
                   <input type="file" accept="image/*" onChange={handleLogoUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
                 </div>
@@ -225,29 +268,16 @@ export default function Representadas() {
               </div>
               
               <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label>Razão Social <span className="text-rose-500">*</span></Label>
-                  <Input value={form.razao_social} onChange={e => setForm({...form, razao_social: e.target.value})} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Nome Fantasia</Label>
-                  <Input value={form.nome_fantasia} onChange={e => setForm({...form, nome_fantasia: e.target.value})} />
-                </div>
-                <div className="space-y-1.5 relative">
-                  <Label>CNPJ <span className="text-xs text-blue-500">(Busca automática)</span></Label>
-                  <div className="relative">
-                    <Input value={form.cnpj} onChange={e => setForm({...form, cnpj: e.target.value})} onBlur={(e) => buscarCNPJ(e.target.value)} placeholder="00.000.000/0000-00" />
-                    {loadingCnpj && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-blue-500" />}
-                  </div>
-                </div>
+                <div className="space-y-1.5 sm:col-span-2"><Label>Razão Social <span className="text-rose-500">*</span></Label><Input value={form.razao_social} onChange={e => setForm({...form, razao_social: e.target.value})} /></div>
+                <div className="space-y-1.5"><Label>Nome Fantasia</Label><Input value={form.nome_fantasia} onChange={e => setForm({...form, nome_fantasia: e.target.value})} /></div>
+                <div className="space-y-1.5 relative"><Label>CNPJ <span className="text-xs text-blue-500">(Busca automática)</span></Label><div className="relative"><Input value={form.cnpj} onChange={e => setForm({...form, cnpj: e.target.value})} onBlur={(e) => buscarCNPJ(e.target.value)} placeholder="00.000.000/0000-00" />{loadingCnpj && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-blue-500" />}</div></div>
               </div>
             </div>
 
             <div>
-              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><Phone className="w-4 h-4 text-[#08D5F5]" /> Contato</h3>
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Phone className="w-4 h-4 text-[#08D5F5]" /> Contato</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="space-y-1.5"><Label>Telefone</Label><Input value={form.telefone} onChange={e => setForm({...form, telefone: e.target.value})} /></div>
-                {/* CAMPO WHATSAPP NOVO */}
                 <div className="space-y-1.5"><Label>WhatsApp</Label><Input value={form.whatsapp} onChange={e => setForm({...form, whatsapp: e.target.value})} placeholder="(11) 99999-9999" /></div>
                 <div className="space-y-1.5"><Label>E-mail</Label><Input value={form.email} onChange={e => setForm({...form, email: e.target.value})} /></div>
                 <div className="space-y-1.5"><Label>Site</Label><Input value={form.site} onChange={e => setForm({...form, site: e.target.value})} /></div>
@@ -256,7 +286,7 @@ export default function Representadas() {
             </div>
 
             <div>
-              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><MapPin className="w-4 h-4 text-amber-500" /> Endereço</h3>
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><MapPin className="w-4 h-4 text-amber-500" /> Endereço</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="space-y-1.5"><Label>CEP</Label><Input value={form.cep} onChange={e => setForm({...form, cep: e.target.value})} /></div>
                 <div className="space-y-1.5 sm:col-span-2"><Label>Endereço</Label><Input value={form.endereco} onChange={e => setForm({...form, endereco: e.target.value})} /></div>
@@ -266,55 +296,25 @@ export default function Representadas() {
             </div>
 
             <div>
-              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><FileText className="w-4 h-4 text-emerald-500" /> Regras Comerciais</h3>
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><FileText className="w-4 h-4 text-emerald-500" /> Regras Comerciais</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Comissão Padrão (%)</Label>
-                  <Input type="number" value={form.comissao_padrao} onChange={e => setForm({...form, comissao_padrao: parseFloat(e.target.value || 0)})} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Modalidade de Comissão</Label>
-                  <Select value={form.modalidade_comissao} onValueChange={(v) => setForm({...form, modalidade_comissao: v})}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="faturamento">No Faturamento</SelectItem>
-                      <SelectItem value="liquidez">Na Liquidez</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Prazo de Pagamento</Label>
-                  <Input value={form.prazo_pagamento} onChange={e => setForm({...form, prazo_pagamento: e.target.value})} placeholder="Ex: 30/60 dias" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Segmento</Label>
-                  <Input value={form.segmento} onChange={e => setForm({...form, segmento: e.target.value})} />
-                </div>
+                <div className="space-y-1.5"><Label>Comissão Padrão (%)</Label><Input type="number" value={form.comissao_padrao} onChange={e => setForm({...form, comissao_padrao: parseFloat(e.target.value || 0)})} /></div>
+                <div className="space-y-1.5"><Label>Modalidade de Comissão</Label><Select value={form.modalidade_comissao} onValueChange={(v) => setForm({...form, modalidade_comissao: v})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="faturamento">No Faturamento</SelectItem><SelectItem value="liquidez">Na Liquidez</SelectItem></SelectContent></Select></div>
+                <div className="space-y-1.5"><Label>Prazo de Pagamento</Label><Input value={form.prazo_pagamento} onChange={e => setForm({...form, prazo_pagamento: e.target.value})} placeholder="Ex: 30/60 dias" /></div>
+                <div className="space-y-1.5"><Label>Segmento</Label><Input value={form.segmento} onChange={e => setForm({...form, segmento: e.target.value})} /></div>
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <Label>Observações</Label>
-              <Textarea value={form.observacoes} onChange={e => setForm({...form, observacoes: e.target.value})} />
-            </div>
+            <div className="space-y-1.5"><Label>Observações</Label><Textarea value={form.observacoes} onChange={e => setForm({...form, observacoes: e.target.value})} /></div>
           </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
-            <Button onClick={save} className="bg-[#075BFF]">Salvar Representada</Button>
-          </DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button><Button onClick={save} className="bg-[#075BFF]">Salvar Representada</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* MODAL 2: DETALHES (PRODUTOS E DOCUMENTOS) */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-3">
-              {selectedRep?.logo && <img src={selectedRep.logo} className="w-8 h-8 rounded object-contain" alt="logo"/>}
-              Gerenciando: {selectedRep?.nome_fantasia || selectedRep?.razao_social}
-            </DialogTitle>
-          </DialogHeader>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle className="flex items-center gap-3">{selectedRep?.logo && <img src={selectedRep.logo} className="w-8 h-8 rounded object-contain" alt="logo"/>}Gerenciando: {selectedRep?.nome_fantasia || selectedRep?.razao_social}</DialogTitle></DialogHeader>
           
           <Tabs defaultValue="produtos" className="mt-4">
             <TabsList className="grid w-full grid-cols-2">
@@ -325,14 +325,18 @@ export default function Representadas() {
             <TabsContent value="produtos" className="space-y-4 pt-4">
               <div className="flex justify-between items-center">
                 <h3 className="font-semibold text-lg">Catálogo de Produtos</h3>
-                <Button onClick={() => { setProdForm(emptyProd); setProdEditing(null); setProdOpen(true); }} className="bg-[#075BFF]"><Plus className="w-4 h-4 mr-2"/> Novo Produto</Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setImportOpen(true)}><FileSpreadsheet className="w-4 h-4 mr-2"/> Importar Excel/CSV</Button>
+                  <Button onClick={() => { setProdForm(emptyProd); setProdEditing(null); setProdOpen(true); }} className="bg-[#075BFF]"><Plus className="w-4 h-4 mr-2"/> Novo Produto</Button>
+                </div>
               </div>
               <div className="border rounded-xl overflow-hidden">
                 <table className="w-full text-sm">
-                  <thead className="bg-slate-50 dark:bg-slate-900 border-b">
+                  <thead className="bg-slate-50 border-b">
                     <tr>
-                      <th className="px-4 py-3 text-left">Nome</th>
-                      <th className="px-4 py-3 text-left">Código</th>
+                      <th className="px-4 py-3 text-left">Nome / Marca</th>
+                      <th className="px-4 py-3 text-left">Cód / SKU</th>
+                      <th className="px-4 py-3 text-left">EAN</th>
                       <th className="px-4 py-3 text-right">Preço</th>
                       <th className="px-4 py-3 text-right">Ações</th>
                     </tr>
@@ -340,8 +344,12 @@ export default function Representadas() {
                   <tbody>
                     {produtos.map(p => (
                       <tr key={p.id} className="border-b last:border-0 hover:bg-slate-50">
-                        <td className="px-4 py-3">{p.nome}</td>
-                        <td className="px-4 py-3 font-mono text-xs">{p.codigo}</td>
+                        <td className="px-4 py-3">
+                          <div className="font-semibold text-slate-900">{p.nome}</div>
+                          <div className="text-xs text-slate-500">{p.marca} {p.categoria && `· ${p.categoria}`}</div>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs">{p.codigo || p.sku}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-slate-500">{p.ean || "-"}</td>
                         <td className="px-4 py-3 text-right font-bold">{fmtBRL(p.preco_tabela)}</td>
                         <td className="px-4 py-3 text-right">
                           <Button variant="ghost" size="sm" onClick={() => { setProdForm(p); setProdEditing(p.id); setProdOpen(true); }}><Edit2 className="w-4 h-4"/></Button>
@@ -349,7 +357,7 @@ export default function Representadas() {
                         </td>
                       </tr>
                     ))}
-                    {produtos.length === 0 && <tr><td colSpan={4} className="text-center py-6 text-slate-500">Nenhum produto cadastrado.</td></tr>}
+                    {produtos.length === 0 && <tr><td colSpan={5} className="text-center py-6 text-slate-500">Nenhum produto cadastrado.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -363,25 +371,14 @@ export default function Representadas() {
                   <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleUploadDoc} />
                 </Button>
               </div>
-              
               {docs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-xl border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
-                  <FileText className="w-10 h-10 text-slate-400 mb-3" />
-                  <h3 className="font-semibold text-lg text-slate-700 dark:text-slate-300">Nenhum contrato anexado</h3>
-                  <p className="text-sm text-slate-500 mb-4 text-center max-w-sm">Faça o upload dos contratos de representação, aditivos e tabelas de preço.</p>
-                </div>
+                <div className="flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-xl bg-slate-50"><FileText className="w-10 h-10 text-slate-400 mb-3" /><h3 className="font-semibold text-lg text-slate-700">Nenhum contrato anexado</h3></div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {docs.map(d => (
-                    <div key={d.id} className="flex items-center justify-between p-3 border rounded-xl bg-white dark:bg-slate-900">
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <FileText className="w-5 h-5 text-blue-500 shrink-0" />
-                        <span className="text-sm font-medium truncate">{d.nome}</span>
-                      </div>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => downloadDoc(d.id, d.nome)}><Download className="w-4 h-4 text-slate-500" /></Button>
-                        <Button variant="ghost" size="sm" onClick={() => delDoc(d.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
-                      </div>
+                    <div key={d.id} className="flex items-center justify-between p-3 border rounded-xl bg-white">
+                      <div className="flex items-center gap-3 overflow-hidden"><FileText className="w-5 h-5 text-blue-500 shrink-0" /><span className="text-sm font-medium truncate">{d.nome}</span></div>
+                      <div className="flex gap-1"><Button variant="ghost" size="sm" onClick={() => downloadDoc(d.id, d.nome)}><Download className="w-4 h-4 text-slate-500" /></Button><Button variant="ghost" size="sm" onClick={() => delDoc(d.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button></div>
                     </div>
                   ))}
                 </div>
@@ -391,21 +388,43 @@ export default function Representadas() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 3: CADASTRO DE PRODUTO */}
+      {/* MODAL 3: CADASTRO DE PRODUTO (Completo) */}
       <Dialog open={prodOpen} onOpenChange={setProdOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{prodEditing ? "Editar" : "Novo"} Produto</DialogTitle></DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5"><Label>Nome do Produto</Label><Input value={prodForm.nome} onChange={e => setProdForm({...prodForm, nome: e.target.value})} /></div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5"><Label>Código / SKU</Label><Input value={prodForm.codigo} onChange={e => setProdForm({...prodForm, codigo: e.target.value})} /></div>
-              <div className="space-y-1.5"><Label>Preço (R$)</Label><Input type="number" value={prodForm.preco_tabela} onChange={e => setProdForm({...prodForm, preco_tabela: parseFloat(e.target.value || 0)})} /></div>
-            </div>
+          <div className="grid grid-cols-2 gap-4 py-4">
+            <div className="space-y-1.5 col-span-2"><Label>Nome do Produto *</Label><Input value={prodForm.nome} onChange={e => setProdForm({...prodForm, nome: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Código Interno / SKU</Label><Input value={prodForm.codigo} onChange={e => setProdForm({...prodForm, codigo: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>EAN (Cód. Barras)</Label><Input value={prodForm.ean} onChange={e => setProdForm({...prodForm, ean: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Marca</Label><Input value={prodForm.marca} onChange={e => setProdForm({...prodForm, marca: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Categoria</Label><Input value={prodForm.categoria} onChange={e => setProdForm({...prodForm, categoria: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Preço Tabela (R$)</Label><Input type="number" step="0.01" value={prodForm.preco_tabela} onChange={e => setProdForm({...prodForm, preco_tabela: parseFloat(e.target.value || 0)})} /></div>
+            <div className="space-y-1.5"><Label>Unidade</Label><Select value={prodForm.unidade} onValueChange={v => setProdForm({...prodForm, unidade: v})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="UN">UN</SelectItem><SelectItem value="CX">CX</SelectItem><SelectItem value="KG">KG</SelectItem><SelectItem value="L">L</SelectItem></SelectContent></Select></div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setProdOpen(false)}>Cancelar</Button>
-            <Button onClick={saveProd} className="bg-[#075BFF]">Salvar Produto</Button>
-          </DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setProdOpen(false)}>Cancelar</Button><Button onClick={saveProd} className="bg-[#075BFF]">Salvar Produto</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL 4: IMPORTAÇÃO EXCEL */}
+      <Dialog open={importOpen} onOpenChange={(v) => { setImportOpen(v); if(!v) setImportPreview([]); }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Importar Produtos (Excel/CSV)</DialogTitle></DialogHeader>
+          <div className="py-4 space-y-4">
+            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-sm text-blue-800"><p className="font-semibold mb-1">Colunas esperadas na planilha:</p><code className="block bg-white/50 p-2 rounded">Nome | Código | EAN | Marca | Categoria | Preço | Unidade</code></div>
+            <div className="border-2 border-dashed rounded-xl p-8 text-center"><FileSpreadsheet className="w-8 h-8 text-slate-400 mx-auto mb-2" /><Input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} className="max-w-xs mx-auto" /></div>
+            {importPreview.length > 0 && (
+              <div className="mt-6">
+                <h4 className="font-semibold mb-2">Conferência ({importPreview.length} itens)</h4>
+                <div className="border rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 border-b sticky top-0"><tr><th className="px-4 py-2 text-left">Nome</th><th className="px-4 py-2 text-left">Código</th><th className="px-4 py-2 text-right">Preço</th></tr></thead>
+                    <tbody>{importPreview.map(p => (<tr key={p.tempId} className={p.isDuplicate ? "bg-amber-50" : ""}><td className="px-4 py-2 truncate max-w-[200px]">{p.nome}</td><td className="px-4 py-2 font-mono text-xs">{p.codigo}</td><td className="px-4 py-2 text-right">{fmtBRL(p.preco)}</td></tr>))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setImportOpen(false)}>Cancelar</Button><Button onClick={confirmarImportacao} disabled={importing || importPreview.filter(p => !p.isDuplicate).length === 0} className="bg-[#075BFF]">{importing ? "Importando..." : "Confirmar Importação"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

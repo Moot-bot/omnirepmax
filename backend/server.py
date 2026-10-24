@@ -11,6 +11,7 @@ import json
 import re
 import bcrypt
 import jwt as pyjwt
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Any, Dict
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, Header, BackgroundTasks
@@ -29,19 +30,18 @@ db = client[os.environ['DB_NAME']]
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me')
 JWT_ALGO = 'HS256'
-MAX_LOGO = 700_000  # ~500KB binary -> ~700KB base64
+MAX_LOGO = 700_000
 
 APP_ENV = os.environ.get('APP_ENV', 'prod')
 IS_PROD = APP_ENV == 'prod'
 
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get(
-        'ALLOWED_ORIGINS',
-        'http://localhost:3000,http://127.0.0.1:3000'
+        'ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000'
     ).split(',') if o.strip()
 ]
 
-app = FastAPI(title="OMNIREPMAX API")
+app = FastAPI(title="OMNIREPMAX API", version="2.1.0")
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
@@ -63,8 +63,7 @@ MESES_PT = {
     5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
     9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
 }
-MESES_ABR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
-             "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+MESES_ABR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -87,10 +86,12 @@ def verify_pw(p: str, h: str) -> bool:
     except Exception: return False
 
 def make_token(user: dict) -> str:
-    payload = {"sub": user["id"], "email": user["email"],
-               "role": user.get("role", "representante"),
-               "tenant_id": user.get("tenant_id", user["id"]),
-               "exp": now_utc() + timedelta(days=7), "type": "access"}
+    payload = {
+        "sub": user["id"], "email": user["email"],
+        "role": user.get("role", "representante"),
+        "tenant_id": user.get("tenant_id", user["id"]),
+        "exp": now_utc() + timedelta(days=7), "type": "access"
+    }
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
 def clean_doc(doc: dict) -> dict:
@@ -125,8 +126,7 @@ async def get_current_user(request: Request) -> dict:
     user["tenant_id"] = user.get("tenant_id") or user["id"]
     return user
 
-async def t_list(name: str, current: dict, filters: Optional[dict] = None,
-                 sort_key: str = "created_at", limit: int = 1000):
+async def t_list(name: str, current: dict, filters: Optional[dict] = None, sort_key: str = "created_at", limit: int = 1000):
     q: Dict[str, Any] = {"tenant_id": tid_of(current)}
     if filters: q.update(filters)
     cursor = db[name].find(q, {"_id": 0}).sort(sort_key, -1).limit(limit)
@@ -155,10 +155,7 @@ async def t_delete(name: str, current: dict, id_: str):
 
 async def next_numero(tid: str, prefix: str, name: str) -> str:
     res = await db.counters.find_one_and_update(
-        {"tenant_id": tid, "name": name},
-        {"$inc": {"seq": 1}},
-        upsert=True,
-        return_document=ReturnDocument.AFTER,
+        {"tenant_id": tid, "name": name}, {"$inc": {"seq": 1}}, upsert=True, return_document=ReturnDocument.AFTER
     )
     return f"{prefix}-{int(res['seq']):05d}"
 
@@ -199,7 +196,7 @@ class RepresentadaIn(BaseModel):
     contato_nome: Optional[str] = ""
     contato_cargo: Optional[str] = ""
     comissao_padrao: float = 5.0
-    modalidade_comissao: str = "faturamento" # <-- NOVO CAMPO
+    modalidade_comissao: str = "faturamento"
     prazo_pagamento: Optional[str] = "30 dias"
     logo: Optional[str] = ""
     observacoes: Optional[str] = ""
@@ -279,7 +276,7 @@ class PedidoIn(BaseModel):
     desconto_geral: float = 0.0
     observacoes: Optional[str] = ""
     itens: List[PedidoItemIn]
-    parcelas: List[dict] = [] # <-- NOVO CAMPO: Ex: [{"vencimento": "2026-11-30T00:00:00", "valor": 500.0}]
+    parcelas: List[dict] = []
     status: str = "rascunho"
 
 class OportunidadeIn(BaseModel):
@@ -342,34 +339,22 @@ class ChatIn(BaseModel):
 # ------------------------------------------------------------
 def set_cookies(response: Response, token: str):
     response.set_cookie(
-        "access_token", token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=604800,
-        path="/",
+        "access_token", token, httponly=True, secure=True, samesite="none",
+        max_age=604800, path="/",
     )
 
 @api.post("/auth/signup")
 async def signup(body: SignupIn, response: Response):
-    if len(body.password) < 8:
-        raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
+    if len(body.password) < 8: raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
     email = body.email.lower()
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(400, "E-mail já cadastrado")
+    if await db.users.find_one({"email": email}): raise HTTPException(400, "E-mail já cadastrado")
     uid = new_id()
     user = {
-        "id": uid,
-        "tenant_id": uid,
-        "email": email,
-        "name": body.name,
-        "empresa": body.empresa or "",
-        "telefone": body.telefone or "",
-        "role": "admin",
-        "plan": "trial",
+        "id": uid, "tenant_id": uid, "email": email, "name": body.name,
+        "empresa": body.empresa or "", "telefone": body.telefone or "",
+        "role": "admin", "plan": "trial",
         "trial_ends_at": iso(now_utc() + timedelta(days=7)),
-        "password_hash": hash_pw(body.password),
-        "created_at": iso(now_utc()),
+        "password_hash": hash_pw(body.password), "created_at": iso(now_utc()),
     }
     await db.users.insert_one(user)
     token = make_token(user)
@@ -380,8 +365,7 @@ async def signup(body: SignupIn, response: Response):
 async def login(body: LoginIn, response: Response):
     email = body.email.lower()
     user = await db.users.find_one({"email": email})
-    if not user or not verify_pw(body.password, user["password_hash"]):
-        raise HTTPException(401, "Credenciais inválidas")
+    if not user or not verify_pw(body.password, user["password_hash"]): raise HTTPException(401, "Credenciais inválidas")
     token = make_token(user)
     set_cookies(response, token)
     user = clean_doc(user); user.pop("password_hash", None)
@@ -395,8 +379,7 @@ async def me(current=Depends(get_current_user)):
 @api.patch("/auth/me")
 async def update_me(body: UserProfileUpdate, current=Depends(get_current_user)):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    if "logo" in updates and updates["logo"] and len(updates["logo"]) > MAX_LOGO:
-        raise HTTPException(413, "Logo muito grande. Máximo ~500KB.")
+    if "logo" in updates and updates["logo"] and len(updates["logo"]) > MAX_LOGO: raise HTTPException(413, "Logo muito grande.")
     if not updates: return current
     await db.users.update_one({"id": current["id"]}, {"$set": updates})
     doc = await db.users.find_one({"id": current["id"]}, {"_id": 0, "password_hash": 0})
@@ -412,29 +395,20 @@ async def logout(response: Response):
 async def forgot(body: dict):
     email = (body.get("email") or "").lower()
     user = await db.users.find_one({"email": email})
-    if not user:
-        return {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
+    if not user: return {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
     token = new_id()
-    await db.password_resets.insert_one({
-        "token": token, "user_id": user["id"],
-        "expires_at": iso(now_utc() + timedelta(hours=1)),
-        "used": False,
-    })
-    if not IS_PROD:
-        return {"ok": True, "token": token,
-                "message": "DEV: use este token para testar."}
+    await db.password_resets.insert_one({"token": token, "user_id": user["id"], "expires_at": iso(now_utc() + timedelta(hours=1)), "used": False})
+    if not IS_PROD: return {"ok": True, "token": token, "message": "DEV: use este token para testar."}
     return {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
 
 @api.post("/auth/reset-password")
 async def reset_pw(body: dict):
     token = body.get("token"); new_password = body.get("password")
-    if not token or not new_password or len(new_password) < 8:
-        raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
+    if not token or not new_password or len(new_password) < 8: raise HTTPException(400, "Senha inválida")
     rec = await db.password_resets.find_one({"token": token, "used": False})
-    if not rec: raise HTTPException(400, "Token inválido ou já usado")
+    if not rec: raise HTTPException(400, "Token inválido")
     exp = _parse_date(rec.get("expires_at"))
-    if not exp or exp < now_utc():
-        raise HTTPException(400, "Token expirado")
+    if not exp or exp < now_utc(): raise HTTPException(400, "Token expirado")
     await db.users.update_one({"id": rec["user_id"]}, {"$set": {"password_hash": hash_pw(new_password)}})
     await db.password_resets.update_one({"token": token}, {"$set": {"used": True}})
     return {"ok": True}
@@ -449,38 +423,34 @@ async def get_representadas(current=Depends(get_current_user)):
 @api.post("/representadas")
 async def create_representada(body: RepresentadaIn, current=Depends(get_current_user)):
     data = body.model_dump()
-    if data.get("logo") and len(data["logo"]) > MAX_LOGO:
-        raise HTTPException(413, "Logo muito grande.")
+    if data.get("logo") and len(data["logo"]) > MAX_LOGO: raise HTTPException(413, "Logo muito grande.")
     return await t_insert("representadas", current, data)
 
 @api.put("/representadas/{rid}")
 async def update_representada(rid: str, body: RepresentadaIn, current=Depends(get_current_user)):
     data = body.model_dump()
-    if data.get("logo") and len(data["logo"]) > MAX_LOGO:
-        raise HTTPException(413, "Logo muito grande.")
+    if data.get("logo") and len(data["logo"]) > MAX_LOGO: raise HTTPException(413, "Logo muito grande.")
     return await t_update("representadas", current, rid, data)
 
 @api.delete("/representadas/{rid}")
 async def del_representada(rid: str, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    # AQUI ESTÁ A PROTEÇÃO: Não deixa excluir se tiver pedidos
+    has_pedidos = await db.pedidos.count_documents({"representada_id": rid, "tenant_id": tid})
+    if has_pedidos > 0: 
+        raise HTTPException(400, f"Não é possível excluir. Existem {has_pedidos} pedidos vinculados a esta representada.")
     return await t_delete("representadas", current, rid)
 
 @api.post("/representadas/{rid}/documentos")
 async def upload_documento(rid: str, body: DocumentoIn, current=Depends(get_current_user)):
     tid = tid_of(current)
     rep = await db.representadas.find_one({"id": rid, "tenant_id": tid})
-    if not rep:
-        raise HTTPException(404, "Representada não encontrada")
+    if not rep: raise HTTPException(404, "Representada não encontrada")
+    if len(body.arquivo_base64) > 5_000_000: raise HTTPException(413, "Arquivo muito grande. Máx 3MB.")
     
-    if len(body.arquivo_base64) > 5_000_000: # Limite de ~3.5MB
-        raise HTTPException(413, "Arquivo muito grande. Máximo 3MB.")
-
     doc = {
-        "id": new_id(),
-        "tenant_id": tid,
-        "representada_id": rid,
-        "nome": body.nome,
-        "arquivo_base64": body.arquivo_base64,
-        "created_at": iso(now_utc())
+        "id": new_id(), "tenant_id": tid, "representada_id": rid,
+        "nome": body.nome, "arquivo_base64": body.arquivo_base64, "created_at": iso(now_utc())
     }
     await db.documentos.insert_one(doc)
     return {"ok": True, "id": doc["id"]}
@@ -493,23 +463,20 @@ async def get_documentos(rid: str, current=Depends(get_current_user)):
 @api.get("/documentos/{doc_id}/download")
 async def download_documento(doc_id: str, current=Depends(get_current_user)):
     doc = await db.documentos.find_one({"id": doc_id, "tenant_id": tid_of(current)})
-    if not doc:
-        raise HTTPException(404, "Documento não encontrado")
+    if not doc: raise HTTPException(404, "Documento não encontrado")
     return {"nome": doc["nome"], "arquivo_base64": doc["arquivo_base64"]}
 
 @api.delete("/documentos/{doc_id}")
 async def del_documento(doc_id: str, current=Depends(get_current_user)):
     res = await db.documentos.delete_one({"id": doc_id, "tenant_id": tid_of(current)})
-    if res.deleted_count == 0:
-        raise HTTPException(404, "Documento não encontrado")
+    if res.deleted_count == 0: raise HTTPException(404, "Documento não encontrado")
     return {"ok": True}
 
 # ------------------------------------------------------------
 # Clientes
 # ------------------------------------------------------------
 @api.get("/clientes")
-async def get_clientes(status: Optional[str] = None, representada_id: Optional[str] = None,
-                       current=Depends(get_current_user)):
+async def get_clientes(status: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_current_user)):
     f: Dict[str, Any] = {}
     if status: f["status"] = status
     if representada_id: f["representadas"] = representada_id
@@ -525,14 +492,18 @@ async def update_cliente(cid: str, body: ClienteIn, current=Depends(get_current_
 
 @api.delete("/clientes/{cid}")
 async def del_cliente(cid: str, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    # AQUI ESTÁ A PROTEÇÃO: Não deixa excluir se tiver pedidos
+    has_pedidos = await db.pedidos.count_documents({"cliente_id": cid, "tenant_id": tid})
+    if has_pedidos > 0: 
+        raise HTTPException(400, f"Não é possível excluir. Existem {has_pedidos} pedidos vinculados a este cliente.")
     return await t_delete("clientes", current, cid)
 
 # ------------------------------------------------------------
 # Produtos
 # ------------------------------------------------------------
 @api.get("/produtos")
-async def get_produtos(representada_id: Optional[str] = None, categoria: Optional[str] = None,
-                       current=Depends(get_current_user)):
+async def get_produtos(representada_id: Optional[str] = None, categoria: Optional[str] = None, current=Depends(get_current_user)):
     f: Dict[str, Any] = {}
     if representada_id: f["representada_id"] = representada_id
     if categoria: f["categoria"] = categoria
@@ -557,19 +528,12 @@ async def import_txt(body: TXTImportIn, current=Depends(get_current_user)):
     for p in body.produtos:
         existing = await db.produtos.find_one({"tenant_id": tid, "codigo": p.get("codigo"), "representada_id": body.representada_id})
         if not existing:
-            await t_insert("produtos", current, {
-                "representada_id": body.representada_id,
-                "nome": p.get("nome"),
-                "codigo": p.get("codigo"),
-                "preco_tabela": float(p.get("preco", 0)),
-                "unidade": p.get("unidade", "UN"),
-                "status": "ativo"
-            })
+            await t_insert("produtos", current, {"representada_id": body.representada_id, "nome": p.get("nome"), "codigo": p.get("codigo"), "preco_tabela": float(p.get("preco", 0)), "unidade": p.get("unidade", "UN"), "status": "ativo"})
             criados += 1
     return {"ok": True, "criados": criados}
 
 # ------------------------------------------------------------
-# Pedidos
+# Pedidos (Core)
 # ------------------------------------------------------------
 def calc_pedido_totals(data: dict, repr_comissao: float) -> dict:
     subtotal = 0.0
@@ -587,9 +551,30 @@ def calc_pedido_totals(data: dict, repr_comissao: float) -> dict:
     data["comissao_valor"] = round(total * repr_comissao / 100.0, 2)
     return data
 
+async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict):
+    tid = tid_of(current)
+    parcelas = ped.get("parcelas", [])
+    valor_liquido = comissao["valor_liquido"]
+    
+    if not parcelas:
+        parcelas = [{"vencimento": iso(now_utc() + timedelta(days=30)), "valor": valor_liquido}]
+    else:
+        # AQUI ESTÁ A CORREÇÃO MATEMÁTICA: Ajusta a última parcela para fechar o valor
+        soma_parcelas = sum(p["valor"] for p in parcelas)
+        if abs(soma_parcelas - valor_liquido) > 0.01:
+            diferenca = valor_liquido - soma_parcelas
+            parcelas[-1]["valor"] = round(parcelas[-1]["valor"] + diferenca, 2)
+        
+    for i, p in enumerate(parcelas):
+        await t_insert("contas_receber", current, {
+            "comissao_id": comissao["id"], "cliente_id": ped.get("cliente_id"), "representada_id": ped.get("representada_id"),
+            "pedido_id": ped["id"], "numero_documento": f"{ped.get('numero')} ({i+1}/{len(parcelas)})",
+            "valor": p["valor"], "valor_recebido": 0.0, "saldo_pendente": p["valor"],
+            "vencimento": p["vencimento"], "status": "aberto", "historico_recebimentos": [], "forma_pagamento": "Boleto",
+        })
+
 @api.get("/pedidos")
-async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = None,
-                      representada_id: Optional[str] = None, current=Depends(get_current_user)):
+async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_current_user)):
     f: Dict[str, Any] = {}
     if status: f["status"] = status
     if cliente_id: f["cliente_id"] = cliente_id
@@ -601,13 +586,11 @@ async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
     tid = tid_of(current)
     data = body.model_dump()
     rep = await db.representadas.find_one({"id": data["representada_id"], "tenant_id": tid}, {"_id": 0})
-    if not rep:
-        raise HTTPException(404, "Representada não encontrada")
+    if not rep: raise HTTPException(404, "Representada não encontrada")
     cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
-    if not cli:
-        raise HTTPException(404, "Cliente não encontrado")
-    comm = rep.get("comissao_padrao", 5.0)
-    data = calc_pedido_totals(data, comm)
+    if not cli: raise HTTPException(404, "Cliente não encontrado")
+    
+    data = calc_pedido_totals(data, rep.get("comissao_padrao", 5.0))
     data["numero"] = await next_numero(tid, "PED", "pedidos")
     data["data_pedido"] = iso(now_utc())
     return await t_insert("pedidos", current, data)
@@ -615,15 +598,18 @@ async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
 @api.put("/pedidos/{pid}")
 async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_user)):
     tid = tid_of(current)
+    existing = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
+    if not existing: raise HTTPException(404, "Pedido não encontrado")
+    if existing.get("status") == "faturado": raise HTTPException(400, "Pedidos faturados não podem ser editados.")
+
     data = body.model_dump()
     rep = await db.representadas.find_one({"id": data["representada_id"], "tenant_id": tid}, {"_id": 0})
-    if not rep:
-        raise HTTPException(404, "Representada não encontrada")
+    if not rep: raise HTTPException(404, "Representada não encontrada")
     cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
-    if not cli:
-        raise HTTPException(404, "Cliente não encontrado")
-    comm = rep.get("comissao_padrao", 5.0)
-    data = calc_pedido_totals(data, comm)
+    if not cli: raise HTTPException(404, "Cliente não encontrado")
+    
+    data = calc_pedido_totals(data, rep.get("comissao_padrao", 5.0))
+    data["numero"] = existing["numero"]
     return await t_update("pedidos", current, pid, data)
 
 @api.patch("/pedidos/{pid}/status")
@@ -631,67 +617,52 @@ async def status_pedido(pid: str, body: dict, current=Depends(get_current_user))
     novo = body.get("status")
     if not novo: raise HTTPException(400, "status obrigatório")
     
-    # Atualiza o status do pedido e, se existir, o número da NF
+    tid = tid_of(current)
+    ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
+    if not ped: raise HTTPException(404, "Pedido não encontrado")
+    
     updates = {"status": novo}
     if "nf_numero" in body: updates["nf_numero"] = body["nf_numero"]
     ped = await t_update("pedidos", current, pid, updates)
     
     if novo == "faturado":
-        tid = tid_of(current)
         exists = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid})
-        
         if not exists:
             rep = await db.representadas.find_one({"id": ped["representada_id"], "tenant_id": tid})
             valor_total_pedido = ped.get("total", 0)
             percentual = rep.get("comissao_padrao", 5.0)
             valor_liquido = round(valor_total_pedido * (percentual / 100), 2)
+            modalidade = rep.get("modalidade_comissao", "faturamento")
             
             comissao_data = {
-                "pedido_id": pid, 
-                "pedido_numero": ped.get("numero"),
-                "cliente_id": ped.get("cliente_id"), 
-                "representada_id": ped.get("representada_id"),
-                "nf_numero": updates.get("nf_numero", ""),
-                "valor_total_pedido": valor_total_pedido,
-                "percentual": percentual,
-                "valor_liquido": valor_liquido,
-                "valor_recebido": 0.0,
-                "saldo_pendente": valor_liquido,
-                "modalidade": rep.get("modalidade_comissao", "faturamento"),
-                "status": "pendente" if rep.get("modalidade_comissao") == "faturamento" else "aguardando_liquidez",
-                "historico_recebimentos": [],
+                "pedido_id": pid, "pedido_numero": ped.get("numero"), "cliente_id": ped.get("cliente_id"), 
+                "representada_id": ped.get("representada_id"), "nf_numero": updates.get("nf_numero", ""),
+                "valor_total_pedido": valor_total_pedido, "percentual": percentual, "valor_liquido": valor_liquido,
+                "valor_recebido": 0.0, "saldo_pendente": valor_liquido, "modalidade": modalidade,
+                "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez", "historico_recebimentos": [],
             }
             comissao = await t_insert("comissoes", current, comissao_data)
-            
-            # Gera as parcelas no Contas a Receber
-            parcelas = ped.get("parcelas", [])
-            if not parcelas:
-                # Fallback: se não definiu parcelas, joga o valor total para 30 dias
-                parcelas = [{"vencimento": iso(now_utc() + timedelta(days=30)), "valor": valor_liquido}]
-            
-            for p in parcelas:
-                await t_insert("contas_receber", current, {
-                    "comissao_id": comissao["id"],
-                    "cliente_id": ped.get("cliente_id"), 
-                    "representada_id": ped.get("representada_id"),
-                    "pedido_id": pid, 
-                    "numero_documento": f"{ped.get('numero')} (Parcela)",
-                    "valor": p["valor"], 
-                    "valor_recebido": 0.0,
-                    "saldo_pendente": p["valor"],
-                    "vencimento": p["vencimento"],
-                    "status": "aberto", 
-                    "historico_recebimentos": [],
-                    "forma_pagamento": "Boleto",
-                })
+            if modalidade == "faturamento": await gerar_parcelas_comissao(current, ped, comissao)
     return ped
+
+@api.post("/pedidos/{pid}/liquidez")
+async def confirmar_liquidez(pid: str, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
+    if not ped: raise HTTPException(404, "Pedido não encontrado")
+    com = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid})
+    if not com: raise HTTPException(404, "Comissão não encontrada")
+    if com.get("status") != "aguardando_liquidez": raise HTTPException(400, "Esta comissão já foi liberada ou paga.")
+        
+    await db.comissoes.update_one({"id": com["id"]}, {"$set": {"status": "pendente"}})
+    await gerar_parcelas_comissao(current, ped, com)
+    return {"ok": True, "message": "Comissão liberada."}
 
 @api.delete("/pedidos/{pid}")
 async def del_pedido(pid: str, current=Depends(get_current_user)):
     tid = tid_of(current)
     paga = await db.comissoes.find_one({"tenant_id": tid, "pedido_id": pid, "status": "recebida"})
-    if paga:
-        raise HTTPException(400, "Pedido possui comissão já recebida. Estorne o pagamento antes de excluir.")
+    if paga: raise HTTPException(400, "Pedido possui comissão já recebida. Estorne antes de excluir.")
     await db.comissoes.delete_many({"tenant_id": tid, "pedido_id": pid})
     await db.contas_receber.delete_many({"tenant_id": tid, "pedido_id": pid})
     return await t_delete("pedidos", current, pid)
@@ -739,8 +710,7 @@ async def del_visita(vid: str, current=Depends(get_current_user)):
 # Comissões / Contas a Receber
 # ------------------------------------------------------------
 @api.get("/comissoes")
-async def get_comissoes(status: Optional[str] = None, representada_id: Optional[str] = None,
-                        current=Depends(get_current_user)):
+async def get_comissoes(status: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_current_user)):
     f: Dict[str, Any] = {}
     if status: f["status"] = status
     if representada_id: f["representada_id"] = representada_id
@@ -748,16 +718,13 @@ async def get_comissoes(status: Optional[str] = None, representada_id: Optional[
 
 @api.patch("/comissoes/{cid}")
 async def update_comissao(cid: str, body: ComissaoUpdate, current=Depends(get_current_user)):
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    return await t_update("comissoes", current, cid, updates)
+    return await t_update("comissoes", current, cid, {k: v for k, v in body.model_dump().items() if v is not None})
 
 @api.delete("/comissoes/{cid}")
 async def del_comissao(cid: str, current=Depends(get_current_user)):
     doc = await db.comissoes.find_one({"id": cid, "tenant_id": tid_of(current)})
-    if not doc:
-        raise HTTPException(404, "Comissão não encontrada")
-    if doc.get("status") == "recebida" or doc.get("valor_recebido", 0) > 0:
-        raise HTTPException(400, "Comissões já recebidas (ou com baixa parcial) não podem ser excluídas.")
+    if not doc: raise HTTPException(404, "Comissão não encontrada")
+    if doc.get("status") == "recebida" or doc.get("valor_recebido", 0) > 0: raise HTTPException(400, "Comissões já recebidas não podem ser excluídas.")
     return await t_delete("comissoes", current, cid)
 
 @api.get("/contas-receber")
@@ -780,14 +747,11 @@ async def del_ar(rid: str, current=Depends(get_current_user)):
 async def receber_comissao(rid: str, body: dict, current=Depends(get_current_user)):
     tid = tid_of(current)
     ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid})
-    if not ar:
-        raise HTTPException(404, "Conta não encontrada")
+    if not ar: raise HTTPException(404, "Conta não encontrada")
     
     valor_recebido = float(body.get("valor", 0))
     data_recebimento = body.get("data", iso(now_utc()))
-    
-    if valor_recebido <= 0:
-        raise HTTPException(400, "Valor deve ser maior que zero")
+    if valor_recebido <= 0: raise HTTPException(400, "Valor deve ser maior que zero")
         
     saldo_atual = ar.get("saldo_pendente", ar.get("valor", 0))
     novo_saldo = saldo_atual - valor_recebido
@@ -795,24 +759,10 @@ async def receber_comissao(rid: str, body: dict, current=Depends(get_current_use
     novo_status = "recebido" if novo_saldo <= 0.01 else "aberto"
     
     historico = ar.get("historico_recebimentos", [])
-    historico.append({
-        "data": data_recebimento,
-        "valor": valor_recebido,
-        "saldo_restante": round(max(0, novo_saldo), 2)
-    })
+    historico.append({"data": data_recebimento, "valor": valor_recebido, "saldo_restante": round(max(0, novo_saldo), 2)})
     
-    await db.contas_receber.update_one(
-        {"id": rid},
-        {"$set": {
-            "valor_recebido": round(novo_total_recebido, 2),
-            "saldo_pendente": round(max(0, novo_saldo), 2),
-            "status": novo_status,
-            "historico_recebimentos": historico,
-            "updated_at": iso(now_utc())
-        }}
-    )
+    await db.contas_receber.update_one({"id": rid}, {"$set": {"valor_recebido": round(novo_total_recebido, 2), "saldo_pendente": round(max(0, novo_saldo), 2), "status": novo_status, "historico_recebimentos": historico, "updated_at": iso(now_utc())}})
     
-    # Atualiza a comissão de origem vinculada
     if ar.get("comissao_id"):
         com = await db.comissoes.find_one({"id": ar["comissao_id"], "tenant_id": tid})
         if com:
@@ -822,22 +772,9 @@ async def receber_comissao(rid: str, body: dict, current=Depends(get_current_use
             c_status = "recebida" if c_novo_saldo <= 0.01 else "parcialmente_recebida"
             
             c_hist = com.get("historico_recebimentos", [])
-            c_hist.append({
-                "data": data_recebimento,
-                "valor": valor_recebido,
-                "saldo_restante": round(max(0, c_novo_saldo), 2)
-            })
+            c_hist.append({"data": data_recebimento, "valor": valor_recebido, "saldo_restante": round(max(0, c_novo_saldo), 2)})
             
-            await db.comissoes.update_one(
-                {"id": com["id"]},
-                {"$set": {
-                    "valor_recebido": round(c_novo_recebido, 2),
-                    "saldo_pendente": round(max(0, c_novo_saldo), 2),
-                    "status": c_status,
-                    "historico_recebimentos": c_hist,
-                    "updated_at": iso(now_utc())
-                }}
-            )
+            await db.comissoes.update_one({"id": com["id"]}, {"$set": {"valor_recebido": round(c_novo_recebido, 2), "saldo_pendente": round(max(0, c_novo_saldo), 2), "status": c_status, "historico_recebimentos": c_hist, "updated_at": iso(now_utc())}})
             
     return {"ok": True, "novo_saldo": novo_saldo}
 
@@ -871,25 +808,23 @@ def _in_year(s, y):
 
 @api.get("/dashboard")
 async def dashboard(current=Depends(get_current_user)):
-    pedidos = await t_list("pedidos", current)
+    # AQUI ESTÁ A OTIMIZAÇÃO: Tudo em paralelo
+    pedidos, reps, comissoes, ap, ar, clientes, visitas, ops = await asyncio.gather(
+        t_list("pedidos", current), t_list("representadas", current), t_list("comissoes", current),
+        t_list("contas_pagar", current), t_list("contas_receber", current), t_list("clientes", current),
+        t_list("visitas", current), t_list("oportunidades", current)
+    )
+
     faturados = [p for p in pedidos if p.get("status") == "faturado"]
     now = now_utc(); mes = now.month; ano = now.year
     
     fat_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
     fat_ano = sum(p.get("total", 0) for p in faturados if _in_year(p.get("data_pedido"), ano))
     
-    reps = await t_list("representadas", current)
-    fat_por_rep = []
-    for r in reps:
-        v = sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"])
-        fat_por_rep.append({"nome": r.get("nome_fantasia") or r.get("razao_social"), "valor": round(v, 2)})
+    fat_por_rep = [{"nome": r.get("nome_fantasia") or r.get("razao_social"), "valor": round(sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"]), 2)} for r in reps]
         
-    comissoes = await t_list("comissoes", current)
     com_recebidas = sum(c.get("valor_recebido", 0) for c in comissoes)
     com_abertas = sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") != "recebida")
-    
-    ap = await t_list("contas_pagar", current)
-    ar = await t_list("contas_receber", current)
     
     ap_abertas = sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto")
     ar_abertas = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
@@ -907,14 +842,12 @@ async def dashboard(current=Depends(get_current_user)):
                 
     projecao_valor = sum(p.get("total", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
     projecao_comissao = sum(p.get("comissao_valor", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
-    clientes = await t_list("clientes", current)
+    
     clientes_ativos = sum(1 for c in clientes if c.get("status") == "ativo")
     novos = sum(1 for c in clientes if _in_month(c.get("created_at"), ano, mes))
     pedidos_abertos = sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado"))
     pedidos_faturados = len(faturados)
-    visitas = await t_list("visitas", current)
     visitas_realizadas = sum(1 for v in visitas if v.get("status") == "realizada")
-    ops = await t_list("oportunidades", current)
     propostas_neg = sum(1 for o in ops if o.get("estagio") in ("proposta", "negociacao"))
     
     serie = []
@@ -934,8 +867,7 @@ async def dashboard(current=Depends(get_current_user)):
         c = a.get("categoria", "Outros"); cat_total[c] = cat_total.get(c, 0) + a.get("valor", 0)
     gastos_por_categoria = sorted([{"categoria": k, "valor": round(v, 2)} for k, v in cat_total.items()], key=lambda x: -x["valor"])
     
-    if fat_mes <= 0:
-        saude = 50
+    if fat_mes <= 0: saude = 50
     else:
         margem = max(0.0, min(1.0, (fat_mes - despesas_mes) / fat_mes))
         pen_atraso = min(0.4, em_atraso_valor / max(1.0, fat_mes))
@@ -962,10 +894,8 @@ async def dashboard(current=Depends(get_current_user)):
     
     return {
         "mes_atual": f"{MESES_PT[mes]} de {ano}",
-        "faturamento_mes": round(fat_mes, 2), "faturamento_ano": round(fat_ano, 2),
-        "faturamento_por_representada": fat_por_rep,
-        "comissoes_previstas": round(com_abertas, 2), "comissoes_recebidas": round(com_recebidas, 2),
-        "comissoes_abertas": round(com_abertas, 2),
+        "faturamento_mes": round(fat_mes, 2), "faturamento_ano": round(fat_ano, 2), "faturamento_por_representada": fat_por_rep,
+        "comissoes_previstas": round(com_abertas, 2), "comissoes_recebidas": round(com_recebidas, 2), "comissoes_abertas": round(com_abertas, 2),
         "contas_pagar_abertas": round(ap_abertas, 2), "contas_receber_abertas": round(ar_abertas, 2),
         "despesas_mes": round(despesas_mes, 2), "saldo_mes": round(saldo_mes, 2),
         "em_atraso": round(em_atraso_valor, 2), "em_atraso_count": em_atraso_count,
@@ -973,155 +903,124 @@ async def dashboard(current=Depends(get_current_user)):
         "pedidos_abertos": pedidos_abertos, "pedidos_faturados": pedidos_faturados,
         "clientes_ativos": clientes_ativos, "novos_clientes": novos,
         "visitas_realizadas": visitas_realizadas, "propostas_negociacao": propostas_neg,
-        "serie_faturamento": serie, "top_produtos": top_produtos,
-        "gastos_por_categoria": gastos_por_categoria,
+        "serie_faturamento": serie, "top_produtos": top_produtos, "gastos_por_categoria": gastos_por_categoria,
         "saude_financeira": saude, "saude_label": saude_label, "avisos": avisos,
     }
 
 # ------------------------------------------------------------
-# Insights
+# Insights & IA
 # ------------------------------------------------------------
 @api.get("/insights/regras")
 async def insights_regras(current=Depends(get_current_user)):
     now = now_utc()
-    clientes = await t_list("clientes", current)
-    pedidos = await t_list("pedidos", current)
+    clientes, pedidos, reps = await asyncio.gather(t_list("clientes", current), t_list("pedidos", current), t_list("representadas", current))
     insights = []
     for c in clientes:
         if c.get("status") != "ativo": continue
         pc = [p for p in pedidos if p.get("cliente_id") == c["id"]]
         if not pc:
-            insights.append({"tipo": "alerta", "titulo": "Cliente sem compras",
-                             "descricao": f"{c.get('nome_fantasia') or c.get('razao_social')} ainda não realizou pedidos.",
-                             "cliente_id": c["id"]}); continue
+            insights.append({"tipo": "alerta", "titulo": "Cliente sem compras", "descricao": f"{c.get('nome_fantasia') or c.get('razao_social')} ainda não realizou pedidos.", "cliente_id": c["id"]}); continue
         ultimo = max((_parse_date(p.get("data_pedido")) or now for p in pc))
         dias = (now - ultimo).days
         if dias >= 60:
-            insights.append({"tipo": "alerta", "titulo": f"Cliente sem compra há {dias} dias",
-                             "descricao": f"{c.get('nome_fantasia') or c.get('razao_social')} sem pedidos recentes.",
-                             "cliente_id": c["id"]})
-    reps = await t_list("representadas", current)
+            insights.append({"tipo": "alerta", "titulo": f"Cliente sem compra há {dias} dias", "descricao": f"{c.get('nome_fantasia') or c.get('razao_social')} sem pedidos recentes.", "cliente_id": c["id"]})
     for r in reps:
         pr = [p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"]
         if len(pr) >= 2:
             total = sum(p.get("total", 0) for p in pr)
-            insights.append({"tipo": "oportunidade", "titulo": f"Boa performance: {r.get('nome_fantasia') or r.get('razao_social')}",
-                             "descricao": f"Total faturado: R$ {total:,.2f}."})
+            insights.append({"tipo": "oportunidade", "titulo": f"Boa performance: {r.get('nome_fantasia') or r.get('razao_social')}", "descricao": f"Total faturado: R$ {total:,.2f}."})
     return insights[:15]
 
-# ------------------------------------------------------------
-# MAX AI (Agora com Groq Gratuito)
-# ------------------------------------------------------------
 async def _build_ai_context(current: dict) -> str:
-    clientes = await t_list("clientes", current)
-    pedidos = await t_list("pedidos", current)
-    reps = await t_list("representadas", current)
-    comissoes = await t_list("comissoes", current)
-    ap = await t_list("contas_pagar", current)
-    ar = await t_list("contas_receber", current)
+    clientes, pedidos, reps, comissoes, ap, ar = await asyncio.gather(
+        t_list("clientes", current), t_list("pedidos", current), t_list("representadas", current),
+        t_list("comissoes", current), t_list("contas_pagar", current), t_list("contas_receber", current)
+    )
     now = now_utc()
-
     top_c = sorted(clientes, key=lambda c: sum(p.get("total", 0) for p in pedidos if p.get("cliente_id") == c["id"]), reverse=True)[:10]
     top_clientes = []
     for c in top_c:
         fat = sum(p.get("total", 0) for p in pedidos if p.get("cliente_id") == c["id"] and p.get("status") == "faturado")
         ult_data = max((_parse_date(p.get("data_pedido")) or now for p in pedidos if p.get("cliente_id") == c["id"]), default=None)
         dias = (now - ult_data).days if ult_data else None
-        top_clientes.append({"nome": c.get("nome_fantasia") or c.get("razao_social"),
-                             "status": c.get("status"), "cidade": c.get("cidade"),
-                             "faturamento": round(fat, 2), "dias_ultima_compra": dias})
+        top_clientes.append({"nome": c.get("nome_fantasia") or c.get("razao_social"), "status": c.get("status"), "cidade": c.get("cidade"), "faturamento": round(fat, 2), "dias_ultima_compra": dias})
 
     inativos = []
     for c in clientes[:30]:
         pc = [p for p in pedidos if p.get("cliente_id") == c["id"]]
         nome = c.get("nome_fantasia") or c.get("razao_social")
-        if not pc:
-            inativos.append(nome); continue
+        if not pc: inativos.append(nome); continue
         datas = [d for d in (_parse_date(p.get("data_pedido")) for p in pc) if d]
-        if not datas or (now - max(datas)).days > 30:
-            inativos.append(nome)
+        if not datas or (now - max(datas)).days > 30: inativos.append(nome)
     inativos = inativos[:10]
 
-    por_rep = []
-    for r in reps:
-        pr = [p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"]
-        por_rep.append({"representada": r.get("nome_fantasia") or r.get("razao_social"),
-                        "comissao_padrao": r.get("comissao_padrao"),
-                        "total_faturado": round(sum(p.get("total", 0) for p in pr), 2),
-                        "pedidos_faturados": len(pr)})
+    por_rep = [{"representada": r.get("nome_fantasia") or r.get("razao_social"), "comissao_padrao": r.get("comissao_padrao"), "total_faturado": round(sum(p.get("total", 0) for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"), 2), "pedidos_faturados": len([p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"])} for r in reps]
 
     ar_saldo_aberto = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
 
     ctx = {
         "data_de_hoje": now.strftime("%Y-%m-%d"),
         "resumo": {
-            "clientes_total": len(clientes),
-            "clientes_ativos": sum(1 for c in clientes if c.get("status") == "ativo"),
-            "clientes_prospect": sum(1 for c in clientes if c.get("status") == "prospect"),
-            "clientes_inativos": sum(1 for c in clientes if c.get("status") == "inativo"),
-            "pedidos_total": len(pedidos),
-            "pedidos_faturados": sum(1 for p in pedidos if p.get("status") == "faturado"),
-            "pedidos_em_aberto": sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")),
+            "clientes_total": len(clientes), "clientes_ativos": sum(1 for c in clientes if c.get("status") == "ativo"),
+            "clientes_prospect": sum(1 for c in clientes if c.get("status") == "prospect"), "clientes_inativos": sum(1 for c in clientes if c.get("status") == "inativo"),
+            "pedidos_total": len(pedidos), "pedidos_faturados": sum(1 for p in pedidos if p.get("status") == "faturado"), "pedidos_em_aberto": sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")),
             "volume_vendas_total": round(sum(p.get("total", 0) for p in pedidos if p.get("status") == "faturado"), 2),
             "comissoes_a_receber": round(sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") != "recebida"), 2),
             "comissoes_recebidas": round(sum(c.get("valor_recebido", 0) for c in comissoes), 2),
             "contas_a_pagar_aberto": round(sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto"), 2),
             "contas_a_receber_aberto": round(ar_saldo_aberto, 2),
         },
-        "representadas": por_rep,
-        "top_10_clientes": top_clientes,
-        "clientes_sem_compra_30d_ou_mais": inativos,
+        "representadas": por_rep, "top_10_clientes": top_clientes, "clientes_sem_compra_30d_ou_mais": inativos,
     }
     return json.dumps(ctx, ensure_ascii=False, default=str)
 
 @api.post("/max-ai/chat")
 async def max_ai(body: ChatIn, current=Depends(get_current_user)):
-    try:
-        from groq import Groq
-    except ImportError:
-        return {"reply": "Módulo 'groq' não instalado. Rode: pip install groq", "error": True}
-
+    try: from groq import Groq
+    except ImportError: return {"reply": "Módulo 'groq' não instalado.", "error": True}
     key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        return {"reply": "GROQ_API_KEY não configurada no arquivo .env.", "error": True}
+    if not key: return {"reply": "GROQ_API_KEY não configurada.", "error": True}
 
     context = await _build_ai_context(current)
     system = (
-        "Você é o MAX AI, assistente comercial do OMNIREPMAX — plataforma de gestão para representantes comerciais brasileiros. "
-        "Responda SEMPRE em português do Brasil, de forma objetiva, direta e profissional, usando os dados do usuário fornecidos como JSON abaixo. "
-        "Use R$ para valores (ex: R$ 1.234,56), destaque números relevantes com **negrito markdown** e organize em listas quando fizer sentido. "
-        "NUNCA invente clientes ou valores que não estejam nos dados. Se a resposta exigir informação ausente, diga que não consta no sistema. "
-        "Quando sugerir ações, seja prático e aplicado ao dia a dia do representante.\n\n"
+        "Você é o MAX AI, assistente comercial do OMNIREPMAX. Responda SEMPRE em português do Brasil, de forma objetiva e profissional, usando os dados do usuário fornecidos. "
+        "Use R$ para valores, destaque números com **negrito** e organize em listas. NUNCA invente dados. Se faltar informação, diga que não consta no sistema.\n\n"
         f"DADOS DO USUÁRIO (JSON):\n{context}"
     )
-
     msg_text = body.message.strip()
     if body.history:
-        tail = body.history[-4:]
-        msg_text = "\n\n".join([f"[{h.get('role','user')}]: {h.get('content','')}" for h in tail]) + f"\n\n[user]: {msg_text}"
+        msg_text = "\n\n".join([f"[{h.get('role','user')}]: {h.get('content','')}" for h in body.history[-4:]]) + f"\n\n[user]: {msg_text}"
+    try:
+        client = Groq(api_key=key)
+        chat_completion = client.chat.completions.create(messages=[{"role": "system", "content": system}, {"role": "user", "content": msg_text}], model="openai/gpt-oss-120b")
+        return {"reply": chat_completion.choices[0].message.content}
+    except Exception as e: return {"reply": f"Erro na Groq: {e}", "error": True}
 
+@api.post("/insights/ai")
+async def insights_ai(current=Depends(get_current_user)):
+    try: from groq import Groq
+    except ImportError: return {"insights": [], "erro": "Módulo 'groq' não instalado."}
+    key = os.environ.get("GROQ_API_KEY")
+    if not key: return {"insights": [], "erro": "GROQ_API_KEY não configurada."}
+    ctx = await _build_ai_context(current)
     try:
         client = Groq(api_key=key)
         chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": msg_text}
-            ],
+            messages=[{"role": "system", "content": "Analista comercial. Retorne APENAS JSON array 4-6 objetos {tipo:'oportunidade|alerta|dica',titulo:'',descricao:''}. Sem markdown."}, {"role": "user", "content": f"Dados: {ctx}"}],
             model="openai/gpt-oss-120b",
         )
-        reply = chat_completion.choices[0].message.content
-        return {"reply": reply}
-    except Exception as e:
-        return {"reply": f"Erro na Groq: {e}", "error": True}
+        raw = chat_completion.choices[0].message.content
+        m = re.search(r"\[.*\]", raw.strip(), re.S)
+        return {"insights": json.loads(m.group(0)) if m else []}
+    except Exception as e: return {"insights": [], "erro": str(e)}
 
 # ------------------------------------------------------------
-# Busca global / XML / Backups / Insights IA
+# Busca global / XML / Backups
 # ------------------------------------------------------------
 @api.get("/search")
 async def global_search(q: str = Query(..., min_length=1), current=Depends(get_current_user)):
     q = q.strip()
-    if not q:
-        raise HTTPException(400, "Query vazia")
+    if not q: raise HTTPException(400, "Query vazia")
     ql = q.lower()
     def m(d, keys): return any(d.get(k) and ql in str(d.get(k)).lower() for k in keys)
     return {
@@ -1138,60 +1037,60 @@ class XMLImportIn(BaseModel):
     representada_id: Optional[str] = None
     cliente_id: Optional[str] = None
 
-def _only_digits(s: Optional[str]) -> str:
-    return re.sub(r"\D", "", s or "")
+def _only_digits(s: Optional[str]) -> str: return re.sub(r"\D", "", s or "")
 
 def _parse_nfe(x: str) -> dict:
+    x_clean = re.sub(r'xmlns(:\w+)?="[^"]+"', '', x)
     def f(pat, default=""):
-        m = re.search(pat, x, re.S); return (m.group(1) if m else default).strip()
+        m = re.search(pat, x_clean, re.S | re.I)
+        return m.group(1).strip() if m else default
+
     itens = []
-    for m in re.finditer(r"<det[^>]*>(.*?)</det>", x, re.S):
+    for m in re.finditer(r"<det[^>]*>(.*?)</det>", x_clean, re.S | re.I):
         seg = m.group(1)
+        qtd_str = f(r"<qCom>(.*?)</qCom>", seg)
+        preco_str = f(r"<vUnCom>(.*?)</vUnCom>", seg)
+        total_str = f(r"<vProd>(.*?)</vProd>", seg)
+        
         itens.append({
-            "codigo": re.search(r"<cProd>(.*?)</cProd>", seg).group(1) if re.search(r"<cProd>(.*?)</cProd>", seg) else "",
-            "ean": re.search(r"<cEAN>(.*?)</cEAN>", seg).group(1) if re.search(r"<cEAN>(.*?)</cEAN>", seg) else "",
-            "nome": re.search(r"<xProd>(.*?)</xProd>", seg).group(1) if re.search(r"<xProd>(.*?)</xProd>", seg) else "",
-            "quantidade": float(re.search(r"<qCom>(.*?)</qCom>", seg).group(1)) if re.search(r"<qCom>(.*?)</qCom>", seg) else 0,
-            "preco": float(re.search(r"<vUnCom>(.*?)</vUnCom>", seg).group(1)) if re.search(r"<vUnCom>(.*?)</vUnCom>", seg) else 0,
-            "total": float(re.search(r"<vProd>(.*?)</vProd>", seg).group(1)) if re.search(r"<vProd>(.*?)</vProd>", seg) else 0,
+            "codigo": f(r"<cProd>(.*?)</cProd>", seg),
+            "ean": f(r"<cEAN>(.*?)</cEAN>", seg),
+            "nome": f(r"<xProd>(.*?)</xProd>", seg),
+            "quantidade": float(qtd_str) if qtd_str else 0.0,
+            "preco": float(preco_str) if preco_str else 0.0,
+            "total": float(total_str) if total_str else 0.0,
         })
+        
+    total_str = f(r"<vNF>(.*?)</vNF>", "0")
     return {
         "emitente": {"cnpj": f(r"<emit>.*?<CNPJ>(.*?)</CNPJ>"), "nome": f(r"<emit>.*?<xNome>(.*?)</xNome>")},
         "destinatario": {"cnpj": f(r"<dest>.*?<CNPJ>(.*?)</CNPJ>") or f(r"<dest>.*?<CPF>(.*?)</CPF>"), "nome": f(r"<dest>.*?<xNome>(.*?)</xNome>")},
         "numero": f(r"<nNF>(.*?)</nNF>"), "serie": f(r"<serie>(.*?)</serie>"),
         "data_emissao": f(r"<dhEmi>(.*?)</dhEmi>"),
-        "valor_total": float(f(r"<vNF>(.*?)</vNF>", "0") or 0),
+        "valor_total": float(total_str) if total_str else 0.0,
         "itens": itens,
     }
 
-async def _match_or_create_pedido(current: dict, parsed: dict,
-                                   representada_id: Optional[str],
-                                   cliente_id: Optional[str]) -> dict:
+async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: Optional[str], cliente_id: Optional[str]) -> dict:
     tid = tid_of(current)
     emit_digits = _only_digits(parsed.get("emitente", {}).get("cnpj"))
     dest_digits = _only_digits(parsed.get("destinatario", {}).get("cnpj"))
     reps = await t_list("representadas", current)
     clis = await t_list("clientes", current)
-    rep_match = None; cli_match = None
-    if representada_id:
-        rep_match = next((r for r in reps if r["id"] == representada_id), None)
-    else:
-        rep_match = next((r for r in reps if _only_digits(r.get("cnpj")) == emit_digits and emit_digits), None)
-    if cliente_id:
-        cli_match = next((c for c in clis if c["id"] == cliente_id), None)
-    else:
-        cli_match = next((c for c in clis if _only_digits(c.get("cnpj_cpf")) == dest_digits and dest_digits), None)
+    
+    rep_match = next((r for r in reps if r["id"] == representada_id), None) if representada_id else next((r for r in reps if _only_digits(r.get("cnpj")) == emit_digits and emit_digits), None)
+    cli_match = next((c for c in clis if c["id"] == cliente_id), None) if cliente_id else next((c for c in clis if _only_digits(c.get("cnpj_cpf")) == dest_digits and dest_digits), None)
+        
     result = {
-        "representada_match": rep_match,
-        "cliente_match": cli_match,
+        "representada_match": rep_match, "cliente_match": cli_match,
         "representada_sugestoes": [{"id": r["id"], "nome": r.get("nome_fantasia") or r.get("razao_social"), "cnpj": r.get("cnpj")} for r in reps],
         "cliente_sugestoes": [{"id": c["id"], "nome": c.get("nome_fantasia") or c.get("razao_social"), "cnpj": c.get("cnpj_cpf")} for c in clis],
-        "pedido_criado": None,
-        "pedido_erro": None,
+        "pedido_criado": None, "pedido_erro": None,
     }
     if not rep_match or not cli_match:
         result["pedido_erro"] = "match_pendente"
         return result
+
     nf_num = parsed.get("numero")
     if nf_num:
         existing = await db.pedidos.find_one({"tenant_id": tid, "representada_id": rep_match["id"], "nf_numero": nf_num}, {"_id": 0})
@@ -1199,115 +1098,59 @@ async def _match_or_create_pedido(current: dict, parsed: dict,
             result["pedido_criado"] = existing
             result["pedido_erro"] = "duplicado_reutilizado"
             return result
+
     produtos = await t_list("produtos", current, {"representada_id": rep_match["id"]})
     itens_pedido = []
     for it in parsed.get("itens", []):
-        ean = (it.get("ean") or "").strip()
-        cod = (it.get("codigo") or "").strip()
-        prod = None
-        if ean and ean.lower() not in ("", "sem gtin"):
-            prod = next((p for p in produtos if (p.get("ean") or "").strip() == ean), None)
-        if not prod and cod:
-            prod = next((p for p in produtos if (p.get("codigo") or "").strip() == cod), None)
+        ean, cod = (it.get("ean") or "").strip(), (it.get("codigo") or "").strip()
+        prod = next((p for p in produtos if ean and ean.lower() not in ("", "sem gtin") and (p.get("ean") or "").strip() == ean), None)
+        if not prod and cod: prod = next((p for p in produtos if (p.get("codigo") or "").strip() == cod), None)
         if not prod:
-            prod = await t_insert("produtos", current, {
-                "nome": it.get("nome") or f"Produto {cod or ean}",
-                "codigo": cod, "ean": ean, "sku": cod,
-                "representada_id": rep_match["id"],
-                "preco_tabela": it.get("preco") or 0, "preco_sugerido": it.get("preco") or 0,
-                "custo": 0, "unidade": "UN", "qtd_por_caixa": 1, "status": "ativo",
-                "marca": rep_match.get("nome_fantasia", ""),
-            })
+            prod = await t_insert("produtos", current, {"nome": it.get("nome") or f"Produto {cod or ean}", "codigo": cod, "ean": ean, "sku": cod, "representada_id": rep_match["id"], "preco_tabela": it.get("preco", 0), "preco_sugerido": it.get("preco", 0), "custo": 0, "unidade": "UN", "qtd_por_caixa": 1, "status": "ativo", "marca": rep_match.get("nome_fantasia", "")})
             produtos.append(prod)
-        itens_pedido.append({"produto_id": prod["id"], "nome": prod.get("nome") or it.get("nome", ""),
-                             "quantidade": it.get("quantidade", 0), "preco_unitario": it.get("preco", 0),
-                             "desconto": 0.0, "subtotal": round(it.get("total", 0), 2)})
+        itens_pedido.append({"produto_id": prod["id"], "nome": prod.get("nome"), "quantidade": it.get("quantidade", 0), "preco_unitario": it.get("preco", 0), "desconto": 0.0, "subtotal": round(it.get("total", 0), 2)})
+
     comm = rep_match.get("comissao_padrao", 5.0)
     subtotal = sum(i["subtotal"] for i in itens_pedido)
     total = parsed.get("valor_total") or subtotal
     numero = await next_numero(tid, "PED", "pedidos")
+    
     pedido_data = {
-        "numero": numero,
-        "cliente_id": cli_match["id"],
-        "representada_id": rep_match["id"],
-        "condicao_pagamento": rep_match.get("prazo_pagamento") or "30 dias",
-        "itens": itens_pedido,
-        "subtotal": round(subtotal, 2),
-        "desconto_geral": 0.0,
-        "frete": 0.0,
-        "total": round(total, 2),
-        "comissao_percentual": comm,
-        "comissao_valor": round(total * comm / 100.0, 2),
-        "status": "faturado",
-        "data_pedido": parsed.get("data_emissao") or iso(now_utc()),
-        "observacoes": f"Importado de NF-e nº {parsed.get('numero')} ({parsed.get('filename','')})",
-        "nf_numero": parsed.get("numero"),
-        "nf_serie": parsed.get("serie"),
+        "numero": numero, "cliente_id": cli_match["id"], "representada_id": rep_match["id"], "condicao_pagamento": rep_match.get("prazo_pagamento") or "30 dias",
+        "itens": itens_pedido, "subtotal": round(subtotal, 2), "desconto_geral": 0.0, "frete": 0.0, "total": round(total, 2),
+        "comissao_percentual": comm, "comissao_valor": round(total * comm / 100.0, 2), "status": "faturado", "data_pedido": parsed.get("data_emissao") or iso(now_utc()),
+        "observacoes": f"Importado de NF-e nº {parsed.get('numero')}", "nf_numero": parsed.get("numero"), "nf_serie": parsed.get("serie"),
     }
     pedido = await t_insert("pedidos", current, pedido_data)
     
-    # Detalhamento da Comissão (XML)
-    valor_bruto = pedido_data["comissao_valor"]
+    valor_liquido = pedido_data["comissao_valor"]
+    modalidade = rep_match.get("modalidade_comissao", "faturamento")
+    
     comissao_data = {
-        "pedido_id": pedido["id"], 
-        "pedido_numero": pedido["numero"],
-        "cliente_id": cli_match["id"], 
-        "representada_id": rep_match["id"],
-        "data_pedido": pedido_data["data_pedido"],
-        "nf_numero": pedido_data["nf_numero"],
-        "valor_total_pedido": total,
-        "base_calculo": total,
-        "percentual": comm,
-        "valor_bruto": valor_bruto,
-        "descontos": 0.0,
-        "valor_liquido": valor_bruto,
-        "valor_recebido": 0.0,
-        "saldo_pendente": valor_bruto,
-        "data_prevista": iso(now_utc() + timedelta(days=30)),
-        "condicao_pagamento": pedido_data["condicao_pagamento"],
-        "status": "pendente",
-        "historico_recebimentos": [],
-        "observacoes": ""
+        "pedido_id": pedido["id"], "pedido_numero": pedido["numero"], "cliente_id": cli_match["id"], "representada_id": rep_match["id"],
+        "nf_numero": pedido_data["nf_numero"], "valor_total_pedido": total, "percentual": comm, "valor_liquido": valor_liquido,
+        "valor_recebido": 0.0, "saldo_pendente": valor_liquido, "modalidade": modalidade,
+        "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez", "historico_recebimentos": [], "data_prevista": iso(now_utc() + timedelta(days=30))
     }
     comissao = await t_insert("comissoes", current, comissao_data)
-    
-    # Gera Título Financeiro (XML)
-    await t_insert("contas_receber", current, {
-        "comissao_id": comissao["id"],
-        "cliente_id": cli_match["id"], 
-        "representada_id": rep_match["id"],
-        "pedido_id": pedido["id"], 
-        "numero_documento": f"{pedido['numero']} (XML)",
-        "valor": valor_bruto,
-        "valor_recebido": 0.0,
-        "saldo_pendente": valor_bruto,
-        "vencimento": comissao_data["data_prevista"],
-        "status": "aberto",
-        "historico_recebimentos": [],
-        "forma_pagamento": "Boleto",
-    })
+    if modalidade == "faturamento": await gerar_parcelas_comissao(current, pedido, comissao)
     
     result["pedido_criado"] = pedido
     return result
 
 @api.post("/xml/import")
 async def import_xml(body: XMLImportIn, current=Depends(get_current_user)):
-    if not body.xml_content or "<" not in body.xml_content:
-        raise HTTPException(400, "Conteúdo XML inválido ou vazio")
+    if not body.xml_content or "<" not in body.xml_content: raise HTTPException(400, "Conteúdo XML inválido")
     parsed = _parse_nfe(body.xml_content)
     parsed["filename"] = body.filename
-    if not parsed.get("numero") and not parsed.get("itens"):
-        raise HTTPException(400, "Não foi possível identificar NF-e no arquivo. Verifique o XML.")
+    if not parsed.get("numero") and not parsed.get("itens"): raise HTTPException(400, "Não foi possível identificar NF-e.")
     match_info = {}
     if body.create_pedido:
-        try:
-            match_info = await _match_or_create_pedido(current, parsed, body.representada_id, body.cliente_id)
+        try: match_info = await _match_or_create_pedido(current, parsed, body.representada_id, body.cliente_id)
         except Exception as e:
             logger.exception("falha ao criar pedido a partir do XML")
             match_info = {"pedido_erro": f"erro ao criar pedido: {e}"}
-    historico = {**parsed, "pedido_id": (match_info.get("pedido_criado") or {}).get("id"),
-                 "representada_id": (match_info.get("representada_match") or {}).get("id"),
-                 "cliente_id": (match_info.get("cliente_match") or {}).get("id")}
+    historico = {**parsed, "pedido_id": (match_info.get("pedido_criado") or {}).get("id"), "representada_id": (match_info.get("representada_match") or {}).get("id"), "cliente_id": (match_info.get("cliente_match") or {}).get("id")}
     await t_insert("xml_files", current, historico)
     return {**parsed, **match_info}
 
@@ -1315,47 +1158,14 @@ async def import_xml(body: XMLImportIn, current=Depends(get_current_user)):
 async def xml_historico(current=Depends(get_current_user)):
     return await t_list("xml_files", current)
 
-@api.post("/insights/ai")
-async def insights_ai(current=Depends(get_current_user)):
-    try:
-        from groq import Groq
-    except ImportError:
-        return {"insights": [], "erro": "Módulo 'groq' não instalado. Rode: pip install groq"}
-
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        return {"insights": [], "erro": "GROQ_API_KEY não configurada no arquivo .env."}
-
-    ctx = await _build_ai_context(current)
-    try:
-        client = Groq(api_key=key)
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "Você é um analista comercial. Retorne APENAS um JSON array com 4-6 objetos {tipo:'oportunidade|alerta|dica',titulo:'',descricao:''}. Sem markdown, sem texto extra antes ou depois."},
-                {"role": "user", "content": f"Dados: {ctx}"}
-            ],
-            model="openai/gpt-oss-120b",
-        )
-        raw = chat_completion.choices[0].message.content
-        m = re.search(r"\[.*\]", raw.strip(), re.S)
-        arr = json.loads(m.group(0)) if m else []
-        return {"insights": arr}
-    except Exception as e:
-        return {"insights": [], "erro": str(e)}
-
 # ------------------------------------------------------------
-# Backup Cron
+# Backup Cron / Stripe / Reset
 # ------------------------------------------------------------
 async def _run_backup(run_id: str):
-    if await db.backups.find_one({"run_id": run_id}):
-        logger.info(f"Backup {run_id} já existe, ignorando.")
-        return
-    snapshot: Dict[str, Any] = {"id": new_id(), "run_id": run_id,
-                                "created_at": iso(now_utc()), "collections": {}}
+    if await db.backups.find_one({"run_id": run_id}): return
+    snapshot = {"id": new_id(), "run_id": run_id, "created_at": iso(now_utc()), "collections": {}}
     total = 0
-    for name in ["users", "representadas", "clientes", "produtos", "pedidos",
-                 "oportunidades", "visitas", "comissoes", "contas_receber",
-                 "contas_pagar", "xml_files", "documentos"]:
+    for name in ["users", "representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos"]:
         docs = [clean_doc(d) async for d in db[name].find({}, {"_id": 0})]
         if name == "users":
             for u in docs: u.pop("password_hash", None)
@@ -1365,20 +1175,13 @@ async def _run_backup(run_id: str):
     old = db.backups.find({}, {"id": 1, "created_at": 1}).sort("created_at", -1).skip(14)
     to_del = [d["id"] async for d in old if d.get("id")]
     if to_del: await db.backups.delete_many({"id": {"$in": to_del}})
-    logger.info(f"Backup {run_id}: {total} docs")
 
 @api.post("/cron/backup")
-async def cron_backup(background: BackgroundTasks,
-                      authorization: Optional[str] = Header(None),
-                      x_webhook_id: Optional[str] = Header(None, alias="X-Webhook-Id")):
+async def cron_backup(background: BackgroundTasks, authorization: Optional[str] = Header(None), x_webhook_id: Optional[str] = Header(None, alias="X-Webhook-Id")):
     secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
-    if not secret or not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Unauthorized")
-    if not hmac.compare_digest(authorization[7:], secret):
-        raise HTTPException(401, "Unauthorized")
+    if not secret or not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(authorization[7:], secret): raise HTTPException(401, "Unauthorized")
     run_id = x_webhook_id or new_id()
-    if await db.backups.find_one({"run_id": run_id}):
-        return {"status": "duplicate", "run_id": run_id}
+    if await db.backups.find_one({"run_id": run_id}): return {"status": "duplicate", "run_id": run_id}
     background.add_task(_run_backup_wrapper, run_id)
     return {"status": "accepted", "run_id": run_id}
 
@@ -1388,43 +1191,27 @@ async def _run_backup_wrapper(run_id: str):
 
 @api.get("/backups")
 async def list_backups(current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores")
-    docs = await db.backups.find({}, {"_id": 0, "collections": 0}).sort("created_at", -1).to_list(50)
-    return docs
+    if current.get("role") != "admin": raise HTTPException(403, "Apenas administradores")
+    return await db.backups.find({}, {"_id": 0, "collections": 0}).sort("created_at", -1).to_list(50)
 
 @api.post("/backups/run")
 async def run_backup_now(background: BackgroundTasks, current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores")
+    if current.get("role") != "admin": raise HTTPException(403, "Apenas administradores")
     run_id = new_id()
     background.add_task(_run_backup_wrapper, run_id)
     return {"status": "accepted", "run_id": run_id}
 
-# ------------------------------------------------------------
-# Planos & Assinatura (Stripe)
-# ------------------------------------------------------------
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY") or "sk_test_emergent"
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
 PLANS = [
-    {"id": "solo", "name": "Solo", "lookup_key": "omnirepmax_solo_monthly", "price_brl": 69,
-     "features": ["Até 2 representadas", "Clientes e produtos ilimitados", "Funil Kanban",
-                  "Pedidos e comissões", "1 usuário", "Suporte por e-mail"]},
-    {"id": "pro", "name": "Profissional", "lookup_key": "omnirepmax_pro_monthly", "price_brl": 99,
-     "featured": True,
-     "features": ["Representadas ilimitadas", "MAX AI ilimitado", "Importação XML NF-e",
-                  "Contas a pagar/receber", "Até 5 usuários", "Backup diário automático",
-                  "Suporte prioritário"]},
-    {"id": "equipe", "name": "Equipe", "lookup_key": "omnirepmax_equipe_monthly", "price_brl": 129,
-     "features": ["Tudo do Profissional", "Usuários ilimitados",
-                  "Perfis Admin/Supervisor/Financeiro", "Relatórios exportáveis",
-                  "API para integração", "Onboarding assistido", "Suporte por WhatsApp"]},
+    {"id": "solo", "name": "Solo", "lookup_key": "omnirepmax_solo_monthly", "price_brl": 69, "features": ["Até 2 representadas", "Clientes e produtos ilimitados", "Funil Kanban", "Pedidos e comissões", "1 usuário", "Suporte por e-mail"]},
+    {"id": "pro", "name": "Profissional", "lookup_key": "omnirepmax_pro_monthly", "price_brl": 99, "featured": True, "features": ["Representadas ilimitadas", "MAX AI ilimitado", "Importação XML NF-e", "Contas a pagar/receber", "Até 5 usuários", "Backup diário automático", "Suporte prioritário"]},
+    {"id": "equipe", "name": "Equipe", "lookup_key": "omnirepmax_equipe_monthly", "price_brl": 129, "features": ["Tudo do Profissional", "Usuários ilimitados", "Perfis Admin/Supervisor/Financeiro", "Relatórios exportáveis", "API para integração", "Onboarding assistido", "Suporte por WhatsApp"]},
 ]
 
 @api.get("/plans")
-async def get_plans():
-    return {"plans": PLANS, "trial_days": 7}
+async def get_plans(): return {"plans": PLANS, "trial_days": 7}
 
 @api.get("/subscriptions/me")
 async def my_subscription(current=Depends(get_current_user)):
@@ -1437,32 +1224,16 @@ async def my_subscription(current=Depends(get_current_user)):
     if trial_ends and is_trial:
         te = _parse_date(trial_ends)
         trial_days_left = max(0, (te - now).days) if te else 0
-    return {
-        "plan": plan,
-        "subscription_status": user.get("subscription_status"),
-        "trial_ends_at": trial_ends,
-        "trial_days_left": trial_days_left,
-        "is_trial": is_trial,
-        "stripe_customer_id": user.get("stripe_customer_id"),
-        "stripe_subscription_id": user.get("stripe_subscription_id"),
-    }
+    return {"plan": plan, "subscription_status": user.get("subscription_status"), "trial_ends_at": trial_ends, "trial_days_left": trial_days_left, "is_trial": is_trial, "stripe_customer_id": user.get("stripe_customer_id"), "stripe_subscription_id": user.get("stripe_subscription_id")}
 
-class CheckoutIn(BaseModel):
-    lookup_key: str
-    origin_url: str
+class CheckoutIn(BaseModel): lookup_key: str; origin_url: str
 
 _TAX_MODE_CACHE: Dict[str, Optional[str]] = {"mode": None}
-
 def _tax_mode() -> str:
-    if _TAX_MODE_CACHE["mode"]:
-        return _TAX_MODE_CACHE["mode"]
-    try:
-        country = (stripe.Account.retrieve().get("country") or "").upper()
-    except Exception:
-        country = ""
-    smp = {"AU","AT","BE","BG","CA","HR","CY","CZ","DK","EE","FI","FR","DE",
-           "GI","GR","HK","HU","IE","IT","JP","LV","LI","LT","LU","MT","NL",
-           "NO","PL","PT","RO","SG","SK","SI","ES","SE","CH","GB","US"}
+    if _TAX_MODE_CACHE["mode"]: return _TAX_MODE_CACHE["mode"]
+    try: country = (stripe.Account.retrieve().get("country") or "").upper()
+    except Exception: country = ""
+    smp = {"AU","AT","BE","BG","CA","HR","CY","CZ","DK","EE","FI","FR","DE","GI","GR","HK","HU","IE","IT","JP","LV","LI","LT","LU","MT","NL","NO","PL","PT","RO","SG","SK","SI","ES","SE","CH","GB","US"}
     mode = "full" if country in smp else "calc_only"
     _TAX_MODE_CACHE["mode"] = mode
     return mode
@@ -1470,229 +1241,117 @@ def _tax_mode() -> str:
 @api.post("/payments/checkout")
 async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
     prices = stripe.Price.list(lookup_keys=[req.lookup_key], active=True, limit=1).data
-    if not prices:
-        raise HTTPException(400, f"Plano não encontrado: {req.lookup_key}")
+    if not prices: raise HTTPException(400, f"Plano não encontrado: {req.lookup_key}")
     price = prices[0]
     plan_id = req.lookup_key.replace("omnirepmax_", "").replace("_monthly", "")
-    kwargs = dict(
-        line_items=[{"price": price.id, "quantity": 1}],
-        mode="subscription" if price.recurring else "payment",
-        success_url=f"{req.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{req.origin_url}/planos",
-        metadata={"user_id": current["id"], "tenant_id": tid_of(current),
-                  "lookup_key": req.lookup_key, "plan_id": plan_id},
-        customer_email=current["email"],
-        allow_promotion_codes=True,
-    )
+    kwargs = dict(line_items=[{"price": price.id, "quantity": 1}], mode="subscription" if price.recurring else "payment", success_url=f"{req.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}", cancel_url=f"{req.origin_url}/planos", metadata={"user_id": current["id"], "tenant_id": tid_of(current), "lookup_key": req.lookup_key, "plan_id": plan_id}, customer_email=current["email"], allow_promotion_codes=True)
     mode = _tax_mode()
     try:
-        if mode == "full":
-            session = stripe.checkout.Session.create(**kwargs, managed_payments={"enabled": True})
-        else:
-            session = stripe.checkout.Session.create(**kwargs, automatic_tax={"enabled": True}, billing_address_collection="required")
+        if mode == "full": session = stripe.checkout.Session.create(**kwargs, managed_payments={"enabled": True})
+        else: session = stripe.checkout.Session.create(**kwargs, automatic_tax={"enabled": True}, billing_address_collection="required")
     except stripe.error.InvalidRequestError as e:
         msg = (getattr(e, "user_message", "") or "").lower()
-        if "managed payments" in msg or "ineligible" in msg or "tax" in msg:
-            session = stripe.checkout.Session.create(**kwargs)
-        else:
-            raise HTTPException(400, str(e))
-    await db.payment_transactions.insert_one({
-        "session_id": session.id, "user_id": current["id"], "tenant_id": tid_of(current),
-        "lookup_key": req.lookup_key, "plan_id": plan_id,
-        "amount": (price.unit_amount or 0), "currency": price.currency,
-        "status": "initiated", "payment_status": "pending",
-        "created_at": iso(now_utc()), "updated_at": iso(now_utc()),
-    })
+        if "managed payments" in msg or "ineligible" in msg or "tax" in msg: session = stripe.checkout.Session.create(**kwargs)
+        else: raise HTTPException(400, str(e))
+    await db.payment_transactions.insert_one({"session_id": session.id, "user_id": current["id"], "tenant_id": tid_of(current), "lookup_key": req.lookup_key, "plan_id": plan_id, "amount": (price.unit_amount or 0), "currency": price.currency, "status": "initiated", "payment_status": "pending", "created_at": iso(now_utc()), "updated_at": iso(now_utc())})
     return {"checkout_url": session.url, "session_id": session.id}
 
 async def _mark_session_paid(session_id: str, obj: dict):
     tx = await db.payment_transactions.find_one({"session_id": session_id})
-    if not tx or tx.get("payment_status") == "paid":
-        return
-    await db.payment_transactions.update_one(
-        {"session_id": session_id, "payment_status": {"$ne": "paid"}},
-        {"$set": {"status": "completed", "payment_status": "paid",
-                  "stripe_subscription_id": obj.get("subscription"),
-                  "stripe_payment_intent_id": obj.get("payment_intent"),
-                  "stripe_customer_id": obj.get("customer"),
-                  "updated_at": iso(now_utc())}}
-    )
+    if not tx or tx.get("payment_status") == "paid": return
+    await db.payment_transactions.update_one({"session_id": session_id, "payment_status": {"$ne": "paid"}}, {"$set": {"status": "completed", "payment_status": "paid", "stripe_subscription_id": obj.get("subscription"), "stripe_payment_intent_id": obj.get("payment_intent"), "stripe_customer_id": obj.get("customer"), "updated_at": iso(now_utc())}})
     user_id = tx.get("user_id") or (obj.get("metadata") or {}).get("user_id")
     plan_id = tx.get("plan_id") or (obj.get("metadata") or {}).get("plan_id")
-    if plan_id not in {"solo", "pro", "equipe"}:
-        plan_id = "pro"
+    if plan_id not in {"solo", "pro", "equipe"}: plan_id = "pro"
     if user_id:
-        await db.users.update_one({"id": user_id}, {"$set": {
-            "plan": plan_id,
-            "subscription_status": "active",
-            "stripe_customer_id": obj.get("customer"),
-            "stripe_subscription_id": obj.get("subscription"),
-            "subscription_updated_at": iso(now_utc()),
-        }})
+        await db.users.update_one({"id": user_id}, {"$set": {"plan": plan_id, "subscription_status": "active", "stripe_customer_id": obj.get("customer"), "stripe_subscription_id": obj.get("subscription"), "subscription_updated_at": iso(now_utc())}})
 
 @api.get("/payments/status/{session_id}")
 async def payment_status(session_id: str, current=Depends(get_current_user)):
-    tx = await db.payment_transactions.find_one(
-        {"session_id": session_id, "user_id": current["id"]}, {"_id": 0}
-    )
-    if not tx:
-        raise HTTPException(404, "Sessão não encontrada")
+    tx = await db.payment_transactions.find_one({"session_id": session_id, "user_id": current["id"]}, {"_id": 0})
+    if not tx: raise HTTPException(404, "Sessão não encontrada")
     if tx.get("payment_status") != "paid":
         try:
             s = stripe.checkout.Session.retrieve(session_id)
             if s.payment_status == "paid" or s.status == "complete":
-                await _mark_session_paid(session_id, {
-                    "subscription": s.subscription, "payment_intent": s.payment_intent,
-                    "customer": s.customer, "metadata": s.metadata or {},
-                })
-                tx = await db.payment_transactions.find_one(
-                    {"session_id": session_id, "user_id": current["id"]}, {"_id": 0}
-                )
-        except stripe.error.StripeError:
-            pass
-    return {"session_id": tx["session_id"], "status": tx["status"],
-            "payment_status": tx["payment_status"], "plan_id": tx.get("plan_id")}
+                await _mark_session_paid(session_id, {"subscription": s.subscription, "payment_intent": s.payment_intent, "customer": s.customer, "metadata": s.metadata or {}})
+                tx = await db.payment_transactions.find_one({"session_id": session_id, "user_id": current["id"]}, {"_id": 0})
+        except stripe.error.StripeError: pass
+    return {"session_id": tx["session_id"], "status": tx["status"], "payment_status": tx["payment_status"], "plan_id": tx.get("plan_id")}
 
 @api.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
-    if not STRIPE_WEBHOOK_SECRET:
-        raise HTTPException(500, "STRIPE_WEBHOOK_SECRET não configurado")
+    if not STRIPE_WEBHOOK_SECRET: raise HTTPException(500, "STRIPE_WEBHOOK_SECRET não configurado")
     payload = await request.body()
     sig = request.headers.get("stripe-signature", "")
-    try:
-        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
-    except stripe.error.SignatureVerificationError:
-        raise HTTPException(400, "Assinatura inválida")
+    try: event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError: raise HTTPException(400, "Assinatura inválida")
     obj, t = event["data"]["object"], event["type"]
-    if t == "checkout.session.completed":
-        await _mark_session_paid(obj["id"], obj)
-    elif t == "checkout.session.async_payment_succeeded":
-        await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"payment_status": "paid", "updated_at": iso(now_utc())}})
-    elif t == "checkout.session.async_payment_failed":
-        await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"status": "failed", "payment_status": "failed", "updated_at": iso(now_utc())}})
-    elif t == "customer.subscription.deleted":
-        await db.users.update_one({"stripe_subscription_id": obj.get("id")}, {"$set": {"subscription_status": "canceled", "plan": "canceled"}})
+    if t == "checkout.session.completed": await _mark_session_paid(obj["id"], obj)
+    elif t == "checkout.session.async_payment_succeeded": await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"payment_status": "paid", "updated_at": iso(now_utc())}})
+    elif t == "checkout.session.async_payment_failed": await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"status": "failed", "payment_status": "failed", "updated_at": iso(now_utc())}})
+    elif t == "customer.subscription.deleted": await db.users.update_one({"stripe_subscription_id": obj.get("id")}, {"$set": {"subscription_status": "canceled", "plan": "canceled"}})
     return {"status": "ok"}
 
-# ------------------------------------------------------------
-# System Reset
-# ------------------------------------------------------------
-RESET_COLLECTIONS = [
-    "clientes", "representadas", "produtos", "pedidos",
-    "oportunidades", "visitas", "comissoes",
-    "contas_receber", "contas_pagar",
-    "xml_files", "documentos",
-    "insights_ai", "max_ai_messages",
-]
-
-class SystemResetIn(BaseModel):
-    motivo: str
-    confirmacao: str
+RESET_COLLECTIONS = ["clientes", "representadas", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos", "insights_ai", "max_ai_messages"]
+class SystemResetIn(BaseModel): motivo: str; confirmacao: str
 
 @api.get("/system/reset/preview")
 async def system_reset_preview(current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores podem resetar o sistema")
+    if current.get("role") != "admin": raise HTTPException(403, "Apenas administradores")
     tid = tid_of(current)
     counts = {}
     for col in RESET_COLLECTIONS:
-        try:
-            counts[col] = await db[col].count_documents({"tenant_id": tid})
-        except Exception:
-            counts[col] = 0
+        try: counts[col] = await db[col].count_documents({"tenant_id": tid})
+        except Exception: counts[col] = 0
     return {"tenant_id": tid, "counts": counts, "total": sum(counts.values())}
 
 @api.post("/system/reset")
 async def system_reset(body: SystemResetIn, current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores podem resetar o sistema")
+    if current.get("role") != "admin": raise HTTPException(403, "Apenas administradores")
     motivo = (body.motivo or "").strip()
-    if len(motivo) < 10:
-        raise HTTPException(400, "Informe um motivo com pelo menos 10 caracteres")
-    if (body.confirmacao or "").strip().upper() != "RESETAR":
-        raise HTTPException(400, "Confirmação inválida. Digite 'RESETAR' para prosseguir.")
+    if len(motivo) < 10: raise HTTPException(400, "Informe um motivo com pelo menos 10 caracteres")
+    if (body.confirmacao or "").strip().upper() != "RESETAR": raise HTTPException(400, "Confirmação inválida")
     tid = tid_of(current)
-    started_at = iso(now_utc())
-    deleted_by_collection: dict = {}
-    errors: list = []
+    deleted_by_collection = {}
+    errors = []
     for col in RESET_COLLECTIONS:
         try:
             res = await db[col].delete_many({"tenant_id": tid})
             deleted_by_collection[col] = int(res.deleted_count or 0)
         except Exception as e:
-            errors.append({"collection": col, "error": str(e)})
-            deleted_by_collection[col] = 0
+            errors.append({"collection": col, "error": str(e)}); deleted_by_collection[col] = 0
     total_deleted = sum(deleted_by_collection.values())
     status = "success" if not errors else "partial"
-    audit_doc = {
-        "id": new_id(),
-        "tenant_id": tid,
-        "user_id": current["id"],
-        "user_email": current.get("email"),
-        "action": "system_reset",
-        "motivo": motivo,
-        "scope": RESET_COLLECTIONS,
-        "deleted_by_collection": deleted_by_collection,
-        "total_deleted": total_deleted,
-        "status": status,
-        "errors": errors,
-        "started_at": started_at,
-        "finished_at": iso(now_utc()),
-    }
-    try:
-        await db.audit_log.insert_one(audit_doc)
-    except Exception as e:
-        logger.error(f"Failed to write audit log for reset: {e}")
-    return {
-        "status": status,
-        "total_deleted": total_deleted,
-        "deleted_by_collection": deleted_by_collection,
-        "errors": errors,
-        "motivo": motivo,
-        "finished_at": audit_doc["finished_at"],
-    }
+    audit_doc = {"id": new_id(), "tenant_id": tid, "user_id": current["id"], "user_email": current.get("email"), "action": "system_reset", "motivo": motivo, "scope": RESET_COLLECTIONS, "deleted_by_collection": deleted_by_collection, "total_deleted": total_deleted, "status": status, "errors": errors, "started_at": iso(now_utc()), "finished_at": iso(now_utc())}
+    try: await db.audit_log.insert_one(audit_doc)
+    except Exception: pass
+    return {"status": status, "total_deleted": total_deleted, "deleted_by_collection": deleted_by_collection, "errors": errors, "motivo": motivo, "finished_at": audit_doc["finished_at"]}
 
 @api.get("/system/reset/history")
 async def system_reset_history(current=Depends(get_current_user), limit: int = 10):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores podem consultar o histórico")
+    if current.get("role") != "admin": raise HTTPException(403, "Apenas administradores")
     tid = tid_of(current)
     cur = db.audit_log.find({"tenant_id": tid, "action": "system_reset"}).sort("finished_at", -1).limit(max(1, min(limit, 50)))
     out = []
     async for d in cur:
-        d.pop("_id", None)
-        out.append(d)
+        d.pop("_id", None); out.append(d)
     return out
 
 # ------------------------------------------------------------
-# Register + startup
+# Startup / Shutdown
 # ------------------------------------------------------------
 app.include_router(api)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
-
-    try:
-        await db.counters.create_index([("tenant_id", 1), ("name", 1)], unique=True)
-    except Exception:
-        pass
-    try:
-        await db.backups.create_index("run_id", unique=True, sparse=True)
-    except Exception:
-        pass
-
-    for col in ["users", "representadas", "clientes", "produtos", "pedidos",
-                "oportunidades", "visitas", "comissoes", "contas_receber",
-                "contas_pagar", "xml_files", "documentos"]:
+    try: await db.counters.create_index([("tenant_id", 1), ("name", 1)], unique=True)
+    except Exception: pass
+    try: await db.backups.create_index("run_id", unique=True, sparse=True)
+    except Exception: pass
+    for col in ["users", "representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos"]:
         try: await db[col].create_index("id")
         except Exception: pass
         try: await db[col].create_index("tenant_id")
@@ -1703,38 +1362,24 @@ async def startup():
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
         uid = new_id()
-        await db.users.insert_one({
-            "id": uid, "tenant_id": uid, "email": admin_email,
-            "password_hash": hash_pw(admin_password), "name": "Álvaro",
-            "role": "admin", "plan": "pro", "created_at": iso(now_utc()),
-        })
-        logger.info(f"Admin seeded: {admin_email}")
+        await db.users.insert_one({"id": uid, "tenant_id": uid, "email": admin_email, "password_hash": hash_pw(admin_password), "name": "Álvaro", "role": "admin", "plan": "pro", "created_at": iso(now_utc())})
         existing = await db.users.find_one({"email": admin_email})
     else:
         patch = {}
-        if not verify_pw(admin_password, existing["password_hash"]):
-            patch["password_hash"] = hash_pw(admin_password)
-        if not existing.get("tenant_id"):
-            patch["tenant_id"] = existing["id"]
-        if existing.get("plan") != "pro":
-            patch["plan"] = "pro"
-        if existing.get("subscription_status") != "active":
-            patch["subscription_status"] = "active"
-        if existing.get("trial_ends_at"):
-            patch["trial_ends_at"] = None
-        if patch:
-            await db.users.update_one({"email": admin_email}, {"$set": patch})
+        if not verify_pw(admin_password, existing["password_hash"]): patch["password_hash"] = hash_pw(admin_password)
+        if not existing.get("tenant_id"): patch["tenant_id"] = existing["id"]
+        if existing.get("plan") != "pro": patch["plan"] = "pro"
+        if existing.get("subscription_status") != "active": patch["subscription_status"] = "active"
+        if existing.get("trial_ends_at"): patch["trial_ends_at"] = None
+        if patch: await db.users.update_one({"email": admin_email}, {"$set": patch})
     admin_tid = (existing.get("tenant_id") or existing["id"])
 
     try:
         from seed import seed_demo
         await seed_demo(db)
-    except ImportError:
-        logger.warning("Arquivo seed.py não encontrado, pulando dados de demonstração.")
+    except ImportError: pass
 
-    for col in ["representadas", "clientes", "produtos", "pedidos",
-                "oportunidades", "visitas", "comissoes", "contas_receber",
-                "contas_pagar", "xml_files", "documentos"]:
+    for col in ["representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos"]:
         await db[col].update_many({"tenant_id": {"$exists": False}}, {"$set": {"tenant_id": admin_tid}})
 
 @app.on_event("shutdown")
