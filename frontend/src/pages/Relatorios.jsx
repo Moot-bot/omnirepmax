@@ -3,16 +3,16 @@ import api from "../lib/api";
 import { PageHeader } from "../components/Common";
 import { Card } from "../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { fmtBRL } from "../lib/format";
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, 
   PieChart, Pie, Cell, Legend 
 } from "recharts";
 import { 
-  TrendingUp, DollarSign, Clock, Users, Package, 
-  Activity, AlertTriangle, CheckCircle2, ShoppingCart, Percent
+  TrendingUp, DollarSign, Users, Package, Activity, 
+  AlertTriangle, ShoppingCart
 } from "lucide-react";
+import { toast } from "sonner";
 
 const COLORS = ['#075BFF', '#08D5F5', '#F59E0B', '#8B5CF6', '#10B981', '#EC4899'];
 
@@ -24,8 +24,8 @@ export default function Relatorios() {
     try {
       const res = await api.get("/relatorios/geral");
       setData(res.data);
-    } catch {
-      // erro
+    } catch (e) {
+      toast.error("Erro ao carregar relatórios. Verifique se a rota /relatorios/geral existe no backend.");
     } finally {
       setLoading(false);
     }
@@ -33,13 +33,14 @@ export default function Relatorios() {
 
   useEffect(() => { load(); }, [load]);
 
-  if (loading || !data) return <div className="p-10 text-center">Gerando relatórios...</div>;
+  if (loading) return <div className="p-10 text-center text-slate-500">Gerando relatórios...</div>;
+  if (!data) return <div className="p-10 text-center text-rose-500">Não foi possível carregar os relatórios. Verifique o deploy do backend.</div>;
 
   return (
     <div className="pb-10">
       <PageHeader title="Relatórios Gerenciais" subtitle="Visão estratégica da sua operação" />
 
-      {/* PAINEL DE CICLO COMPLETO (Destaque no topo) */}
+      {/* PAINEL DE CICLO COMPLETO */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
         <Card className="p-4 border-l-4 border-l-blue-500 shadow-sm">
           <div className="text-[10px] font-bold text-slate-500 uppercase">Pedidos Pendentes</div>
@@ -64,7 +65,7 @@ export default function Relatorios() {
       </div>
 
       <Tabs defaultValue="vendas" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 md:grid-cols-6 mb-6 h-auto p-1 bg-slate-100 dark:bg-slate-900 rounded-xl">
+        <TabsList className="grid w-full grid-cols-2 md:grid-cols-5 mb-6 h-auto p-1 bg-slate-100 dark:bg-slate-900 rounded-xl">
           <TabsTrigger value="vendas" className="py-2"><TrendingUp className="w-4 h-4 mr-2" /> Vendas</TabsTrigger>
           <TabsTrigger value="financeiro" className="py-2"><DollarSign className="w-4 h-4 mr-2" /> Financeiro</TabsTrigger>
           <TabsTrigger value="clientes" className="py-2"><Users className="w-4 h-4 mr-2" /> Carteira</TabsTrigger>
@@ -109,16 +110,22 @@ export default function Relatorios() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card className="p-5">
               <h3 className="font-semibold mb-4">Conciliação de Faturamento</h3>
-              <Table>
-                <TableHeader><TableRow><TableHead>Descrição</TableHead><TableHead className="text-right">Valor</TableHead></TableRow></TableHeader>
-                <TableBody>
-                  <TableRow><TableCell>Valor Total dos Pedidos</TableCell><TableCell className="text-right font-mono">{fmtBRL(data.financeiro.valor_pedido)}</TableCell></TableRow>
-                  <TableRow><TableCell>Valor Efetivamente Faturado</TableCell><TableCell className="text-right font-mono text-amber-600">{fmtBRL(data.financeiro.valor_faturado)}</TableCell></TableRow>
-                  <TableRow><TableCell>Comissões Previstas</TableCell><TableCell className="text-right font-mono text-indigo-600">{fmtBRL(data.financeiro.com_prevista)}</TableCell></TableRow>
-                  <TableRow><TableCell>Comissões a Receber</TableCell><TableCell className="text-right font-mono text-rose-600">{fmtBRL(data.financeiro.com_a_receber)}</TableCell></TableRow>
-                  <TableRow><TableCell>Comissões Recebidas</TableCell><TableCell className="text-right font-mono text-emerald-600 font-bold">{fmtBRL(data.financeiro.com_recebida)}</TableCell></TableRow>
-                </TableBody>
-              </Table>
+              {/* Tabela HTML PURA (sem Shadcn) */}
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2 font-semibold">Descrição</th>
+                    <th className="text-right py-2 font-semibold">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b"><td className="py-2">Valor Total dos Pedidos</td><td className="py-2 text-right font-mono">{fmtBRL(data.financeiro.valor_pedido)}</td></tr>
+                  <tr className="border-b"><td className="py-2">Valor Efetivamente Faturado</td><td className="py-2 text-right font-mono text-amber-600">{fmtBRL(data.financeiro.valor_faturado)}</td></tr>
+                  <tr className="border-b"><td className="py-2">Comissões Previstas</td><td className="py-2 text-right font-mono text-indigo-600">{fmtBRL(data.financeiro.com_prevista)}</td></tr>
+                  <tr className="border-b"><td className="py-2">Comissões a Receber</td><td className="py-2 text-right font-mono text-rose-600">{fmtBRL(data.financeiro.com_a_receber)}</td></tr>
+                  <tr><td className="py-2 font-bold">Comissões Recebidas</td><td className="py-2 text-right font-mono text-emerald-600 font-bold">{fmtBRL(data.financeiro.com_recebida)}</td></tr>
+                </tbody>
+              </table>
             </Card>
             <Card className="p-5 flex flex-col items-center justify-center">
               <h3 className="font-semibold mb-4 self-start">Status das Comissões</h3>
@@ -131,7 +138,6 @@ export default function Relatorios() {
                     <Cell fill="#10B981" /><Cell fill="#F59E0B" />
                   </Pie>
                   <Tooltip formatter={(v) => fmtBRL(v)} />
-                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             </Card>
@@ -143,17 +149,26 @@ export default function Relatorios() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card className="p-5 lg:col-span-2">
               <h3 className="font-semibold mb-4">Curva ABC (Top Clientes)</h3>
-              <Table>
-                <TableHeader><TableRow><TableHead>Cliente</TableHead><TableHead className="text-right">Faturamento</TableHead><TableHead className="text-center">Curva</TableHead></TableRow></TableHeader>
-                <TableBody>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2 font-semibold">Cliente</th>
+                    <th className="text-right py-2 font-semibold">Faturamento</th>
+                    <th className="text-center py-2 font-semibold">Curva</th>
+                  </tr>
+                </thead>
+                <tbody>
                   {data.clientes.curva_abc.A.map((c, i) => (
-                    <TableRow key={i}><TableCell>{c.nome}</TableCell><TableCell className="text-right font-mono">{fmtBRL(c.valor)}</TableCell><TableCell className="text-center"><span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold">A</span></TableCell></TableRow>
+                    <tr key={i} className="border-b"><td className="py-2">{c.nome}</td><td className="py-2 text-right font-mono">{fmtBRL(c.valor)}</td><td className="py-2 text-center"><span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold">A</span></td></tr>
                   ))}
                   {data.clientes.curva_abc.B.map((c, i) => (
-                    <TableRow key={i}><TableCell>{c.nome}</TableCell><TableCell className="text-right font-mono">{fmtBRL(c.valor)}</TableCell><TableCell className="text-center"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">B</span></TableCell></TableRow>
+                    <tr key={i} className="border-b"><td className="py-2">{c.nome}</td><td className="py-2 text-right font-mono">{fmtBRL(c.valor)}</td><td className="py-2 text-center"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">B</span></td></tr>
                   ))}
-                </TableBody>
-              </Table>
+                  {data.clientes.curva_abc.A.length === 0 && data.clientes.curva_abc.B.length === 0 && (
+                    <tr><td colSpan={3} className="text-center py-4 text-slate-500">Nenhum cliente com faturamento ainda.</td></tr>
+                  )}
+                </tbody>
+              </table>
             </Card>
             <div className="space-y-4">
               <Card className="p-5 border-l-4 border-l-amber-500">
@@ -161,6 +176,9 @@ export default function Relatorios() {
                 <ul className="text-sm text-slate-600 space-y-1 max-h-32 overflow-y-auto">
                   {data.clientes.inativos.d60.map((n, i) => <li key={i}>• {n}</li>)}
                   {data.clientes.inativos.d90.map((n, i) => <li key={i} className="text-rose-500">• {n} (90d+)</li>)}
+                  {data.clientes.inativos.d60.length === 0 && data.clientes.inativos.d90.length === 0 && (
+                    <li className="text-slate-400">Nenhum cliente inativo.</li>
+                  )}
                 </ul>
               </Card>
             </div>
@@ -172,14 +190,21 @@ export default function Relatorios() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card className="p-5">
               <h3 className="font-semibold mb-4 text-emerald-600">Top 10 Produtos Vendidos</h3>
-              <Table>
-                <TableHeader><TableRow><TableHead>Produto</TableHead><TableHead className="text-right">Qtd</TableHead><TableHead className="text-right">Valor</TableHead></TableRow></TableHeader>
-                <TableBody>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2 font-semibold">Produto</th>
+                    <th className="text-right py-2 font-semibold">Qtd</th>
+                    <th className="text-right py-2 font-semibold">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
                   {data.produtos.top_produtos.map((p, i) => (
-                    <TableRow key={i}><TableCell className="font-medium">{p.nome}</TableCell><TableCell className="text-right">{p.qtd}</TableCell><TableCell className="text-right font-mono">{fmtBRL(p.valor)}</TableCell></TableRow>
+                    <tr key={i} className="border-b"><td className="py-2 font-medium">{p.nome}</td><td className="py-2 text-right">{p.qtd}</td><td className="py-2 text-right font-mono">{fmtBRL(p.valor)}</td></tr>
                   ))}
-                </TableBody>
-              </Table>
+                  {data.produtos.top_produtos.length === 0 && <tr><td colSpan={3} className="text-center py-4 text-slate-500">Nenhum produto vendido ainda.</td></tr>}
+                </tbody>
+              </table>
             </Card>
             <Card className="p-5">
               <h3 className="font-semibold mb-4 text-rose-600 flex items-center gap-2"><AlertTriangle className="w-4 h-4"/> Produtos sem Giro</h3>
@@ -190,6 +215,7 @@ export default function Relatorios() {
                     <span className="text-xs text-slate-400">{p.marca}</span>
                   </li>
                 ))}
+                {data.produtos.sem_giro.length === 0 && <li className="text-slate-500">Todos os produtos cadastrados já tiveram vendas.</li>}
               </ul>
             </Card>
           </div>
