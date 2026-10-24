@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Sparkles, BarChart3, Building2, Users, 
   Filter, Calendar, ShoppingCart, Percent, TrendingUp, 
   TrendingDown, Map, UploadCloud, Settings, LogOut, FileText,
-  Sun, Moon, Bell, Search, Menu, X, ExternalLink, UserPlus
+  Sun, Moon, Bell, Search, Menu, X, ExternalLink, UserPlus, MessageSquare
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
