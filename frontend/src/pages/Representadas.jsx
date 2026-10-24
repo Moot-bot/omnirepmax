@@ -10,11 +10,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { 
   Plus, Edit2, Trash2, Package, FileText, Upload, 
-  Building2, Download, Loader2, MapPin, Phone, FileSpreadsheet
+  Building2, Download, Loader2, MapPin, Phone, FileSpreadsheet,
+  History  // ✅ NOVO: ícone para o botão de histórico
 } from "lucide-react";
 import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
 import * as XLSX from 'xlsx';
+import HistoricoRegrasModal from "../components/HistoricoRegrasModal";
 
 const emptyRep = { 
   razao_social: "", nome_fantasia: "", cnpj: "", logo: "",
@@ -55,6 +57,10 @@ export default function Representadas() {
 
   const [docs, setDocs] = useState([]);
   const [uploading, setUploading] = useState(false);
+
+  // ✅ FIX: estados do histórico movidos para DENTRO do componente (estavam no escopo do módulo)
+  const [historicoOpen, setHistoricoOpen] = useState(false);
+  const [representadaSelecionada, setRepresentadaSelecionada] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -206,6 +212,12 @@ export default function Representadas() {
     await api.delete(`/documentos/${docId}`); loadDocs(selectedRep.id);
   };
 
+  // ✅ NOVO: abre o modal de histórico de regras para a representada selecionada
+  const openHistorico = (rep) => {
+    setRepresentadaSelecionada(rep);
+    setHistoricoOpen(true);
+  };
+
   return (
     <div className="pb-10">
       <PageHeader title="Representadas" subtitle="Gerencie as indústrias, seus catálogos e contratos" 
@@ -217,7 +229,18 @@ export default function Representadas() {
             <div className="flex justify-between items-start mb-4">
               {rep.logo ? <img src={rep.logo} alt="logo" className="w-12 h-12 rounded-xl object-contain bg-white border border-slate-100 p-1" /> : 
                 <div className="w-12 h-12 rounded-xl bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600 dark:text-blue-400"><Building2 className="w-6 h-6" /></div>}
-              <Button variant="ghost" size="sm" onClick={() => { setForm({...emptyRep, ...rep}); setEditing(rep.id); setOpen(true); }}><Edit2 className="w-4 h-4" /></Button>
+              {/* ✅ FIX: dois botões no canto superior direito */}
+              <div className="flex gap-1">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => openHistorico(rep)} 
+                  title="Histórico de Regras de Comissão"
+                >
+                  <History className="w-4 h-4" />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => { setForm({...emptyRep, ...rep}); setEditing(rep.id); setOpen(true); }}><Edit2 className="w-4 h-4" /></Button>
+              </div>
             </div>
             <h3 className="font-bold text-lg text-slate-900 dark:text-white truncate">{rep.nome_fantasia || rep.razao_social}</h3>
             <p className="text-sm text-slate-500 mb-2">{rep.cnpj}</p>
@@ -328,7 +351,6 @@ export default function Representadas() {
               </div>
               <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
                 <table className="w-full text-sm">
-                  {/* CORREÇÃO DO DARK MODE NO CABEÇALHO */}
                   <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
                     <tr>
                       <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-300">Nome / Marca</th>
@@ -412,7 +434,6 @@ export default function Representadas() {
                 <h4 className="font-semibold mb-2">Conferência ({importPreview.length} itens)</h4>
                 <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
                   <table className="w-full text-sm">
-                    {/* CORREÇÃO DO DARK MODE NO PREVIEW */}
                     <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 sticky top-0">
                       <tr>
                         <th className="px-4 py-2 text-left font-semibold text-slate-700 dark:text-slate-300">Nome</th>
@@ -437,6 +458,13 @@ export default function Representadas() {
           <DialogFooter><Button variant="outline" onClick={() => setImportOpen(false)}>Cancelar</Button><Button onClick={confirmarImportacao} disabled={importing || importPreview.filter(p => !p.isDuplicate).length === 0} className="bg-[#075BFF]">{importing ? "Importando..." : "Confirmar Importação"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ✅ NOVO: modal de histórico de regras de comissão */}
+      <HistoricoRegrasModal
+        open={historicoOpen}
+        onClose={() => setHistoricoOpen(false)}
+        representada={representadaSelecionada}
+      />
     </div>
   );
 }

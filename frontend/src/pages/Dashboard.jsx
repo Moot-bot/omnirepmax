@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { fmtBRL, fmtNum } from "../lib/format";
 import { useAuth } from "../context/AuthContext";
@@ -15,7 +16,6 @@ import {
 
 const CAT_COLORS = ["#075BFF", "#08D5F5", "#F59E0B", "#8B5CF6", "#10B981", "#EC4899", "#06B6D4", "#F43F5E"];
 
-// Fix para traduzir os meses (caso o backend mande em inglês)
 const MESES = {
   January: "Janeiro", February: "Fevereiro", March: "Março", April: "Abril",
   May: "Maio", June: "Junho", July: "Julho", August: "Agosto",
@@ -28,7 +28,6 @@ const traduzirTexto = (txt) => {
   return Object.keys(MESES).reduce((acc, en) => acc.replace(new RegExp(`\\b${en}\\b`, 'g'), MESES[en]), txt);
 };
 
-// Tooltip customizado para o Dark Mode
 const tooltipStyle = {
   backgroundColor: "rgba(15, 23, 42, 0.95)",
   border: "1px solid rgba(255,255,255,0.1)",
@@ -38,7 +37,7 @@ const tooltipStyle = {
   fontSize: "12px"
 };
 
-function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, badge }) {
+function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, badge, onClick }) {
   const bg = { 
     emerald: "from-emerald-500 to-emerald-600 shadow-emerald-500/20", 
     rose: "from-rose-500 to-rose-600 shadow-rose-500/20", 
@@ -48,7 +47,10 @@ function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, b
   }[color];
   
   return (
-    <div className={`relative overflow-hidden rounded-2xl p-5 bg-gradient-to-br ${bg} text-white shadow-lg transition-all duration-300 hover:-translate-y-1 hover:shadow-xl group cursor-default`}>
+    <div
+      onClick={onClick}
+      className={`relative overflow-hidden rounded-2xl p-5 bg-gradient-to-br ${bg} text-white shadow-lg transition-all duration-300 hover:-translate-y-1 hover:shadow-xl group ${onClick ? "cursor-pointer" : "cursor-default"}`}
+    >
       <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-white/10 group-hover:scale-110 transition-transform duration-500" />
       <div className="relative flex items-center justify-between">
         <Icon className="w-5 h-5 opacity-90 group-hover:opacity-100 transition-opacity" />
@@ -98,6 +100,7 @@ function Gauge({ score, label }) {
 export default function Dashboard() {
   const [d, setD] = useState(null);
   const { user } = useAuth();
+  const navigate = useNavigate();
   
   useEffect(() => { 
     api.get("/dashboard").then((r) => setD(r.data)); 
@@ -110,7 +113,6 @@ export default function Dashboard() {
   
   const mes = traduzirTexto(d.mes_atual);
 
-  // Novos dados do backend que já vinham mas não eram exibidos
   const fatPorRep = (d.faturamento_por_representada || []).map(r => ({
     nome: r.nome,
     volume: r.volume ?? r.valor ?? 0,
@@ -149,7 +151,11 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {d.avisos.map((a, i) => (
-              <div key={i} className="flex items-center gap-3 p-3.5 rounded-xl bg-rose-50/50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200 transition-colors hover:bg-rose-100/50 dark:hover:bg-rose-500/20">
+              <div
+                key={i}
+                onClick={() => navigate(a.tipo === "comissao" ? "/comissoes" : "/contas-receber")}
+                className="flex items-center gap-3 p-3.5 rounded-xl bg-rose-50/50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200 transition-colors hover:bg-rose-100/50 dark:hover:bg-rose-500/20 cursor-pointer"
+              >
                 <AlertCircle className="w-5 h-5 shrink-0 text-rose-500 dark:text-rose-400" />
                 <div className="flex-1 text-sm font-medium leading-tight">{traduzirTexto(a.titulo)}</div>
                 <div className="text-xs font-mono font-bold whitespace-nowrap bg-white/50 dark:bg-black/20 px-2 py-1 rounded-md">{fmtBRL(a.valor)}</div>
@@ -159,7 +165,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 4 chips coloridas (com subtítulos anuais e contagem) */}
+      {/* 4 chips coloridas — agora clicáveis */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Chip 
           label="Volume de Vendas (Mês)" 
@@ -168,6 +174,7 @@ export default function Dashboard() {
           icon={TrendingUp} 
           isZero={d.volume_vendas_mes === 0}
           subtitle={d.volume_vendas_ano ? `Ano: ${fmtBRL(d.volume_vendas_ano)}` : undefined}
+          onClick={() => navigate("/pedidos")}
         />
         <Chip 
           label="Faturamento Real (Mês)" 
@@ -176,6 +183,7 @@ export default function Dashboard() {
           icon={FileText} 
           isZero={d.valor_faturado_mes === 0}
           subtitle={d.valor_faturado_ano ? `Ano: ${fmtBRL(d.valor_faturado_ano)}` : undefined}
+          onClick={() => navigate("/pedidos")}
         />
         <Chip 
           label="Comissões Previstas" 
@@ -184,6 +192,7 @@ export default function Dashboard() {
           icon={Percent} 
           isZero={d.comissoes_previstas === 0}
           subtitle={d.comissoes_recebidas ? `Recebido: ${fmtBRL(d.comissoes_recebidas)}` : undefined}
+          onClick={() => navigate("/comissoes")}
         />
         <Chip 
           label="Em atraso" 
@@ -192,6 +201,7 @@ export default function Dashboard() {
           icon={AlertCircle} 
           isZero={d.em_atraso === 0}
           badge={emAtrasoCount > 0 ? `${emAtrasoCount} título${emAtrasoCount > 1 ? 's' : ''}` : undefined}
+          onClick={() => navigate("/contas-receber")}
         />
       </div>
 
@@ -204,10 +214,10 @@ export default function Dashboard() {
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
           <div className="flex items-center gap-2 text-sm font-semibold mb-5"><BarChart3 className="w-4 h-4 text-[#08D5F5]" />Projeção do mês</div>
           <div className="space-y-3">
-            <Row label="Pedidos em carteira (não faturados)" value={fmtBRL(d.projecao_valor)} good />
-            <Row label="Comissão projetada" value={fmtBRL(d.projecao_comissao)} good />
-            <Row label="A receber (abertas)" value={fmtBRL(d.contas_receber_abertas)} />
-            <Row label="A pagar (abertas)" value={fmtBRL(d.contas_pagar_abertas)} bad />
+            <Row label="Pedidos em carteira (não faturados)" value={fmtBRL(d.projecao_valor)} good onClick={() => navigate("/pedidos")} />
+            <Row label="Comissão projetada" value={fmtBRL(d.projecao_comissao)} good onClick={() => navigate("/comissoes")} />
+            <Row label="A receber (abertas)" value={fmtBRL(d.contas_receber_abertas)} onClick={() => navigate("/contas-receber")} />
+            <Row label="A pagar (abertas)" value={fmtBRL(d.contas_pagar_abertas)} bad onClick={() => navigate("/contas-pagar")} />
           </div>
         </div>
       </div>
@@ -217,15 +227,14 @@ export default function Dashboard() {
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
           <div className="text-sm font-semibold mb-4">Resumo do mês</div>
           <div className="space-y-1">
-            <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-blue-500" />} label="Volume de Vendas" value={fmtBRL(d.volume_vendas_mes)} valueClass="text-slate-900 dark:text-white" />
-            <ResumoRow icon={<FileText className="w-4 h-4 text-emerald-500" />} label="Faturamento Real (NFs)" value={fmtBRL(d.valor_faturado_mes)} valueClass="text-emerald-600 dark:text-emerald-400" />
-            <ResumoRow icon={<ArrowDownRight className="w-4 h-4 text-rose-500" />} label="Saídas (Despesas)" value={fmtBRL(d.despesas_mes)} valueClass="text-rose-600 dark:text-rose-400" />
+            <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-blue-500" />} label="Volume de Vendas" value={fmtBRL(d.volume_vendas_mes)} valueClass="text-slate-900 dark:text-white" onClick={() => navigate("/pedidos")} />
+            <ResumoRow icon={<FileText className="w-4 h-4 text-emerald-500" />} label="Faturamento Real (NFs)" value={fmtBRL(d.valor_faturado_mes)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/pedidos")} />
+            <ResumoRow icon={<ArrowDownRight className="w-4 h-4 text-rose-500" />} label="Saídas (Despesas)" value={fmtBRL(d.despesas_mes)} valueClass="text-rose-600 dark:text-rose-400" onClick={() => navigate("/contas-pagar")} />
             <ResumoRow icon={<Wallet className="w-4 h-4 text-blue-500" />} label="Diferença (Saldo)" value={fmtBRL(d.saldo_mes)} valueClass={d.saldo_mes >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"} />
-            <ResumoRow icon={<Users className="w-4 h-4 text-indigo-500" />} label="Clientes ativos / Novos" value={`${fmtNum(d.clientes_ativos)} / ${fmtNum(d.novos_clientes)}`} />
-            <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-amber-500" />} label="Pedidos abertos / Faturados" value={`${fmtNum(d.pedidos_abertos)} / ${fmtNum(d.pedidos_faturados)}`} />
-            {/* NOVO: linha de comissão recebida */}
-            <ResumoRow icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} label="Comissão recebida" value={fmtBRL(d.comissoes_recebidas)} valueClass="text-emerald-600 dark:text-emerald-400" />
-            <ResumoRow icon={<Percent className="w-4 h-4 text-emerald-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_abertas)} valueClass="text-emerald-600 dark:text-emerald-400" />
+            <ResumoRow icon={<Users className="w-4 h-4 text-indigo-500" />} label="Clientes ativos / Novos" value={`${fmtNum(d.clientes_ativos)} / ${fmtNum(d.novos_clientes)}`} onClick={() => navigate("/clientes")} />
+            <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-amber-500" />} label="Pedidos abertos / Faturados" value={`${fmtNum(d.pedidos_abertos)} / ${fmtNum(d.pedidos_faturados)}`} onClick={() => navigate("/pedidos")} />
+            <ResumoRow icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} label="Comissão recebida" value={fmtBRL(d.comissoes_recebidas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
+            <ResumoRow icon={<Percent className="w-4 h-4 text-emerald-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_abertas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
           </div>
         </div>
 
@@ -248,7 +257,11 @@ export default function Dashboard() {
               </ResponsiveContainer>
               <div className="space-y-2">
                 {d.gastos_por_categoria.map((g, i) => (
-                  <div key={g.categoria} className="flex items-center gap-2 text-xs bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-md">
+                  <div
+                    key={g.categoria}
+                    onClick={() => navigate("/contas-pagar")}
+                    className="flex items-center gap-2 text-xs bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded-md cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  >
                     <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: CAT_COLORS[i % CAT_COLORS.length] }} />
                     <span className="flex-1 truncate text-slate-700 dark:text-slate-300">{g.categoria}</span>
                     <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">{fmtBRL(g.valor)}</span>
@@ -260,7 +273,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Evolução de faturamento (mantido) */}
+      {/* Evolução de faturamento */}
       <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
         <div className="font-display font-bold text-lg mb-1">Evolução de Faturamento Real</div>
         <div className="text-xs text-slate-500 mb-6">Baseado nas Notas Fiscais emitidas (Últimos 6 meses)</div>
@@ -281,7 +294,7 @@ export default function Dashboard() {
         </ResponsiveContainer>
       </div>
 
-      {/* NOVO: Faturamento por Representada */}
+      {/* Faturamento por Representada */}
       <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
         <div className="flex items-center gap-2 text-sm font-semibold mb-1">
           <Building2 className="w-4 h-4 text-[#075BFF]" />Faturamento por Representada
@@ -306,7 +319,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* NOVO: Top Produtos + Produtividade (lado a lado) */}
+      {/* Top Produtos + Produtividade */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
           <div className="flex items-center gap-2 text-sm font-semibold mb-4">
@@ -320,7 +333,11 @@ export default function Dashboard() {
           ) : (
             <div className="space-y-2">
               {topProdutos.slice(0, 5).map((p, i) => (
-                <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                <div
+                  key={i}
+                  onClick={() => navigate("/representadas")}
+                  className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <span className="w-6 h-6 rounded-md bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-[11px] font-bold shrink-0">
                       {i + 1}
@@ -341,12 +358,18 @@ export default function Dashboard() {
             <Calendar className="w-4 h-4 text-[#08D5F5]" />Produtividade
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
+            <div
+              onClick={() => navigate("/agenda")}
+              className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            >
               <Calendar className="w-5 h-5 mx-auto mb-2 text-blue-500" />
               <div className="text-2xl font-bold text-slate-900 dark:text-white">{fmtNum(d.visitas_realizadas)}</div>
               <div className="text-[10px] uppercase text-slate-500 mt-1 font-semibold">Visitas realizadas</div>
             </div>
-            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
+            <div
+              onClick={() => navigate("/funil")}
+              className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            >
               <Target className="w-5 h-5 mx-auto mb-2 text-amber-500" />
               <div className="text-2xl font-bold text-slate-900 dark:text-white">{fmtNum(d.propostas_negociacao)}</div>
               <div className="text-[10px] uppercase text-slate-500 mt-1 font-semibold">Propostas em negociação</div>
@@ -368,20 +391,30 @@ export default function Dashboard() {
   );
 }
 
-// Componente para as linhas da Projeção
-function Row({ label, value, good, bad }) {
+// Componente para as linhas da Projeção (agora clicável)
+function Row({ label, value, good, bad, onClick }) {
   return (
-    <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
+    <div
+      onClick={onClick}
+      className={`flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800 last:border-0 ${
+        onClick ? "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 px-2 -mx-2 rounded transition-colors" : ""
+      }`}
+    >
       <div className="text-sm text-slate-600 dark:text-slate-300">{label}</div>
       <div className={`font-mono font-bold ${good ? "text-emerald-600 dark:text-emerald-400" : bad ? "text-rose-600 dark:text-rose-400" : "text-slate-900 dark:text-white"}`}>{value}</div>
     </div>
   );
 }
 
-// Componente para o Resumo do Mês
-function ResumoRow({ icon, label, value, valueClass = "text-slate-900 dark:text-white" }) {
+// Componente para o Resumo do Mês (agora clicável)
+function ResumoRow({ icon, label, value, valueClass = "text-slate-900 dark:text-white", onClick }) {
   return (
-    <div className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+    <div
+      onClick={onClick}
+      className={`flex items-center justify-between p-2 rounded-lg transition-colors ${
+        onClick ? "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50" : ""
+      }`}
+    >
       <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
         <div className="p-1.5 bg-slate-100 dark:bg-slate-800 rounded-md">{icon}</div>
         {label}

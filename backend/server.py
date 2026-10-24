@@ -114,12 +114,12 @@ def _parse_date(s):
 
 async def get_current_user(request: Request) -> dict:
     token = None
-    # ✅ FIX CRÍTICO MULTI-TENANT: Prioriza o Header Authorization (Token novo) 
+    # ✅ FIX CRÍTICO MULTI-TENANT: Prioriza o Header Authorization (Token novo)
     # antes do Cookie (que pode estar velho no navegador).
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
-    
+
     if not token:
         token = request.cookies.get("access_token")
 
@@ -127,7 +127,7 @@ async def get_current_user(request: Request) -> dict:
     try: payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
     except pyjwt.ExpiredSignatureError: raise HTTPException(401, "Token expirado")
     except pyjwt.InvalidTokenError: raise HTTPException(401, "Token inválido")
-    
+
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user: raise HTTPException(401, "Usuário não encontrado")
     user["tenant_id"] = user.get("tenant_id") or user["id"]
@@ -167,6 +167,76 @@ async def next_numero(tid: str, prefix: str, name: str) -> str:
     )
     return f"{prefix}-{int(res['seq']):05d}"
 
+# ✅ NOVO: Helper de auditoria padronizada
+async def _log_auditoria(
+    current: dict,
+    action: str,
+    entity: str,
+    entity_id: str,
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+    extra: Optional[dict] = None,
+):
+    """Registra uma entrada padronizada no audit_log.
+    Não lança exceção em caso de falha para não quebrar a operação principal."""
+    try:
+        entry = {
+            "id": new_id(),
+            "tenant_id": tid_of(current),
+            "user_id": current["id"],
+            "user_email": current.get("email"),
+            "action": action,
+            "entity": entity,
+            "entity_id": entity_id,
+            "before": before,
+            "after": after,
+            "extra": extra or {},
+            "created_at": iso(now_utc()),
+        }
+        await db.audit_log.insert_one(entry)
+        return entry
+    except Exception as e:
+        logger.error(f"Falha ao registrar auditoria: {e}")
+        return None
+
+# ✅ NOVO: Regra de comissão vigente em uma data de referência (fato gerador)
+async def comissao_vigente_em(tid: str, representada_id: str, data_ref_iso: Optional[str]) -> dict:
+    """
+    Retorna a regra de comissão vigente na data informada (fato gerador).
+    Usa a coleção regras_comissao; se não houver histórico, cai no valor atual
+    da representada (retrocompatível com tenants que ainda não migraram).
+
+    Regras de comparação:
+      - vigencia_inicio <= data_ref  (inclusivo no início)
+      - vigencia_fim é None OU > data_ref (exclusivo no fim, pois o fim
+        coincide com o início da próxima vigência)
+    """
+    d = _parse_date(data_ref_iso) or now_utc()
+    d_iso = iso(d)
+    regra = await db.regras_comissao.find_one(
+        {
+            "tenant_id": tid,
+            "representada_id": representada_id,
+            "vigencia_inicio": {"$lte": d_iso},
+            "$or": [
+                {"vigencia_fim": None},
+                {"vigencia_fim": {"$gt": d_iso}},
+            ],
+        },
+        {"_id": 0},
+        sort=[("vigencia_inicio", -1)],
+    )
+    if regra:
+        return regra
+    rep = await db.representadas.find_one(
+        {"id": representada_id, "tenant_id": tid}, {"_id": 0}
+    )
+    return rep or {
+        "comissao_padrao": 5.0,
+        "base_calculo_comissao": "faturado",
+        "modalidade_comissao": "faturamento",
+    }
+
 # ------------------------------------------------------------
 # Models
 # ------------------------------------------------------------
@@ -180,8 +250,8 @@ class SignupIn(BaseModel):
     name: str
     empresa: Optional[str] = ""
     telefone: Optional[str] = ""
-    tamanho_operacao: Optional[str] = "solo"      # <-- NOVO
-    controle_atual: Optional[str] = "planilha"    # <-- NOVO
+    tamanho_operacao: Optional[str] = "solo"
+    controle_atual: Optional[str] = "planilha"
 
 class UserProfileUpdate(BaseModel):
     name: Optional[str] = None
@@ -375,6 +445,29 @@ class FeedBackIn(BaseModel):
     mensagem: str
     nota: Optional[int] = 5
 
+class RegraComissaoIn(BaseModel):
+    representada_id: str
+    comissao_padrao: float
+    base_calculo_comissao: str
+    modalidade_comissao: str
+    vigencia_inicio: str
+    vigencia_fim: Optional[str] = None
+    observacoes: Optional[str] = ""
+
+# ✅ NOVO: Modelo de recebíveis da indústria (item 10 do Prompt Mestre)
+class RecebivelIndustriaIn(BaseModel):
+    representada_id: str
+    cliente_id: str
+    pedido_id: Optional[str] = ""
+    faturamento_id: Optional[str] = ""
+    numero_documento: Optional[str] = ""
+    valor: float
+    vencimento: str
+    data_recebimento: Optional[str] = ""
+    status: str = "aberto"
+    forma_pagamento: Optional[str] = ""
+    observacoes: Optional[str] = ""
+
 # ------------------------------------------------------------
 # Auth
 # ------------------------------------------------------------
@@ -387,7 +480,6 @@ def set_cookies(response: Response, token: str):
 
 @api.post("/auth/signup")
 async def signup(body: SignupIn, response: Response):
-    # ✅ FIX CRÍTICO: reescrita completa desta função (estava truncada)
     if len(body.password) < 8:
         raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
     email = body.email.lower()
@@ -409,12 +501,11 @@ async def signup(body: SignupIn, response: Response):
     }
     await db.users.insert_one(user)
 
-    # Salva o lead em coleção separada (nossa "planilha escondida")
     await db.leads.insert_one({
         "name": body.name,
         "email": email,
-        "tamanho_operacao": body.tamanho_operacao, # <-- NOVO
-        "controle_atual": body.controle_atual,  
+        "tamanho_operacao": body.tamanho_operacao,
+        "controle_atual": body.controle_atual,
         "empresa": body.empresa or "",
         "telefone": body.telefone or "",
         "plan": "trial",
@@ -454,12 +545,11 @@ async def update_me(body: UserProfileUpdate, current=Depends(get_current_user)):
 
 @api.post("/auth/logout")
 async def logout(response: Response):
-    # ✅ FIX: Para o navegador apagar o cookie, precisamos usar as mesmas flags de segurança
     response.delete_cookie(
-        key="access_token", 
-        path="/", 
-        secure=IS_PROD, 
-        samesite="none" if IS_PROD else "lax", 
+        key="access_token",
+        path="/",
+        secure=IS_PROD,
+        samesite="none" if IS_PROD else "lax",
         httponly=True
     )
     return {"ok": True}
@@ -557,6 +647,77 @@ async def del_documento(doc_id: str, current=Depends(get_current_user)):
     return {"ok": True}
 
 # ------------------------------------------------------------
+# Histórico de vigência das regras de comissão
+# ------------------------------------------------------------
+@api.get("/representadas/{rid}/regras-comissao")
+async def listar_regras_comissao(rid: str, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    rep = await db.representadas.find_one({"id": rid, "tenant_id": tid})
+    if not rep:
+        raise HTTPException(404, "Representada não encontrada")
+    regras = await db.regras_comissao.find(
+        {"tenant_id": tid, "representada_id": rid},
+        {"_id": 0}
+    ).sort("vigencia_inicio", -1).to_list(100)
+    return regras
+
+@api.post("/representadas/{rid}/regras-comissao")
+async def criar_regra_comissao(rid: str, body: RegraComissaoIn, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    rep = await db.representadas.find_one({"id": rid, "tenant_id": tid})
+    if not rep:
+        raise HTTPException(404, "Representada não encontrada")
+
+    now_iso = iso(now_utc())
+    await db.regras_comissao.update_many(
+        {"tenant_id": tid, "representada_id": rid, "vigencia_fim": None},
+        {"$set": {"vigencia_fim": body.vigencia_inicio}}
+    )
+
+    nova = {
+        "id": new_id(),
+        "tenant_id": tid,
+        "representada_id": rid,
+        "comissao_padrao": body.comissao_padrao,
+        "base_calculo_comissao": body.base_calculo_comissao,
+        "modalidade_comissao": body.modalidade_comissao,
+        "vigencia_inicio": body.vigencia_inicio,
+        "vigencia_fim": body.vigencia_fim,
+        "observacoes": body.observacoes or "",
+        "created_at": now_iso,
+        "created_by": current["id"],
+    }
+    await db.regras_comissao.insert_one(nova)
+
+    await db.representadas.update_one(
+        {"id": rid, "tenant_id": tid},
+        {"$set": {
+            "comissao_padrao": body.comissao_padrao,
+            "base_calculo_comissao": body.base_calculo_comissao,
+            "modalidade_comissao": body.modalidade_comissao,
+            "updated_at": now_iso,
+        }}
+    )
+
+    # ✅ NOVO: usa o helper padronizado (mantém compatibilidade com o formato antigo)
+    await _log_auditoria(
+        current, "regra_comissao_criada", "regras_comissao", nova["id"],
+        after=nova, extra={"representada_id": rid},
+    )
+    await db.audit_log.insert_one({
+        "id": new_id(),
+        "tenant_id": tid,
+        "user_id": current["id"],
+        "user_email": current.get("email"),
+        "action": "regra_comissao_criada",
+        "representada_id": rid,
+        "payload": nova,
+        "created_at": now_iso,
+    })
+
+    return {"ok": True, "id": nova["id"]}
+
+# ------------------------------------------------------------
 # Clientes
 # ------------------------------------------------------------
 @api.get("/clientes")
@@ -652,7 +813,6 @@ async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parc
     if not parcelas:
         parcelas = [{"vencimento": iso(now_utc() + timedelta(days=30)), "valor": valor_liquido}]
     else:
-        # ✅ FIX: ignorar valor do frontend, calcular do backend
         num = len(parcelas)
         valor_parcela = round(valor_liquido / num, 2)
         diferenca = round(valor_liquido - (valor_parcela * num), 2)
@@ -683,11 +843,10 @@ async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = 
     if status: f["status"] = status
     if cliente_id: f["cliente_id"] = cliente_id
     if representada_id: f["representada_id"] = representada_id
-    
+
     pedidos = await t_list("pedidos", current, f)
     faturamentos = await t_list("faturamentos", current)
 
-    # ✅ NOVO: Calcula o valor total faturado e o saldo pendente de cada pedido
     fat_dict = {}
     for fat in faturamentos:
         pid = fat.get("pedido_id")
@@ -701,6 +860,54 @@ async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = 
 
     return pedidos
 
+# ✅ NOVO: Painel de pedidos aguardando faturamento (item 7 do Prompt Mestre)
+@api.get("/pedidos/aguardando-faturamento")
+async def pedidos_aguardando_faturamento(
+    representada_id: Optional[str] = None,
+    cliente_id: Optional[str] = None,
+    dias_min: int = 0,
+    current=Depends(get_current_user),
+):
+    """
+    Pedidos com saldo a faturar. Retorna dias_aguardando desde a criação.
+    Filtro `dias_min` permite focar nos mais antigos (ex.: >15 dias).
+    """
+    tid = tid_of(current)
+    f: Dict[str, Any] = {
+        "status": {"$in": ["rascunho", "aprovado", "enviado", "faturado_parcial"]},
+    }
+    if representada_id: f["representada_id"] = representada_id
+    if cliente_id: f["cliente_id"] = cliente_id
+
+    pedidos = await db.pedidos.find({"tenant_id": tid, **f}, {"_id": 0}).to_list(2000)
+    faturamentos = await db.faturamentos.find({"tenant_id": tid}, {"_id": 0}).to_list(5000)
+
+    fat_dict: Dict[str, float] = {}
+    for fat in faturamentos:
+        pid = fat.get("pedido_id")
+        if pid:
+            fat_dict[pid] = fat_dict.get(pid, 0) + fat.get("valor_faturado", 0)
+
+    now = now_utc()
+    result = []
+    for p in pedidos:
+        valor_fat = fat_dict.get(p["id"], 0)
+        saldo = round(p.get("total", 0) - valor_fat, 2)
+        if saldo <= 0.01:
+            continue
+        data_ped = _parse_date(p.get("data_pedido"))
+        dias = (now - data_ped).days if data_ped else 0
+        if dias < dias_min:
+            continue
+        p["valor_faturado_total"] = round(valor_fat, 2)
+        p["saldo_a_faturar"] = saldo
+        p["dias_aguardando"] = dias
+        p["alerta"] = dias > 15
+        result.append(p)
+
+    result.sort(key=lambda x: -x["dias_aguardando"])
+    return result
+
 @api.post("/pedidos")
 async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
     tid = tid_of(current)
@@ -709,7 +916,9 @@ async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
     if not rep: raise HTTPException(404, "Representada não encontrada")
     cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
     if not cli: raise HTTPException(404, "Cliente não encontrado")
-    data = calc_pedido_totals(data, rep.get("comissao_padrao", 5.0))
+    # ✅ NOVO: usa a regra VIGENTE na data do pedido (não a atual)
+    regra = await comissao_vigente_em(tid, data["representada_id"], iso(now_utc()))
+    data = calc_pedido_totals(data, regra.get("comissao_padrao", 5.0))
     data["numero"] = await next_numero(tid, "PED", "pedidos")
     data["data_pedido"] = iso(now_utc())
     return await t_insert("pedidos", current, data)
@@ -726,7 +935,10 @@ async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_us
     if not rep: raise HTTPException(404, "Representada não encontrada")
     cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
     if not cli: raise HTTPException(404, "Cliente não encontrado")
-    data = calc_pedido_totals(data, rep.get("comissao_padrao", 5.0))
+    # ✅ NOVO: usa a regra vigente na data ORIGINAL do pedido (preserva o fato gerador)
+    data_ref = existing.get("data_pedido") or iso(now_utc())
+    regra = await comissao_vigente_em(tid, data["representada_id"], data_ref)
+    data = calc_pedido_totals(data, regra.get("comissao_padrao", 5.0))
     data["numero"] = existing["numero"]
     return await t_update("pedidos", current, pid, data)
 
@@ -744,17 +956,43 @@ async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(g
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not ped: raise HTTPException(404, "Pedido não encontrado")
 
-    rep = await db.representadas.find_one({"id": ped["representada_id"], "tenant_id": tid})
+    # ✅ NOVO: Idempotência de NF-e — bloqueia duplicata na mesma representada/emitente
+    if body.nf_numero:
+        pids_rep = [p["id"] async for p in db.pedidos.find(
+            {"tenant_id": tid, "representada_id": ped["representada_id"]},
+            {"id": 1, "_id": 0}
+        )]
+        dup = await db.faturamentos.find_one({
+            "tenant_id": tid,
+            "nf_numero": body.nf_numero,
+            "nf_serie": body.nf_serie or "",
+            "pedido_id": {"$in": pids_rep},
+        })
+        if dup:
+            raise HTTPException(
+                409,
+                f"NF {body.nf_numero}/{body.nf_serie or ''} já registrada no pedido "
+                f"{dup.get('pedido_numero') or dup.get('pedido_id')}. "
+                f"Se precisa corrigir, estorne o faturamento anterior."
+            )
 
-    # 1. Salva histórico do faturamento
+    # ✅ NOVO: usa a regra VIGENTE na data do faturamento (fato gerador real)
+    data_fat = body.data_faturamento or iso(now_utc())
+    regra = await comissao_vigente_em(tid, ped["representada_id"], data_fat)
+
+    # 1. Salva histórico do faturamento (com representada_id para futuras checagens)
     await t_insert("faturamentos", current, {
-        "pedido_id": pid, "nf_numero": body.nf_numero, "nf_serie": body.nf_serie,
-        "data_faturamento": body.data_faturamento,
+        "pedido_id": pid,
+        "pedido_numero": ped.get("numero"),
+        "representada_id": ped["representada_id"],
+        "nf_numero": body.nf_numero,
+        "nf_serie": body.nf_serie or "",
+        "data_faturamento": data_fat,
         "valor_faturado": body.valor_faturado,
     })
 
-    # 2. Calcula comissão com base na regra da representada
-    base = rep.get("base_calculo_comissao", "faturado")
+    # 2. Calcula comissão com base na regra vigente
+    base = regra.get("base_calculo_comissao", "faturado")
     if base == "pedido":
         valor_base = ped.get("total", 0)
     elif base == "recebido":
@@ -762,29 +1000,33 @@ async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(g
     else:
         valor_base = body.valor_faturado
 
-    percentual = rep.get("comissao_padrao", 5.0)
+    percentual = regra.get("comissao_padrao", 5.0)
     valor_liquido = round(valor_base * (percentual / 100), 2)
 
-    # 3. Cria comissão
+    # 3. Cria comissão (guarda base_calculo e data_faturamento para rastreabilidade)
+    modalidade = regra.get("modalidade_comissao", "faturamento")
     comissao_data = {
         "pedido_id": pid, "pedido_numero": ped.get("numero"),
         "cliente_id": ped.get("cliente_id"),
         "representada_id": ped.get("representada_id"),
         "nf_numero": body.nf_numero,
+        "nf_serie": body.nf_serie or "",
+        "data_faturamento": data_fat,
         "valor_total_pedido": ped.get("total", 0),
         "valor_faturado": body.valor_faturado,
         "percentual": percentual,
+        "base_calculo": base,
         "valor_liquido": valor_liquido,
         "valor_recebido": 0.0,
         "saldo_pendente": valor_liquido,
-        "modalidade": rep.get("modalidade_comissao", "faturamento"),
-        "status": "pendente" if rep.get("modalidade_comissao") == "faturamento" else "aguardando_liquidez",
+        "modalidade": modalidade,
+        "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez",
         "historico_recebimentos": [],
     }
     comissao = await t_insert("comissoes", current, comissao_data)
 
     # 4. Gera contas a receber se for faturamento
-    if rep.get("modalidade_comissao") == "faturamento" and valor_liquido > 0:
+    if modalidade == "faturamento" and valor_liquido > 0:
         await gerar_parcelas_comissao(current, ped, comissao, body.parcelas)
 
     # 5. Atualiza status do pedido
@@ -806,8 +1048,10 @@ async def confirmar_liquidez(pid: str, current=Depends(get_current_user)):
 
     await db.comissoes.update_one({"id": com["id"]}, {"$set": {"status": "pendente"}})
 
-    rep = await db.representadas.find_one({"id": ped["representada_id"], "tenant_id": tid})
-    if rep.get("base_calculo_comissao") == "recebido":
+    # ✅ NOVO: usa base_calculo GUARDADA na comissão (regra vigente no faturamento),
+    # não o valor atual da representada. Preserva o histórico.
+    base = com.get("base_calculo") or "faturado"
+    if base == "recebido":
         faturamentos = await t_list("faturamentos", current, {"pedido_id": pid})
         total_faturado = sum(f["valor_faturado"] for f in faturamentos)
         novo_valor = round(total_faturado * (com["percentual"] / 100), 2)
@@ -828,40 +1072,38 @@ async def del_pedido(pid: str, current=Depends(get_current_user)):
     await db.contas_receber.delete_many({"tenant_id": tid, "pedido_id": pid})
     await db.faturamentos.delete_many({"tenant_id": tid, "pedido_id": pid})
     return await t_delete("pedidos", current, pid)
+
 @api.post("/pedidos/{pid}/cancelar")
 async def cancelar_pedido(pid: str, current=Depends(get_current_user)):
     tid = tid_of(current)
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
-    if not ped: 
+    if not ped:
         raise HTTPException(404, "Pedido não encontrado")
-    
+
     if ped.get("status") == "cancelado":
         return {"ok": True, "message": "Pedido já está cancelado."}
 
-    # 1. Verifica se já houve recebimento (integridade)
     com_paga = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid, "valor_recebido": {"$gt": 0}})
     if com_paga:
         raise HTTPException(400, "Não é possível cancelar. Existe comissão já recebida. Estorne o recebimento primeiro.")
 
-    # 2. Cancela o Pedido
     await db.pedidos.update_one(
-        {"id": pid, "tenant_id": tid}, 
+        {"id": pid, "tenant_id": tid},
         {"$set": {"status": "cancelado", "updated_at": iso(now_utc())}}
     )
-    
-    # 3. Cancela a Comissão e Zera os Saldos
+
     await db.comissoes.update_many(
-        {"pedido_id": pid, "tenant_id": tid}, 
+        {"pedido_id": pid, "tenant_id": tid},
         {"$set": {"status": "cancelada", "saldo_pendente": 0.0, "updated_at": iso(now_utc())}}
     )
-    
-    # 4. Cancela os Títulos no Contas a Receber (apenas os que não foram recebidos)
+
     await db.contas_receber.update_many(
-        {"pedido_id": pid, "tenant_id": tid, "status": {"$ne": "recebido"}}, 
+        {"pedido_id": pid, "tenant_id": tid, "status": {"$ne": "recebido"}},
         {"$set": {"status": "cancelado", "saldo_pendente": 0.0, "updated_at": iso(now_utc())}}
     )
 
     return {"ok": True, "message": "Pedido cancelado e valores estornados com sucesso."}
+
 # ------------------------------------------------------------
 # Oportunidades / Visitas
 # ------------------------------------------------------------
@@ -911,9 +1153,27 @@ async def get_comissoes(status: Optional[str] = None, representada_id: Optional[
     if representada_id: f["representada_id"] = representada_id
     return await t_list("comissoes", current, f)
 
+# ✅ NOVO: auditoria em alterações de comissão (before/after)
 @api.patch("/comissoes/{cid}")
 async def update_comissao(cid: str, body: ComissaoUpdate, current=Depends(get_current_user)):
-    return await t_update("comissoes", current, cid, {k: v for k, v in body.model_dump().items() if v is not None})
+    tid = tid_of(current)
+    before = await db.comissoes.find_one({"id": cid, "tenant_id": tid}, {"_id": 0})
+    if not before:
+        raise HTTPException(404, "Comissão não encontrada")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        return before
+    result = await t_update("comissoes", current, cid, updates)
+    await _log_auditoria(
+        current,
+        action="comissao_alterada",
+        entity="comissoes",
+        entity_id=cid,
+        before=before,
+        after=result,
+        extra={"campos_alterados": list(updates.keys())},
+    )
+    return result
 
 @api.delete("/comissoes/{cid}")
 async def del_comissao(cid: str, current=Depends(get_current_user)):
@@ -985,6 +1245,121 @@ async def receber_comissao(rid: str, body: dict, current=Depends(get_current_use
     return {"ok": True, "novo_saldo": novo_saldo}
 
 # ------------------------------------------------------------
+# ✅ NOVO: Recebíveis da Indústria (item 10 do Prompt Mestre)
+# O representante acompanha o que a FÁBRICA tem a receber do cliente.
+# NÃO é receita própria do representante.
+# ------------------------------------------------------------
+@api.get("/recebiveis-industria")
+async def list_recebiveis_industria(
+    representada_id: Optional[str] = None,
+    cliente_id: Optional[str] = None,
+    status: Optional[str] = None,
+    current=Depends(get_current_user),
+):
+    f: Dict[str, Any] = {}
+    if representada_id: f["representada_id"] = representada_id
+    if cliente_id: f["cliente_id"] = cliente_id
+    if status: f["status"] = status
+    return await t_list("recebiveis_industria", current, f, sort_key="vencimento")
+
+@api.post("/recebiveis-industria")
+async def create_recebivel_industria(body: RecebivelIndustriaIn, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    rep = await db.representadas.find_one({"id": body.representada_id, "tenant_id": tid})
+    if not rep: raise HTTPException(404, "Representada não encontrada")
+    cli = await db.clientes.find_one({"id": body.cliente_id, "tenant_id": tid})
+    if not cli: raise HTTPException(404, "Cliente não encontrado")
+
+    data = body.model_dump()
+    data["valor_recebido"] = 0.0
+    data["saldo_pendente"] = body.valor
+    data["historico_recebimentos"] = []
+    doc = await t_insert("recebiveis_industria", current, data)
+    await _log_auditoria(
+        current, "recebivel_industria_criado", "recebiveis_industria", doc["id"],
+        after=doc,
+    )
+    return doc
+
+@api.post("/recebiveis-industria/{rid}/receber")
+async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    rec = await db.recebiveis_industria.find_one({"id": rid, "tenant_id": tid})
+    if not rec: raise HTTPException(404, "Recebível não encontrado")
+
+    valor = float(body.get("valor", 0))
+    if valor <= 0: raise HTTPException(400, "Valor deve ser maior que zero")
+    data_receb = body.get("data", iso(now_utc()))
+
+    saldo_atual = rec.get("saldo_pendente", rec.get("valor", 0))
+    novo_saldo = max(0.0, saldo_atual - valor)
+    novo_total = rec.get("valor_recebido", 0) + valor
+    novo_status = "recebido" if novo_saldo <= 0.01 else "parcial"
+
+    historico = rec.get("historico_recebimentos", [])
+    historico.append({
+        "data": data_receb,
+        "valor": round(valor, 2),
+        "saldo_restante": round(novo_saldo, 2),
+    })
+
+    await db.recebiveis_industria.update_one(
+        {"id": rid, "tenant_id": tid},
+        {"$set": {
+            "valor_recebido": round(novo_total, 2),
+            "saldo_pendente": round(novo_saldo, 2),
+            "status": novo_status,
+            "historico_recebimentos": historico,
+            "updated_at": iso(now_utc()),
+        }}
+    )
+
+    # ✅ AUTO-LIQUIDEZ: se o recebível cobre o valor total e existe uma comissão
+    # aguardando liquidez para o mesmo pedido, libera automaticamente.
+    liberou_comissao = False
+    if rec.get("pedido_id") and novo_saldo <= 0.01:
+        com = await db.comissoes.find_one({
+            "pedido_id": rec["pedido_id"],
+            "tenant_id": tid,
+            "status": "aguardando_liquidez",
+        })
+        if com:
+            await db.comissoes.update_one(
+                {"id": com["id"]},
+                {"$set": {"status": "pendente", "updated_at": iso(now_utc())}}
+            )
+            liberou_comissao = True
+            await _log_auditoria(
+                current, "comissao_liberada_por_liquidez", "comissoes", com["id"],
+                extra={"recebivel_id": rid},
+            )
+
+    await _log_auditoria(
+        current, "recebivel_industria_recebido", "recebiveis_industria", rid,
+        extra={"valor_recebido": round(valor, 2), "novo_saldo": round(novo_saldo, 2),
+               "liberou_comissao": liberou_comissao},
+    )
+
+    return {
+        "ok": True,
+        "novo_saldo": round(novo_saldo, 2),
+        "status": novo_status,
+        "comissao_liberada": liberou_comissao,
+    }
+
+@api.delete("/recebiveis-industria/{rid}")
+async def del_recebivel_industria(rid: str, current=Depends(get_current_user)):
+    rec = await db.recebiveis_industria.find_one({"id": rid, "tenant_id": tid_of(current)})
+    if not rec: raise HTTPException(404, "Recebível não encontrado")
+    if rec.get("valor_recebido", 0) > 0:
+        raise HTTPException(400, "Recebíveis com valor recebido não podem ser excluídos. Use estorno.")
+    await _log_auditoria(
+        current, "recebivel_industria_excluido", "recebiveis_industria", rid,
+        before=rec,
+    )
+    return await t_delete("recebiveis_industria", current, rid)
+
+# ------------------------------------------------------------
 # Contas a Pagar
 # ------------------------------------------------------------
 @api.get("/contas-pagar")
@@ -1014,7 +1389,6 @@ def _in_year(s, y):
 
 @api.get("/dashboard")
 async def dashboard(current=Depends(get_current_user)):
-    # ✅ NOVO: Adicionado 'faturamentos' no gather
     pedidos, reps, comissoes, ap, ar, clientes, visitas, ops, faturamentos = await asyncio.gather(
         t_list("pedidos", current), t_list("representadas", current), t_list("comissoes", current),
         t_list("contas_pagar", current), t_list("contas_receber", current), t_list("clientes", current),
@@ -1024,18 +1398,15 @@ async def dashboard(current=Depends(get_current_user)):
     faturados = [p for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")]
     now = now_utc(); mes = now.month; ano = now.year
 
-    # ✅ NOVO: Volume de Vendas (Valor dos Pedidos)
     volume_vendas_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
     volume_vendas_ano = sum(p.get("total", 0) for p in faturados if _in_year(p.get("data_pedido"), ano))
 
-    # ✅ NOVO: Faturamento Real (Soma das NFs emitidas)
     valor_faturado_mes = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_month(f.get("data_faturamento"), ano, mes))
     valor_faturado_ano = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_year(f.get("data_faturamento"), ano))
 
     fat_por_rep = []
     for r in reps:
         v_vendas = sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"])
-        # Calcula o faturamento real por rep cruzando os IDs
         p_ids = [p["id"] for p in pedidos if p.get("representada_id") == r["id"]]
         v_fat = sum(f.get("valor_faturado", 0) for f in faturamentos if f.get("pedido_id") in p_ids)
         fat_por_rep.append({
@@ -1051,8 +1422,7 @@ async def dashboard(current=Depends(get_current_user)):
     ar_abertas = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
 
     despesas_mes = sum(a.get("valor", 0) for a in ap if a.get("status") == "pago" and _in_month(a.get("vencimento"), ano, mes))
-    
-    # ✅ NOVO: O saldo do mês agora usa o faturamento real (dinheiro que entrou) e não o volume
+
     saldo_mes = valor_faturado_mes - despesas_mes
 
     em_atraso_valor = 0.0; em_atraso_count = 0
@@ -1073,7 +1443,6 @@ async def dashboard(current=Depends(get_current_user)):
     visitas_realizadas = sum(1 for v in visitas if v.get("status") == "realizada")
     propostas_neg = sum(1 for o in ops if o.get("estagio") in ("proposta", "negociacao"))
 
-    # ✅ NOVO: Série histórica baseada no Faturamento Real (Faturamentos) e não nos Pedidos
     serie = []
     for i in range(5, -1, -1):
         d = (now.replace(day=1) - timedelta(days=30 * i))
@@ -1091,7 +1460,7 @@ async def dashboard(current=Depends(get_current_user)):
         c = a.get("categoria", "Outros"); cat_total[c] = cat_total.get(c, 0) + a.get("valor", 0)
     gastos_por_categoria = sorted([{"categoria": k, "valor": round(v, 2)} for k, v in cat_total.items()], key=lambda x: -x["valor"])
 
-    if valor_faturado_mes <= 0: 
+    if valor_faturado_mes <= 0:
         saude = 50
     else:
         margem = max(0.0, min(1.0, (valor_faturado_mes - despesas_mes) / valor_faturado_mes))
@@ -1119,35 +1488,36 @@ async def dashboard(current=Depends(get_current_user)):
 
     return {
         "mes_atual": f"{MESES_PT[mes]} de {ano}",
-        "volume_vendas_mes": round(volume_vendas_mes, 2), 
+        "volume_vendas_mes": round(volume_vendas_mes, 2),
         "volume_vendas_ano": round(volume_vendas_ano, 2),
-        "valor_faturado_mes": round(valor_faturado_mes, 2), 
+        "valor_faturado_mes": round(valor_faturado_mes, 2),
         "valor_faturado_ano": round(valor_faturado_ano, 2),
         "faturamento_por_representada": fat_por_rep,
-        "comissoes_previstas": round(com_abertas, 2), 
+        "comissoes_previstas": round(com_abertas, 2),
         "comissoes_recebidas": round(com_recebidas, 2),
         "comissoes_abertas": round(com_abertas, 2),
-        "contas_pagar_abertas": round(ap_abertas, 2), 
+        "contas_pagar_abertas": round(ap_abertas, 2),
         "contas_receber_abertas": round(ar_abertas, 2),
-        "despesas_mes": round(despesas_mes, 2), 
+        "despesas_mes": round(despesas_mes, 2),
         "saldo_mes": round(saldo_mes, 2),
-        "em_atraso": round(em_atraso_valor, 2), 
+        "em_atraso": round(em_atraso_valor, 2),
         "em_atraso_count": em_atraso_count,
-        "projecao_valor": round(projecao_valor, 2), 
+        "projecao_valor": round(projecao_valor, 2),
         "projecao_comissao": round(projecao_comissao, 2),
-        "pedidos_abertos": pedidos_abertos, 
+        "pedidos_abertos": pedidos_abertos,
         "pedidos_faturados": pedidos_faturados,
-        "clientes_ativos": clientes_ativos, 
+        "clientes_ativos": clientes_ativos,
         "novos_clientes": novos,
-        "visitas_realizadas": visitas_realizadas, 
+        "visitas_realizadas": visitas_realizadas,
         "propostas_negociacao": propostas_neg,
-        "serie_faturamento": serie, 
+        "serie_faturamento": serie,
         "top_produtos": top_produtos,
         "gastos_por_categoria": gastos_por_categoria,
-        "saude_financeira": saude, 
-        "saude_label": saude_label, 
+        "saude_financeira": saude,
+        "saude_label": saude_label,
         "avisos": avisos,
     }
+
 # ------------------------------------------------------------
 # Insights & IA
 # ------------------------------------------------------------
@@ -1393,7 +1763,11 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
             "desconto": 0.0, "subtotal": round(it.get("total", 0), 2)
         })
 
-    comm = rep.get("comissao_padrao", 5.0)
+    # ✅ NOVO: usa a regra vigente na data de emissão da NF-e
+    data_emissao = parsed.get("data_emissao") or iso(now_utc())
+    regra = await comissao_vigente_em(tid, rep["id"], data_emissao)
+    comm = regra.get("comissao_padrao", 5.0)
+
     subtotal = sum(i["subtotal"] for i in itens)
     total = parsed.get("valor_total") or subtotal
     numero = await next_numero(tid, "PED", "pedidos")
@@ -1406,27 +1780,34 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
         "comissao_percentual": comm,
         "comissao_valor": round(total * comm / 100.0, 2),
         "status": "faturado",
-        "data_pedido": parsed.get("data_emissao") or iso(now_utc()),
+        "data_pedido": data_emissao,
         "observacoes": f"Importado de NF-e nº {parsed.get('numero')}",
         "nf_numero": parsed.get("numero"), "nf_serie": parsed.get("serie"),
     })
 
     await t_insert("faturamentos", current, {
-        "pedido_id": pedido["id"], "nf_numero": parsed.get("numero"),
-        "nf_serie": parsed.get("serie"),
-        "data_faturamento": parsed.get("data_emissao") or iso(now_utc()),
+        "pedido_id": pedido["id"],
+        "pedido_numero": pedido["numero"],
+        "representada_id": rep["id"],
+        "nf_numero": parsed.get("numero"),
+        "nf_serie": parsed.get("serie") or "",
+        "data_faturamento": data_emissao,
         "valor_faturado": total,
     })
 
     valor_liquido = round(total * comm / 100.0, 2)
-    modalidade = rep.get("modalidade_comissao", "faturamento")
+    modalidade = regra.get("modalidade_comissao", "faturamento")
 
     comissao = await t_insert("comissoes", current, {
         "pedido_id": pedido["id"], "pedido_numero": pedido["numero"],
         "cliente_id": cli["id"], "representada_id": rep["id"],
         "nf_numero": parsed.get("numero"),
+        "nf_serie": parsed.get("serie") or "",
+        "data_faturamento": data_emissao,
         "valor_total_pedido": total, "valor_faturado": total,
-        "percentual": comm, "valor_liquido": valor_liquido,
+        "percentual": comm,
+        "base_calculo": regra.get("base_calculo_comissao", "faturado"),
+        "valor_liquido": valor_liquido,
         "valor_recebido": 0.0, "saldo_pendente": valor_liquido,
         "modalidade": modalidade,
         "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez",
@@ -1583,12 +1964,11 @@ async def create_feedback(body: FeedBackIn, current=Depends(get_current_user)):
         "nota": body.nota,
     })
     return {"ok": True, "message": "Feedback enviado com sucesso!"}
+
 @api.get("/admin/feedbacks")
 async def list_feedbacks(current=Depends(get_current_user)):
     if current.get("role") != "admin":
         raise HTTPException(403, "Apenas administradores podem ver os feedbacks.")
-    
-    # Pega os 100 feedbacks mais recentes
     feedbacks = await db.feedbacks.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     return feedbacks
 
@@ -1617,49 +1997,49 @@ async def export_leads_csv(current=Depends(get_current_user)):
     )
 
 # ------------------------------------------------------------
-# ✅ NOVA ROTA: Recálculo de comissões antigas (não apaga dados)
+# Recálculo de comissões antigas — ✅ NOVO: usa vigência histórica
 # ------------------------------------------------------------
 @api.post("/admin/recalcular-comissoes")
 async def recalcular_comissoes(current=Depends(get_current_user)):
     """
-    Corrige comissões e contas a receber JÁ EXISTENTES com base nos dados atuais das representadas.
-    Não apaga nada, apenas recalcula os valores.
-    Use uma única vez após o deploy desta versão.
+    Recalcula comissões históricas usando a regra VIGENTE NA DATA DO FATURAMENTO
+    de cada comissão (não a regra atual da representada).
+    Preserva o item 9 do Prompt Mestre: alterações de percentual não retroagem.
+    Idempotente: só corrige o que divergir > 1 centavo.
     """
     if current.get("role") != "admin":
         raise HTTPException(403, "Apenas administradores")
     tid = tid_of(current)
 
-    reps = {r["id"]: r for r in await db.representadas.find({"tenant_id": tid}).to_list(500)}
     comissoes = await db.comissoes.find({"tenant_id": tid}).to_list(5000)
 
     total_corrigidas = 0
     detalhes = []
 
     for com in comissoes:
-        rep = reps.get(com.get("representada_id"))
-        if not rep:
+        representada_id = com.get("representada_id")
+        if not representada_id:
             continue
 
-        # Valor base: usa o valor faturado da comissão (ou o total do pedido se não tiver)
+        # Referência temporal: data do faturamento (fato gerador).
+        # Fallback: created_at (sempre igual à data do faturamento na criação).
+        data_ref = com.get("data_faturamento") or com.get("created_at")
+        regra = await comissao_vigente_em(tid, representada_id, data_ref)
+
         valor_base = com.get("valor_faturado") or com.get("valor_total_pedido") or 0
-        percentual = rep.get("comissao_padrao", 5.0)
+        percentual = regra.get("comissao_padrao", 5.0)
         valor_liquido_correto = round(valor_base * percentual / 100.0, 2)
 
         valor_liquido_antigo = com.get("valor_liquido", 0)
-
-        # Só corrige se a diferença for significativa (> 1 centavo)
         if abs(valor_liquido_correto - valor_liquido_antigo) < 0.01:
             continue
 
-        # Calcula quanto já foi recebido (para recalcular o saldo)
         valor_recebido = com.get("valor_recebido", 0)
         novo_saldo = round(max(0.0, valor_liquido_correto - valor_recebido), 2)
         novo_status = "recebida" if novo_saldo <= 0.01 else (
             "parcialmente_recebida" if valor_recebido > 0 else com.get("status", "pendente")
         )
 
-        # Atualiza a comissão
         await db.comissoes.update_one(
             {"id": com["id"], "tenant_id": tid},
             {"$set": {
@@ -1671,7 +2051,6 @@ async def recalcular_comissoes(current=Depends(get_current_user)):
             }}
         )
 
-        # Corrige as parcelas no contas_receber deste comissao_id
         parcelas = await db.contas_receber.find(
             {"comissao_id": com["id"], "tenant_id": tid}
         ).sort("vencimento", 1).to_list(100)
@@ -1705,13 +2084,15 @@ async def recalcular_comissoes(current=Depends(get_current_user)):
             "pedido": com.get("pedido_numero"),
             "valor_antigo": valor_liquido_antigo,
             "valor_novo": valor_liquido_correto,
+            "data_ref": data_ref,
+            "regra_vigente_inicio": regra.get("vigencia_inicio"),
         })
 
     return {
         "ok": True,
         "total_corrigidas": total_corrigidas,
         "total_comissoes_verificadas": len(comissoes),
-        "detalhes": detalhes[:20],  # mostra até 20 exemplos
+        "detalhes": detalhes[:20],
     }
 
 # ------------------------------------------------------------
@@ -1723,7 +2104,8 @@ async def _run_backup(run_id: str):
     total = 0
     for name in ["users", "representadas", "clientes", "produtos", "pedidos",
                  "oportunidades", "visitas", "comissoes", "contas_receber",
-                 "contas_pagar", "xml_files", "documentos", "faturamentos"]:
+                 "contas_pagar", "xml_files", "documentos", "faturamentos",
+                 "regras_comissao", "recebiveis_industria"]:
         docs = [clean_doc(d) async for d in db[name].find({}, {"_id": 0})]
         if name == "users":
             for u in docs: u.pop("password_hash", None)
@@ -1902,7 +2284,8 @@ async def stripe_webhook(request: Request):
 RESET_COLLECTIONS = ["clientes", "representadas", "produtos", "pedidos",
                      "oportunidades", "visitas", "comissoes", "contas_receber",
                      "contas_pagar", "xml_files", "documentos", "faturamentos",
-                     "insights_ai", "max_ai_messages"]
+                     "insights_ai", "max_ai_messages", "regras_comissao",
+                     "recebiveis_industria"]
 
 class SystemResetIn(BaseModel):
     motivo: str; confirmacao: str
@@ -1970,7 +2353,8 @@ async def startup():
     except Exception: pass
     for col in ["users", "representadas", "clientes", "produtos", "pedidos",
                 "oportunidades", "visitas", "comissoes", "contas_receber",
-                "contas_pagar", "xml_files", "documentos", "faturamentos"]:
+                "contas_pagar", "xml_files", "documentos", "faturamentos",
+                "regras_comissao", "recebiveis_industria"]:
         try: await db[col].create_index("id")
         except Exception: pass
         try: await db[col].create_index("tenant_id")
@@ -2005,7 +2389,8 @@ async def startup():
 
     for col in ["representadas", "clientes", "produtos", "pedidos",
                 "oportunidades", "visitas", "comissoes", "contas_receber",
-                "contas_pagar", "xml_files", "documentos", "faturamentos"]:
+                "contas_pagar", "xml_files", "documentos", "faturamentos",
+                "regras_comissao", "recebiveis_industria"]:
         await db[col].update_many({"tenant_id": {"$exists": False}}, {"$set": {"tenant_id": admin_tid}})
 
 @app.on_event("shutdown")

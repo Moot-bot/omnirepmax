@@ -14,6 +14,8 @@ import MaxAI from "./pages/MaxAI";
 import Plans from "./pages/Plans";
 import PaymentSuccess from "./pages/PaymentSuccess";
 import Representadas from "./pages/Representadas";
+import AguardandoFaturamento from "./pages/AguardandoFaturamento";
+import RecebiveisIndustria from "./pages/RecebiveisIndustria";
 import Clientes from "./pages/Clientes";
 import Kanban from "./pages/Kanban";
 import Pedidos from "./pages/Pedidos";
@@ -46,6 +48,8 @@ export default function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
+            <Route path="/pedidos/aguardando-faturamento" element={<AguardandoFaturamento />} />
+            <Route path="/recebiveis-industria" element={<RecebiveisIndustria />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />

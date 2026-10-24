@@ -2,14 +2,15 @@ import React, { useState, useEffect, useRef } from "react";
 import { NavLink, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
-import { 
-  LayoutDashboard, Sparkles, BarChart3, MessageSquare, 
-  Building2, Users, Filter, Calendar, 
-  ShoppingCart, UploadCloud, 
-  Percent, TrendingUp, TrendingDown, 
+import {
+  LayoutDashboard, Sparkles, BarChart3, MessageSquare,
+  Building2, Users, Filter, Calendar,
+  ShoppingCart, UploadCloud,
+  Percent, TrendingUp, TrendingDown,
   FileText, Map, Settings, LogOut,
-  Search, Menu, X, ExternalLink, UserPlus, 
-  Sun, Moon, Bell, Package, ShieldAlert // <-- ADICIONADO ShieldAlert
+  Search, Menu, X, ExternalLink, UserPlus,
+  Sun, Moon, Bell, Package, ShieldAlert,
+  Clock, Landmark  // ✅ NOVO
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -39,6 +40,7 @@ const MENU_SECTIONS = [
     items: [
       { label: "Pedidos", icon: ShoppingCart, path: "/pedidos" },
       { label: "Importar XML", icon: UploadCloud, path: "/xml" },
+      { label: "Aguardando Faturamento", icon: Clock, path: "/pedidos/aguardando-faturamento" },
     ]
   },
   {
@@ -47,6 +49,7 @@ const MENU_SECTIONS = [
       { label: "Comissões", icon: Percent, path: "/comissoes" },
       { label: "Contas a Receber", icon: TrendingUp, path: "/contas-receber" },
       { label: "Contas a Pagar", icon: TrendingDown, path: "/contas-pagar" },
+      { label: "Recebíveis Indústria", icon: Landmark, path: "/recebiveis-industria" },
     ]
   },
   {
