@@ -32,6 +32,7 @@ import Feedback from "./pages/Feedback";
 import ResetPassword from "./pages/ResetPassword";
 import Admin from "./pages/Admin";
 
+
 function Protected({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="p-12 text-slate-500">Carregando...</div>;
@@ -48,8 +49,6 @@ export default function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
-            <Route path="/pedidos/aguardando-faturamento" element={<AguardandoFaturamento />} />
-            <Route path="/recebiveis-industria" element={<RecebiveisIndustria />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
@@ -63,7 +62,9 @@ export default function App() {
               <Route path="/clientes" element={<Clientes />} />
               <Route path="/funil" element={<Kanban />} />
               <Route path="/pedidos" element={<Pedidos />} />
+              <Route path="/pedidos/aguardando-faturamento" element={<AguardandoFaturamento />} />  {/* ✅ NOVO */}
               <Route path="/comissoes" element={<Comissoes />} />
+              <Route path="/recebiveis-industria" element={<RecebiveisIndustria />} />              {/* ✅ NOVO */}
               <Route path="/contas-receber" element={<ContasReceber />} />
               <Route path="/contas-pagar" element={<ContasPagar />} />
               <Route path="/agenda" element={<Agenda />} />

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -22,7 +22,7 @@ export default function HistoricoRegrasModal({ open, onClose, representada }) {
     observacoes: "",
   });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!representada) return;
     setLoading(true);
     try {
@@ -30,9 +30,9 @@ export default function HistoricoRegrasModal({ open, onClose, representada }) {
       setRegras(data);
     } catch { toast.error("Erro ao carregar histórico"); }
     finally { setLoading(false); }
-  };
+  }, [representada]);
 
-  useEffect(() => { if (open) load(); }, [open, representada]);
+  useEffect(() => { if (open) load(); }, [open, load]);
 
   const criar = async () => {
     if (!representada) return;

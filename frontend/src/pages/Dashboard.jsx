@@ -7,7 +7,8 @@ import {
   TrendingUp, Wallet, AlertCircle, Sparkles, BarChart3, 
   PieChart as PieIcon, Target, ArrowUpRight, ArrowDownRight, 
   Users, ShoppingCart, Percent, FileText,
-  Building2, Package, Calendar, CheckCircle2
+  Building2, Package, Calendar, CheckCircle2,
+  Landmark  // ✅ NOVO: ícone do card de Recebíveis da Indústria
 } from "lucide-react";
 import { 
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, 
@@ -102,8 +103,15 @@ export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
   
+  // ✅ NOVO: estado para recebíveis da indústria (item 10 do Prompt Mestre)
+  const [recebiveisIndustria, setRecebiveisIndustria] = useState([]);
+
   useEffect(() => { 
     api.get("/dashboard").then((r) => setD(r.data)); 
+    // ✅ NOVO: busca paralela dos recebíveis da indústria
+    api.get("/recebiveis-industria")
+      .then(r => setRecebiveisIndustria(r.data || []))
+      .catch(() => setRecebiveisIndustria([]));
   }, []);
 
   if (!d) return <div className="flex items-center justify-center h-full text-slate-500 animate-pulse">Carregando dashboard...</div>;
@@ -121,6 +129,11 @@ export default function Dashboard() {
 
   const topProdutos = d.top_produtos || [];
   const emAtrasoCount = d.em_atraso_count || 0;
+
+  // ✅ NOVO: total de recebíveis da indústria (controle, NÃO é receita própria)
+  const totalRecebiveisInd = recebiveisIndustria
+    .filter(r => r.status !== "recebido" && r.status !== "cancelado")
+    .reduce((s, r) => s + (r.saldo_pendente || 0), 0);
 
   return (
     <div className="space-y-6 pb-10">
@@ -219,6 +232,32 @@ export default function Dashboard() {
             <Row label="A receber (abertas)" value={fmtBRL(d.contas_receber_abertas)} onClick={() => navigate("/contas-receber")} />
             <Row label="A pagar (abertas)" value={fmtBRL(d.contas_pagar_abertas)} bad onClick={() => navigate("/contas-pagar")} />
           </div>
+        </div>
+      </div>
+
+      {/* ✅ NOVO: Recebíveis da Indústria — controle do que a fábrica tem a receber (NÃO é receita própria) */}
+      <div
+        onClick={() => navigate("/recebiveis-industria")}
+        className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer flex items-center justify-between gap-4"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center">
+            <Landmark className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Recebíveis da Indústria (controle)
+            </p>
+            <p className="text-xl font-bold text-slate-900 dark:text-white mt-0.5">
+              {fmtBRL(totalRecebiveisInd)}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              Não é receita sua — apenas controle do que a fábrica tem a receber
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 text-xs font-semibold text-[#075BFF] shrink-0">
+          Gerenciar <ArrowUpRight className="w-4 h-4" />
         </div>
       </div>
 
