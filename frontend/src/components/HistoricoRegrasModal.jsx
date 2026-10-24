@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
-import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -55,10 +54,13 @@ export default function HistoricoRegrasModal({ open, onClose, representada }) {
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+        <DialogTitle className="flex items-center gap-2">
             <History className="w-5 h-5" />
             Histórico de Regras — {representada?.nome_fantasia || representada?.razao_social}
-          </DialogTitle>
+        </DialogTitle>
+        <DialogDescription className="sr-only">
+            Histórico de vigências de comissão desta representada.
+        </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
