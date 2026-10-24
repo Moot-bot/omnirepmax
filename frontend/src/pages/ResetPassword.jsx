@@ -12,7 +12,7 @@ export default function ResetPassword() {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (password.length < 8) return toast.error("Senha deve ter 8 caracteres");
+    if (password.length < 8) return toast.error("A senha deve ter ao menos 8 caracteres");
     setBusy(true);
     try {
       await api.post("/auth/reset-password", { token, password });

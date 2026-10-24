@@ -7,6 +7,7 @@ import AppShell from "./components/AppShell";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword"; // <-- IMPORT ADICIONADO AQUI
 import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import MaxAI from "./pages/MaxAI";
@@ -46,8 +47,8 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} /> {/* <-- ROTA ADICIONADA AQUI */}
             <Route path="/payment/success" element={<PaymentSuccess />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
             
             {/* ROTAS PROTEGIDAS (Exigem Login) */}
             <Route element={<Protected><AppShell /></Protected>}>
