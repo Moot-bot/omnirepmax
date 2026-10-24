@@ -113,14 +113,21 @@ def _parse_date(s):
     except Exception: return None
 
 async def get_current_user(request: Request) -> dict:
-    token = request.cookies.get("access_token")
+    token = None
+    # ✅ FIX CRÍTICO MULTI-TENANT: Prioriza o Header Authorization (Token novo) 
+    # antes do Cookie (que pode estar velho no navegador).
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+    
     if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "): token = auth[7:]
+        token = request.cookies.get("access_token")
+
     if not token: raise HTTPException(401, "Não autenticado")
     try: payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
     except pyjwt.ExpiredSignatureError: raise HTTPException(401, "Token expirado")
     except pyjwt.InvalidTokenError: raise HTTPException(401, "Token inválido")
+    
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user: raise HTTPException(401, "Usuário não encontrado")
     user["tenant_id"] = user.get("tenant_id") or user["id"]

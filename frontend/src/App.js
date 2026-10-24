@@ -47,6 +47,7 @@ export default function App() {
             <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             
             {/* ROTAS PROTEGIDAS (Exigem Login) */}
             <Route element={<Protected><AppShell /></Protected>}>
