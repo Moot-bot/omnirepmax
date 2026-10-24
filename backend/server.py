@@ -443,7 +443,14 @@ async def update_me(body: UserProfileUpdate, current=Depends(get_current_user)):
 
 @api.post("/auth/logout")
 async def logout(response: Response):
-    response.delete_cookie("access_token", path="/")
+    # ✅ FIX: Precisamos passar as mesmas flags de segurança (secure, samesite) para o navegador aceitar apagar
+    response.delete_cookie(
+        "access_token", 
+        path="/", 
+        secure=IS_PROD, 
+        samesite="none" if IS_PROD else "lax", 
+        httponly=True
+    )
     return {"ok": True}
 
 @api.post("/auth/forgot-password")

@@ -31,9 +31,15 @@ export function AuthProvider({ children }) {
     try { const { data } = await api.get("/auth/me"); setUser(data); } catch {}
   };
   const logout = async () => {
-    try { await api.post("/auth/logout"); } catch {}
-    localStorage.removeItem("omnirep_token");
-    setUser(null);
+      try {
+          await api.post("/auth/logout");
+      } catch (e) {
+          console.error(e);
+      } finally {
+          // ✅ FIX: Apaga o token do navegador independentemente de a API responder ou não
+          localStorage.removeItem("omnirep_token");
+          setUser(null); 
+      }
   };
 
   return (
