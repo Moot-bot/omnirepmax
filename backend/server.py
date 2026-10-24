@@ -828,7 +828,40 @@ async def del_pedido(pid: str, current=Depends(get_current_user)):
     await db.contas_receber.delete_many({"tenant_id": tid, "pedido_id": pid})
     await db.faturamentos.delete_many({"tenant_id": tid, "pedido_id": pid})
     return await t_delete("pedidos", current, pid)
+@api.post("/pedidos/{pid}/cancelar")
+async def cancelar_pedido(pid: str, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
+    if not ped: 
+        raise HTTPException(404, "Pedido não encontrado")
+    
+    if ped.get("status") == "cancelado":
+        return {"ok": True, "message": "Pedido já está cancelado."}
 
+    # 1. Verifica se já houve recebimento (integridade)
+    com_paga = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid, "valor_recebido": {"$gt": 0}})
+    if com_paga:
+        raise HTTPException(400, "Não é possível cancelar. Existe comissão já recebida. Estorne o recebimento primeiro.")
+
+    # 2. Cancela o Pedido
+    await db.pedidos.update_one(
+        {"id": pid, "tenant_id": tid}, 
+        {"$set": {"status": "cancelado", "updated_at": iso(now_utc())}}
+    )
+    
+    # 3. Cancela a Comissão e Zera os Saldos
+    await db.comissoes.update_many(
+        {"pedido_id": pid, "tenant_id": tid}, 
+        {"$set": {"status": "cancelada", "saldo_pendente": 0.0, "updated_at": iso(now_utc())}}
+    )
+    
+    # 4. Cancela os Títulos no Contas a Receber (apenas os que não foram recebidos)
+    await db.contas_receber.update_many(
+        {"pedido_id": pid, "tenant_id": tid, "status": {"$ne": "recebido"}}, 
+        {"$set": {"status": "cancelado", "saldo_pendente": 0.0, "updated_at": iso(now_utc())}}
+    )
+
+    return {"ok": True, "message": "Pedido cancelado e valores estornados com sucesso."}
 # ------------------------------------------------------------
 # Oportunidades / Visitas
 # ------------------------------------------------------------
