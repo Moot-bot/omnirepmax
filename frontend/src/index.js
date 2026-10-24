@@ -13,10 +13,14 @@ const queryClient = new QueryClient({
   },
 });
 
-// PWA: registra service worker (instalável no celular)
+// ✅ FIX: Desregistra o Service Worker para limpar o cache antigo que estava te prendendo no Dashboard
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.getRegistrations().then(function (registrations) {
+    for (let registration of registrations) {
+      registration.unregister().then(() => {
+        console.log("Service Worker desregistrado com sucesso.");
+      });
+    }
   });
 }
 
