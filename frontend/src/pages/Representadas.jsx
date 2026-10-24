@@ -15,15 +15,15 @@ import {
 import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
 
-// Formulário expandido com o campo de modalidade
+// Formulário expandido com WhatsApp
 const emptyRep = { 
   razao_social: "", nome_fantasia: "", cnpj: "", logo: "",
   inscricao_estadual: "", segmento: "",
   cep: "", endereco: "", cidade: "", estado: "",
-  telefone: "", email: "", site: "", 
+  telefone: "", whatsapp: "", email: "", site: "", // <-- WHATSAPP ADICIONADO
   contato_nome: "", contato_cargo: "",
   comissao_padrao: 5.0, 
-  modalidade_comissao: "faturamento", // <-- NOVO CAMPO AQUI
+  modalidade_comissao: "faturamento",
   prazo_pagamento: "30 dias", 
   observacoes: ""
 };
@@ -36,17 +36,14 @@ export default function Representadas() {
   const [editing, setEditing] = useState(null);
   const [loadingCnpj, setLoadingCnpj] = useState(false);
 
-  // Estados do Modal de Detalhes (Catálogo & Docs)
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedRep, setSelectedRep] = useState(null);
   
-  // Produtos
   const [produtos, setProdutos] = useState([]);
   const [prodOpen, setProdOpen] = useState(false);
   const [prodForm, setProdForm] = useState(emptyProd);
   const [prodEditing, setProdEditing] = useState(null);
 
-  // Documentos
   const [docs, setDocs] = useState([]);
   const [uploading, setUploading] = useState(false);
 
@@ -54,24 +51,19 @@ export default function Representadas() {
     try {
       const { data } = await api.get("/representadas");
       setList(data);
-    } catch {
-      toast.error("Erro ao carregar representadas.");
-    }
+    } catch { toast.error("Erro ao carregar representadas."); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  // --- Lógica de Busca de CNPJ ---
   const buscarCNPJ = async (cnpjRaw) => {
     const cnpj = cnpjRaw.replace(/\D/g, '');
     if (cnpj.length !== 14) return;
-    
     setLoadingCnpj(true);
     try {
       const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
       if (!res.ok) throw new Error("CNPJ não encontrado");
       const data = await res.json();
-      
       setForm(prev => ({
         ...prev,
         razao_social: data.razao_social || prev.razao_social,
@@ -84,37 +76,26 @@ export default function Representadas() {
         estado: data.uf || prev.estado,
       }));
       toast.success("Dados preenchidos via CNPJ!");
-    } catch (err) {
-      toast.error("Não foi possível buscar os dados deste CNPJ.");
-    } finally {
-      setLoadingCnpj(false);
-    }
+    } catch { toast.error("Não foi possível buscar os dados deste CNPJ."); }
+    finally { setLoadingCnpj(false); }
   };
 
-  // --- Lógica de Upload de Logo ---
   const handleLogoUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 700_000) return toast.error("Logo muito grande. Máximo 500KB.");
-    
     const reader = new FileReader();
-    reader.onload = (event) => {
-      setForm({ ...form, logo: event.target.result });
-    };
+    reader.onload = (event) => setForm({ ...form, logo: event.target.result });
     reader.readAsDataURL(file);
   };
 
-  // --- Salvar Representada ---
   const save = async () => {
     if (!form.razao_social) return toast.error("Razão Social é obrigatória");
     try {
       if (editing) await api.put(`/representadas/${editing}`, form);
       else await api.post("/representadas", form);
       toast.success("Salvo com sucesso!"); 
-      setOpen(false); 
-      setForm(emptyRep); 
-      setEditing(null); 
-      load();
+      setOpen(false); setForm(emptyRep); setEditing(null); load();
     } catch { toast.error("Erro ao salvar"); }
   };
 
@@ -125,7 +106,6 @@ export default function Representadas() {
     loadDocs(rep.id);
   };
 
-  // --- Lógica de Produtos ---
   const loadProdutos = async (repId) => {
     const res = await api.get(`/produtos?representada_id=${repId}`);
     setProdutos(res.data);
@@ -147,7 +127,6 @@ export default function Representadas() {
     loadProdutos(selectedRep.id);
   };
 
-  // --- Lógica de Documentos ---
   const loadDocs = async (repId) => {
     const res = await api.get(`/representadas/${repId}/documentos`);
     setDocs(res.data);
@@ -157,14 +136,12 @@ export default function Representadas() {
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 3 * 1024 * 1024) return toast.error("Arquivo muito grande. Máximo 3MB.");
-    
     setUploading(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         await api.post(`/representadas/${selectedRep.id}/documentos`, {
-          nome: file.name,
-          arquivo_base64: event.target.result
+          nome: file.name, arquivo_base64: event.target.result
         });
         toast.success("Contrato anexado!");
         loadDocs(selectedRep.id);
@@ -219,6 +196,7 @@ export default function Representadas() {
               <p className="text-xs text-slate-500 capitalize">
                 Modalidade: {rep.modalidade_comissao === "faturamento" ? "No Faturamento" : "Na Liquidez"}
               </p>
+              {rep.whatsapp && <p className="text-xs text-slate-500">📱 {rep.whatsapp}</p>}
             </div>
             
             <div className="mt-auto pt-4 border-t border-slate-100 dark:border-slate-800">
@@ -236,16 +214,11 @@ export default function Representadas() {
           <DialogHeader><DialogTitle>{editing ? "Editar Representada" : "Nova Representada"}</DialogTitle></DialogHeader>
           
           <div className="space-y-6 py-4">
-            {/* Seção 1: Logo e Dados Principais */}
             <div className="flex gap-6 items-start">
               <div className="space-y-2 flex flex-col items-center">
                 <Label>Logo</Label>
                 <div className="w-24 h-24 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden bg-slate-50 dark:bg-slate-800/50 relative">
-                  {form.logo ? (
-                    <img src={form.logo} alt="Logo" className="w-full h-full object-contain" />
-                  ) : (
-                    <Building2 className="w-8 h-8 text-slate-400" />
-                  )}
+                  {form.logo ? <img src={form.logo} alt="Logo" className="w-full h-full object-contain" /> : <Building2 className="w-8 h-8 text-slate-400" />}
                   <input type="file" accept="image/*" onChange={handleLogoUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
                 </div>
                 <span className="text-[10px] text-slate-500">Máx 500KB</span>
@@ -263,30 +236,25 @@ export default function Representadas() {
                 <div className="space-y-1.5 relative">
                   <Label>CNPJ <span className="text-xs text-blue-500">(Busca automática)</span></Label>
                   <div className="relative">
-                    <Input 
-                      value={form.cnpj} 
-                      onChange={e => setForm({...form, cnpj: e.target.value})} 
-                      onBlur={(e) => buscarCNPJ(e.target.value)}
-                      placeholder="00.000.000/0000-00"
-                    />
+                    <Input value={form.cnpj} onChange={e => setForm({...form, cnpj: e.target.value})} onBlur={(e) => buscarCNPJ(e.target.value)} placeholder="00.000.000/0000-00" />
                     {loadingCnpj && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-blue-500" />}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Seção 2: Contato */}
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><Phone className="w-4 h-4 text-[#08D5F5]" /> Contato</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="space-y-1.5"><Label>Telefone</Label><Input value={form.telefone} onChange={e => setForm({...form, telefone: e.target.value})} /></div>
+                {/* CAMPO WHATSAPP NOVO */}
+                <div className="space-y-1.5"><Label>WhatsApp</Label><Input value={form.whatsapp} onChange={e => setForm({...form, whatsapp: e.target.value})} placeholder="(11) 99999-9999" /></div>
                 <div className="space-y-1.5"><Label>E-mail</Label><Input value={form.email} onChange={e => setForm({...form, email: e.target.value})} /></div>
                 <div className="space-y-1.5"><Label>Site</Label><Input value={form.site} onChange={e => setForm({...form, site: e.target.value})} /></div>
                 <div className="space-y-1.5"><Label>Nome do Contato</Label><Input value={form.contato_nome} onChange={e => setForm({...form, contato_nome: e.target.value})} /></div>
               </div>
             </div>
 
-            {/* Seção 3: Endereço */}
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><MapPin className="w-4 h-4 text-amber-500" /> Endereço</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
@@ -297,7 +265,6 @@ export default function Representadas() {
               </div>
             </div>
 
-            {/* Seção 4: Regras Comerciais */}
             <div>
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2"><FileText className="w-4 h-4 text-emerald-500" /> Regras Comerciais</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
@@ -305,8 +272,6 @@ export default function Representadas() {
                   <Label>Comissão Padrão (%)</Label>
                   <Input type="number" value={form.comissao_padrao} onChange={e => setForm({...form, comissao_padrao: parseFloat(e.target.value || 0)})} />
                 </div>
-                
-                {/* NOVO CAMPO: Modalidade de Comissão */}
                 <div className="space-y-1.5">
                   <Label>Modalidade de Comissão</Label>
                   <Select value={form.modalidade_comissao} onValueChange={(v) => setForm({...form, modalidade_comissao: v})}>
@@ -317,7 +282,6 @@ export default function Representadas() {
                     </SelectContent>
                   </Select>
                 </div>
-
                 <div className="space-y-1.5">
                   <Label>Prazo de Pagamento</Label>
                   <Input value={form.prazo_pagamento} onChange={e => setForm({...form, prazo_pagamento: e.target.value})} placeholder="Ex: 30/60 dias" />

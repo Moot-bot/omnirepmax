@@ -40,7 +40,7 @@ export default function ContasReceber() {
         valor: parseFloat(valorReceber),
         data: new Date(dataRecebimento).toISOString()
       });
-      toast.success("Comissão recebida registrada!");
+      toast.success("Baixa de comissão registrada!");
       setOpen(false);
       load();
     } catch { toast.error("Erro ao registrar"); }
@@ -50,10 +50,10 @@ export default function ContasReceber() {
 
   return (
     <div className="pb-10">
-      <PageHeader title="Contas a Receber" subtitle="Gestão de comissões a receber (As fábricas recebem os pedidos)" />
+      <PageHeader title="Contas a Receber (Comissões)" subtitle="Aqui você recebe apenas a sua comissão, não o valor do pedido." />
       
       <div className="mb-6 p-5 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-lg inline-block min-w-[300px]">
-        <div className="text-sm font-semibold uppercase opacity-90">Saldo Pendente Total (Comissões)</div>
+        <div className="text-sm font-semibold uppercase opacity-90">Comissões Pendentes a Receber</div>
         <div className="text-3xl font-bold mt-1">{fmtBRL(totalPendente)}</div>
       </div>
 
@@ -65,7 +65,7 @@ export default function ContasReceber() {
                 <th className="text-left px-5 py-4">Pedido / Doc</th>
                 <th className="text-left px-5 py-4">Cliente</th>
                 <th className="text-left px-5 py-4">Vencimento</th>
-                <th className="text-right px-5 py-4">Comissão Líquida</th>
+                <th className="text-right px-5 py-4 text-emerald-600">Comissão Líquida</th>
                 <th className="text-right px-5 py-4">Recebido</th>
                 <th className="text-right px-5 py-4 text-amber-600">Saldo Pendente</th>
                 <th className="text-center px-5 py-4">Status</th>
@@ -78,7 +78,7 @@ export default function ContasReceber() {
                   <td className="px-5 py-3">
                     <div className="font-mono text-xs">{ar.numero_documento}</div>
                     {ar.valor_total_pedido && (
-                      <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5" title="Valor total do pedido (recebido pela fábrica)">
+                      <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5" title="Valor total do pedido (da fábrica)">
                         <Info className="w-3 h-3" /> Pedido: {fmtBRL(ar.valor_total_pedido)}
                       </div>
                     )}
@@ -122,7 +122,7 @@ export default function ContasReceber() {
             </div>
             
             <div className="space-y-1.5">
-              <Label>Valor Recebido</Label>
+              <Label>Valor Recebido (R$)</Label>
               <Input type="number" step="0.01" value={valorReceber} onChange={e => setValorReceber(e.target.value)} />
             </div>
             
@@ -133,7 +133,7 @@ export default function ContasReceber() {
 
             {selectedAR?.historico_recebimentos?.length > 0 && (
               <div className="mt-4 border-t pt-4">
-                <Label className="flex items-center gap-2 mb-2"><History className="w-4 h-4" /> Histórico de Recebimentos</Label>
+                <Label className="flex items-center gap-2 mb-2"><History className="w-4 h-4" /> Histórico</Label>
                 <div className="space-y-1 max-h-32 overflow-y-auto">
                   {selectedAR.historico_recebimentos.map((h, i) => (
                     <div key={i} className="flex justify-between text-xs p-2 bg-slate-50 dark:bg-slate-800/50 rounded">
