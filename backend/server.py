@@ -450,9 +450,9 @@ async def update_me(body: UserProfileUpdate, current=Depends(get_current_user)):
 
 @api.post("/auth/logout")
 async def logout(response: Response):
-    # ✅ FIX: Precisamos passar as mesmas flags de segurança (secure, samesite) para o navegador aceitar apagar
+    # ✅ FIX: Para o navegador apagar o cookie, precisamos usar as mesmas flags de segurança
     response.delete_cookie(
-        "access_token", 
+        key="access_token", 
         path="/", 
         secure=IS_PROD, 
         samesite="none" if IS_PROD else "lax", 

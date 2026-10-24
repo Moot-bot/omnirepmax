@@ -27,22 +27,27 @@ export function AuthProvider({ children }) {
     setUser(data.user);
     return data.user;
   };
+
   const refresh = async () => {
-    try { const { data } = await api.get("/auth/me"); setUser(data); } catch {}
+    try { 
+      const { data } = await api.get("/auth/me"); 
+      setUser(data); 
+    } catch {}
   };
+
   const logout = async () => {
-      try {
-          await api.post("/auth/logout");
-      } catch (e) {
-          console.log("Erro ao deslogar no servidor", e);
-      } finally {
-          // Força a limpeza do navegador
-          localStorage.removeItem("omnirep_token");
-          localStorage.clear(); // Limpa tudo por garantia
-          setUser(null);
-          // Opcional: Redirecionar forçando recarregamento da página
-          window.location.href = "/login";
-      }
+    try {
+      await api.post("/auth/logout");
+    } catch (e) {
+      console.log("Erro ao deslogar no servidor", e);
+    } finally {
+      // Limpa o token do navegador
+      localStorage.removeItem("omnirep_token");
+      localStorage.clear();
+      // Zera o estado do usuário (O React Router vai te expulsar do Dashboard sozinho)
+      setUser(null);
+      // ❌ REMOVIDO: window.location.href = "/login"; (Isso causava o reload e o loop)
+    }
   };
 
   return (
