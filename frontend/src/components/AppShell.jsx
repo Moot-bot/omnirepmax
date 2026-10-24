@@ -19,6 +19,8 @@ const MENU_SECTIONS = [
       { label: "Dashboard", icon: LayoutDashboard, path: "/" },
       { label: "MAX AI", icon: Sparkles, path: "/max-ai" },
       { label: "Insights", icon: BarChart3, path: "/insights" },
+      // No array MENU_SECTIONS, na seção Ferramentas:
+      { label: "Feedback", icon: MessageSquare, path: "/feedback" },
     ]
   },
   {

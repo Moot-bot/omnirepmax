@@ -25,6 +25,7 @@ import ImportacaoXML from "./pages/ImportacaoXML";
 import Mapa from "./pages/Mapa";
 import Configuracoes from "./pages/Configuracoes";
 import Relatorios from "./pages/Relatorios";
+import Feedback from "./pages/Feedback";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -49,6 +50,7 @@ export default function App() {
             <Route element={<Protected><AppShell /></Protected>}>
               {/* Dashboard mudou para /dashboard */}
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/feedback" element={<Feedback />} />
               <Route path="/max-ai" element={<MaxAI />} />
               <Route path="/planos" element={<Plans />} />
               <Route path="/representadas" element={<Representadas />} />
