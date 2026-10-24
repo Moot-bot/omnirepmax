@@ -8,7 +8,16 @@ import Logo from "../components/Logo";
 
 export default function Signup() {
   const { user, loading } = useAuth();
-  const [form, setForm] = useState({ name: "", email: "", password: "", empresa: "", telefone: "" });
+  // ✅ NOVOS CAMPOS ADICIONADOS AO ESTADO
+  const [form, setForm] = useState({ 
+    name: "", 
+    email: "", 
+    password: "", 
+    empresa: "", 
+    telefone: "",
+    tamanho_operacao: "solo",
+    controle_atual: "planilha"
+  });
   const [busy, setBusy] = useState(false);
 
   if (loading) return null;
@@ -64,7 +73,7 @@ export default function Signup() {
             <div className="space-y-1 sm:col-span-2">
               <label className="text-sm font-semibold !text-slate-700">Nome completo *</label>
               <input 
-                type="text" required placeholder="Seu nome completo"
+                type="text" required placeholder="Seu nome completo" autoComplete="name"
                 value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
                 className="w-full h-11 px-4 border border-slate-300 rounded-lg !text-slate-900 !bg-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]" 
               />
@@ -73,7 +82,7 @@ export default function Signup() {
             <div className="space-y-1 sm:col-span-2">
               <label className="text-sm font-semibold !text-slate-700">E-mail *</label>
               <input 
-                type="email" required placeholder="seu@email.com"
+                type="email" required placeholder="seu@email.com" autoComplete="email"
                 value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
                 className="w-full h-11 px-4 border border-slate-300 rounded-lg !text-slate-900 !bg-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]" 
               />
@@ -82,7 +91,7 @@ export default function Signup() {
             <div className="space-y-1 sm:col-span-2">
               <label className="text-sm font-semibold !text-slate-700">Senha * (mín. 8 caracteres)</label>
               <input 
-                type="password" required placeholder="********"
+                type="password" required placeholder="********" autoComplete="new-password"
                 value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
                 className="w-full h-11 px-4 border border-slate-300 rounded-lg !text-slate-900 !bg-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]" 
               />
@@ -91,7 +100,7 @@ export default function Signup() {
             <div className="space-y-1">
               <label className="text-sm font-semibold !text-slate-700">Empresa / Escritório</label>
               <input 
-                type="text" placeholder="Opcional"
+                type="text" placeholder="Opcional" autoComplete="organization"
                 value={form.empresa} onChange={(e) => setForm({ ...form, empresa: e.target.value })}
                 className="w-full h-11 px-4 border border-slate-300 rounded-lg !text-slate-900 !bg-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]" 
               />
@@ -100,10 +109,38 @@ export default function Signup() {
             <div className="space-y-1">
               <label className="text-sm font-semibold !text-slate-700">Telefone</label>
               <input 
-                type="tel" placeholder="(11) 99999-0000"
+                type="tel" placeholder="(11) 99999-0000" autoComplete="tel"
                 value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })}
                 className="w-full h-11 px-4 border border-slate-300 rounded-lg !text-slate-900 !bg-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]" 
               />
+            </div>
+
+            {/* ✅ NOVAS PERGUNTAS DE QUALIFICAÇÃO */}
+            <div className="space-y-1 sm:col-span-2">
+              <label className="text-sm font-semibold !text-slate-700">Qual o tamanho da sua operação?</label>
+              <select 
+                value={form.tamanho_operacao} 
+                onChange={(e) => setForm({ ...form, tamanho_operacao: e.target.value })}
+                className="w-full h-11 px-4 border border-slate-300 rounded-lg !text-slate-900 !bg-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]"
+              >
+                <option value="solo">Sou Representante Solo</option>
+                <option value="pequena">Equipe Pequena (2 a 5 pessoas)</option>
+                <option value="grande">Equipe Grande (Mais de 5 pessoas)</option>
+              </select>
+            </div>
+
+            <div className="space-y-1 sm:col-span-2">
+              <label className="text-sm font-semibold !text-slate-700">Como você controla suas comissões hoje?</label>
+              <select 
+                value={form.controle_atual} 
+                onChange={(e) => setForm({ ...form, controle_atual: e.target.value })}
+                className="w-full h-11 px-4 border border-slate-300 rounded-lg !text-slate-900 !bg-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]"
+              >
+                <option value="planilha">Planilhas de Excel</option>
+                <option value="caderno">Caderno / Anotações</option>
+                <option value="outro">Outro Sistema</option>
+                <option value="nada">Não tenho controle</option>
+              </select>
             </div>
           </div>
 

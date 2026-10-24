@@ -97,7 +97,8 @@ export default function Admin() {
                     <th className="px-4 py-3 text-left font-semibold">Nome</th>
                     <th className="px-4 py-3 text-left font-semibold">Contato</th>
                     <th className="px-4 py-3 text-left font-semibold">Empresa</th>
-                    <th className="px-4 py-3 text-center font-semibold">Data Cadastro</th>
+                    <th className="px-4 py-3 text-left font-semibold">Perfil / Dor</th> {/* ✅ NOVA COLUNA */}
+                    <th className="px-4 py-3 text-center font-semibold">Data</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -111,10 +112,16 @@ export default function Admin() {
                       <td className="px-4 py-3 text-slate-600 dark:text-slate-400">
                         {l.empresa ? <div className="flex items-center gap-1"><Building2 className="w-3 h-3" /> {l.empresa}</div> : "-"}
                       </td>
+                      {/* ✅ EXIBINDO OS NOVOS DADOS */}
+                      <td className="px-4 py-3 text-xs">
+                        <div className="font-semibold capitalize text-[#075BFF]">{l.tamanho_operacao || "-"}</div>
+                        <div className="text-slate-500">Usa: {l.controle_atual || "-"}</div>
+                      </td>
                       <td className="px-4 py-3 text-center text-xs">{fmtDate(l.created_at)}</td>
                     </tr>
                   ))}
-                  {leads.length === 0 && <tr><td colSpan={4} className="text-center py-6 text-slate-500">Nenhum lead cadastrado ainda.</td></tr>}
+                  {/* ✅ COLPAN AJUSTADO PARA 5 */}
+                  {leads.length === 0 && <tr><td colSpan={5} className="text-center py-6 text-slate-500">Nenhum lead cadastrado ainda.</td></tr>}
                 </tbody>
               </table>
             </div>

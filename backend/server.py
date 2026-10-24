@@ -180,6 +180,8 @@ class SignupIn(BaseModel):
     name: str
     empresa: Optional[str] = ""
     telefone: Optional[str] = ""
+    tamanho_operacao: Optional[str] = "solo"      # <-- NOVO
+    controle_atual: Optional[str] = "planilha"    # <-- NOVO
 
 class UserProfileUpdate(BaseModel):
     name: Optional[str] = None
@@ -411,6 +413,8 @@ async def signup(body: SignupIn, response: Response):
     await db.leads.insert_one({
         "name": body.name,
         "email": email,
+        "tamanho_operacao": body.tamanho_operacao, # <-- NOVO
+        "controle_atual": body.controle_atual,  
         "empresa": body.empresa or "",
         "telefone": body.telefone or "",
         "plan": "trial",
