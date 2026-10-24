@@ -4,7 +4,7 @@ import {
   Building2, Users, Package, Sparkles, TrendingUp, 
   ArrowRight, CheckCircle2, PlayCircle, Database, 
   Bot, Zap, FileSpreadsheet, ShieldCheck, Percent,
-  ChevronDown, Check, Lock, LayoutDashboard
+  ChevronDown, Check, Lock, LayoutDashboard,  Factory 
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 
