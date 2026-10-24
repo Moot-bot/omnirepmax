@@ -1498,6 +1498,14 @@ async def create_feedback(body: FeedBackIn, current=Depends(get_current_user)):
         "nota": body.nota,
     })
     return {"ok": True, "message": "Feedback enviado com sucesso!"}
+@api.get("/admin/feedbacks")
+async def list_feedbacks(current=Depends(get_current_user)):
+    if current.get("role") != "admin":
+        raise HTTPException(403, "Apenas administradores podem ver os feedbacks.")
+    
+    # Pega os 100 feedbacks mais recentes
+    feedbacks = await db.feedbacks.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return feedbacks
 
 @api.get("/leads")
 async def get_leads(current=Depends(get_current_user)):

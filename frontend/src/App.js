@@ -28,6 +28,7 @@ import Configuracoes from "./pages/Configuracoes";
 import Relatorios from "./pages/Relatorios";
 import Feedback from "./pages/Feedback";
 import ResetPassword from "./pages/ResetPassword";
+import Admin from "./pages/Admin";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="/payment/success" element={<PaymentSuccess />} />
             
             <Route element={<Protected><AppShell /></Protected>}>
+              <Route path="/admin" element={<Admin />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/max-ai" element={<MaxAI />} />
               <Route path="/planos" element={<Plans />} />

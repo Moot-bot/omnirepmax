@@ -9,7 +9,7 @@ import {
   Percent, TrendingUp, TrendingDown, 
   FileText, Map, Settings, LogOut,
   Search, Menu, X, ExternalLink, UserPlus, 
-  Sun, Moon, Bell, Package
+  Sun, Moon, Bell, Package, ShieldAlert // <-- ADICIONADO ShieldAlert
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -72,6 +72,17 @@ export default function AppShell() {
   const [isSearching, setIsSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const searchRef = useRef(null);
+
+  // ✅ LÓGICA DO MENU DINÂMICO: Adiciona a seção Admin se o usuário for admin
+  const menuSections = [...MENU_SECTIONS];
+  if (user?.role === "admin") {
+    menuSections.push({
+      title: "Administração",
+      items: [
+        { label: "Painel Admin", icon: ShieldAlert, path: "/admin" }
+      ]
+    });
+  }
 
   const handleLogout = async () => {
     await logout();
@@ -162,7 +173,8 @@ export default function AppShell() {
 
         {/* Links de Navegação */}
         <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6 custom-scrollbar">
-          {MENU_SECTIONS.map((section) => (
+          {/* ✅ USA O menuSections DINÂMICO AQUI */}
+          {menuSections.map((section) => (
             <div key={section.title}>
               <h3 className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                 {section.title}
@@ -316,7 +328,6 @@ export default function AppShell() {
               {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-700" />}
             </Button>
             
-            {/* Botão de Notificação com Ação */}
             <Button 
               variant="ghost" 
               size="icon" 
