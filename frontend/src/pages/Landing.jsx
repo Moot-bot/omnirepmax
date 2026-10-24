@@ -1,128 +1,137 @@
-import React from "react";
-import { Link } from "react-router-dom";
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { 
   Building2, Users, Package, Sparkles, TrendingUp, 
   ArrowRight, CheckCircle2, PlayCircle, Database, 
-  Bot, Zap, FileSpreadsheet, ShieldCheck
+  Bot, Zap, FileSpreadsheet, ShieldCheck, Percent,
+  ChevronDown, Check, Lock, LayoutDashboard
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 
 export default function Landing() {
+  const navigate = useNavigate();
+  const [faqOpen, setFaqOpen] = useState(null);
+
+  const toggleFaq = (index) => {
+    setFaqOpen(faqOpen === index ? null : index);
+  };
+
   return (
-    <div className="min-h-screen bg-[#0F172A] text-slate-100 font-sans selection:bg-[#075BFF] selection:text-white">
+    <div className="min-h-screen bg-[#09090B] text-slate-100 font-sans selection:bg-[#075BFF] selection:text-white overflow-x-hidden">
       
       {/* HEADER / NAVBAR */}
-      <header className="fixed top-0 w-full z-50 bg-[#0F172A]/80 backdrop-blur-lg border-b border-slate-800">
+      <header className="fixed top-0 w-full z-50 bg-[#09090B]/80 backdrop-blur-xl border-b border-slate-800/50">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {/* LOGO FLUTUANDO (animate-float) */}
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#075BFF] to-cyan-400 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-blue-500/30 animate-float">O</div>
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/")}>
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#075BFF] to-cyan-400 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-blue-500/30">
+              O
+            </div>
             <span className="font-extrabold text-2xl tracking-tight text-white">
               OMNIREP<span className="text-[#075BFF]">MAX</span>
             </span>
           </div>
 
-          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
-            <a href="#ia" className="hover:text-white transition-colors">Inteligência Artificial</a>
-            <a href="#funcionalidades" className="hover:text-white transition-colors">Funcionalidades</a>
-            <a href="#planos" className="hover:text-white transition-colors">Planos & Preços</a>
+          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
+            <a href="#features" className="hover:text-white transition-colors">Funcionalidades</a>
+            <a href="#how-it-works" className="hover:text-white transition-colors">Como Funciona</a>
+            <a href="#pricing" className="hover:text-white transition-colors">Planos</a>
+            <a href="#faq" className="hover:text-white transition-colors">Dúvidas</a>
           </nav>
 
           <div className="flex items-center gap-4">
-            <Link to="/login" className="text-sm font-medium text-slate-300 hover:text-white transition-colors hidden sm:block">
+            <button 
+              onClick={() => navigate("/login")} 
+              className="text-sm font-medium text-slate-300 hover:text-white transition-colors hidden sm:block"
+            >
               Entrar
-            </Link>
-            <Link to="/signup">
-              <Button className="bg-red-600 hover:bg-red-700 text-white font-semibold shadow-lg shadow-red-600/30 rounded-full px-6 transition-transform hover:scale-105">
-                Experimentar Grátis!
-              </Button>
-            </Link>
+            </button>
+            <Button 
+              onClick={() => navigate("/signup")} 
+              className="bg-white text-[#09090B] hover:bg-slate-200 font-semibold rounded-full px-6 transition-all"
+            >
+              Começar Grátis
+            </Button>
           </div>
         </div>
       </header>
 
       {/* HERO SECTION */}
-      <section className="relative pt-36 pb-20 lg:pt-48 lg:pb-32 overflow-hidden">
-        {/* Efeitos de Fundo */}
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-900/40 via-[#0F172A] to-[#0F172A]"></div>
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-[120px]"></div>
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-[#075BFF]/10 rounded-full blur-[120px]"></div>
+      <section className="relative pt-40 pb-20 lg:pt-48 lg:pb-32 overflow-hidden">
+        {/* Glow Effects */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[500px] bg-[#075BFF]/20 rounded-full blur-[120px] -z-10"></div>
         
-        <div className="relative max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-12 items-center">
-          <div className="space-y-8">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-bold uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5" /> O Futuro da Representação Comercial
-            </div>
-            
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.1] tracking-tight">
-              Venda mais, <br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#075BFF] to-cyan-400">
-                controle suas comissões
-              </span> <br />
-              e deixe a IA trabalhar.
-            </h1>
-            
-            <p className="text-lg text-slate-400 max-w-lg leading-relaxed">
-              O único sistema feito sob medida para representantes. Cadastre fábricas, clientes e produtos. 
-              O OmniRepMax calcula suas comissões, gerencia recebimentos parcelados e ainda conta com um assistente de IA (MAX AI) para analisar seu negócio.
-            </p>
+        <div className="relative max-w-7xl mx-auto px-6 text-center">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800/50 border border-slate-700/50 text-slate-300 text-xs font-semibold uppercase tracking-wider mb-8 backdrop-blur-md">
+            <Sparkles className="w-4 h-4 text-cyan-400" /> 
+            O ERP definitivo para representantes comerciais
+          </div>
+          
+          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[1.05] tracking-tight mb-8">
+            A forma mais inteligente de <br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#075BFF] via-cyan-400 to-emerald-400">
+              gerir suas comissões.
+            </span>
+          </h1>
+          
+          <p className="text-lg sm:text-xl text-slate-400 max-w-2xl mx-auto leading-relaxed mb-10">
+            Chega de planilhas. Centralize suas fábricas, clientes e pedidos. 
+            Deixe o OmniRepMax calcular suas comissões e controlar o fluxo de caixa enquanto você vende.
+          </p>
 
-            {/* BOTÕES COM SELO 7 DIAS GRÁTIS */}
-            <div className="flex flex-col sm:flex-row items-center gap-4 pt-6">
-              <Link to="/signup" className="w-full sm:w-auto relative">
-                <span className="absolute -top-3 -right-3 bg-emerald-500 text-white text-[10px] font-bold px-2 py-1 rounded-full animate-pulse shadow-lg z-10">
-                  7 DIAS GRÁTIS
-                </span>
-                <Button size="lg" className="w-full sm:w-auto bg-[#075BFF] hover:bg-blue-600 text-white text-lg px-8 py-6 rounded-xl shadow-xl shadow-blue-600/20 group">
-                  Começar Teste Grátis 
-                  <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                </Button>
-              </Link>
-              <Link to="/login" className="w-full sm:w-auto">
-                <Button size="lg" variant="outline" className="w-full sm:w-auto border-slate-700 text-slate-300 hover:bg-slate-800 text-lg px-8 py-6 rounded-xl">
-                  <PlayCircle className="mr-2 w-5 h-5" /> Acessar Painel
-                </Button>
-              </Link>
-            </div>
-            
-            <div className="flex items-center gap-6 pt-4 text-sm text-slate-500">
-              <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> 7 dias grátis</div>
-              <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Sem fidelidade</div>
-              <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Suporte humanizado</div>
-            </div>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Button 
+              onClick={() => navigate("/signup")} 
+              className="w-full sm:w-auto bg-[#075BFF] hover:bg-blue-600 text-white text-lg px-8 py-6 rounded-full font-bold shadow-[0_0_40px_-10px_rgba(7,91,255,0.5)] transition-all hover:scale-105"
+            >
+              Experimentar Grátis por 7 Dias <ArrowRight className="ml-2 w-5 h-5" />
+            </Button>
+            <Button 
+              onClick={() => navigate("/login")} 
+              variant="outline" 
+              className="w-full sm:w-auto border-slate-700 text-slate-300 hover:bg-slate-800 text-lg px-8 py-6 rounded-full"
+            >
+              <PlayCircle className="mr-2 w-5 h-5" /> Ver o Sistema
+            </Button>
           </div>
 
-          {/* Mockup do Dashboard Fake */}
-          <div className="relative hidden lg:block">
-            <div className="absolute inset-0 bg-gradient-to-tr from-[#075BFF] to-cyan-400 rounded-3xl blur-3xl opacity-20"></div>
-            <div className="relative bg-[#1E293B] border border-slate-700 rounded-2xl p-4 shadow-2xl">
-              <div className="flex gap-2 mb-4 px-2">
-                <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-                <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+          <div className="flex items-center justify-center gap-6 mt-8 text-sm text-slate-500">
+            <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Sem cartão de crédito</div>
+            <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Cancele quando quiser</div>
+          </div>
+        </div>
+
+        {/* DASHBOARD MOCKUP */}
+        <div className="relative max-w-5xl mx-auto px-6 mt-20">
+          <div className="absolute inset-0 bg-gradient-to-t from-[#09090B] via-transparent to-transparent z-10"></div>
+          <div className="rounded-2xl border border-slate-700/50 bg-[#1E293B]/50 backdrop-blur-xl p-2 shadow-2xl overflow-hidden relative">
+            {/* Browser dots */}
+            <div className="flex gap-2 p-3 border-b border-slate-700/50">
+              <div className="w-3 h-3 rounded-full bg-rose-500"></div>
+              <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+              <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+            </div>
+            {/* Fake Dashboard Content */}
+            <div className="grid grid-cols-4 gap-4 p-6 bg-[#09090B]/80">
+              <div className="col-span-1 border-r border-slate-800 pr-4 space-y-4">
+                <div className="h-8 bg-slate-800 rounded-md w-full"></div>
+                <div className="h-8 bg-slate-800 rounded-md w-full"></div>
+                <div className="h-8 bg-slate-800 rounded-md w-full"></div>
               </div>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center bg-[#0F172A] p-3 rounded-lg border border-slate-800">
-                   <div className="flex items-center gap-3">
-                      <Bot className="text-cyan-400 w-6 h-6" />
-                      <div className="text-xs text-slate-300">"Qual minha comissão a receber da Bella Moda?"</div>
-                   </div>
-                   <div className="text-xs font-bold text-emerald-400">R$ 12.400</div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="h-28 bg-[#0F172A] rounded-xl border border-slate-800 p-3 flex flex-col justify-between">
-                    <div className="text-xs text-slate-500">Faturamento Mês</div>
-                    <div className="text-xl font-bold text-white">R$ 145.000</div>
+              <div className="col-span-3 space-y-4">
+                <div className="flex gap-4">
+                  <div className="flex-1 bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                    <div className="text-xs text-slate-400 mb-2">Comissões Previstas</div>
+                    <div className="text-2xl font-bold text-white">R$ 14.250,00</div>
                   </div>
-                  <div className="h-28 bg-[#0F172A] rounded-xl border border-slate-800 p-3 flex flex-col justify-between">
-                    <div className="text-xs text-slate-500">Comissões Pendentes</div>
-                    <div className="text-xl font-bold text-amber-500">R$ 8.250</div>
+                  <div className="flex-1 bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                    <div className="text-xs text-slate-400 mb-2">Faturamento Mês</div>
+                    <div className="text-2xl font-bold text-emerald-400">R$ 285.000,00</div>
                   </div>
                 </div>
-                <div className="h-32 bg-[#0F172A] rounded-xl border border-slate-800 w-full flex items-end justify-between p-4 gap-2">
-                   {[40, 70, 45, 90, 65, 100, 80].map((h, i) => (
-                      <div key={i} className="w-full bg-[#075BFF] rounded-t-sm" style={{ height: `${h}%` }}></div>
-                   ))}
+                <div className="h-48 bg-slate-800/50 rounded-xl border border-slate-700 w-full flex items-end p-4 gap-2">
+                  {[40, 70, 45, 90, 65, 100, 80, 50, 95, 60].map((h, i) => (
+                    <div key={i} className="flex-1 bg-gradient-to-t from-[#075BFF] to-cyan-400 rounded-t-sm" style={{ height: `${h}%` }}></div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -130,129 +139,257 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* SEÇÃO DE IA E AUTOMAÇÃO */}
-      <section id="ia" className="py-24 bg-[#0B1120] border-y border-slate-800 relative">
+      {/* SOCIAL PROOF */}
+      <section className="border-y border-slate-800/50 bg-[#0C0C0E] py-10">
+        <div className="max-w-7xl mx-auto px-6 text-center">
+          <p className="text-sm font-semibold text-slate-500 uppercase tracking-widest mb-6">
+            Utilizado por representantes das maiores indústrias
+          </p>
+          <div className="flex flex-wrap justify-center gap-8 md:gap-16 opacity-50 grayscale">
+            {/* Simulação de logos */}
+            <div className="flex items-center gap-2 font-bold text-xl"><Building2 className="w-6 h-6" /> Indústria A</div>
+            <div className="flex items-center gap-2 font-bold text-xl"><Factory className="w-6 h-6" /> Fábrica B</div>
+            <div className="flex items-center gap-2 font-bold text-xl"><Package className="w-6 h-6" /> Distribuidora C</div>
+            <div className="flex items-center gap-2 font-bold text-xl"><TrendingUp className="w-6 h-6" /> Grupo D</div>
+          </div>
+        </div>
+      </section>
+
+      {/* BENTO GRID FEATURES */}
+      <section id="features" className="py-24 relative">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center max-w-3xl mx-auto mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-              Deixe a tecnologia fazer o <span className="text-cyan-400">trabalho duro</span>
-            </h2>
-            <p className="text-slate-400">
-              Esqueça digitação manual. O OmniRepMax usa inteligência artificial e integrações para preencher dados e gerar insights para você.
-            </p>
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Tudo que você precisa em um só lugar</h2>
+            <p className="text-slate-400 text-lg">Construído do zero para resolver os problemas reais de quem vive de representação comercial.</p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-8">
-            {/* Feature 1: Busca CNPJ */}
-            <div className="bg-[#1E293B] border border-slate-700 p-8 rounded-2xl relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-bl-full"></div>
-              <div className="w-14 h-14 bg-blue-500/20 rounded-xl flex items-center justify-center mb-6">
-                <Database className="w-7 h-7 text-blue-400" />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Feature 1 - Large */}
+            <div className="md:col-span-2 bg-gradient-to-br from-[#1E293B] to-[#0F172A] border border-slate-800 p-8 rounded-3xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-[#075BFF]/10 rounded-full blur-3xl"></div>
+              <div className="w-12 h-12 bg-blue-500/20 rounded-2xl flex items-center justify-center mb-6">
+                <Percent className="w-6 h-6 text-blue-400" />
               </div>
-              <h3 className="text-xl font-bold mb-3">Preenchimento Automático de CNPJ</h3>
-              <p className="text-slate-400 leading-relaxed mb-6">
-                Digite apenas o CNPJ e o sistema busca automaticamente na Receita Federal a Razão Social, Endereço, Telefone e E-mail. Cadastre um cliente em 5 segundos.
+              <h3 className="text-2xl font-bold mb-3">Controle Cirúrgico de Comissões</h3>
+              <p className="text-slate-400 mb-6 max-w-md">
+                O valor do pedido pertence à fábrica. O seu lucro é a comissão. Configure regras de faturamento x liquidez e deixe o sistema calcular as parcelas exatas para você.
               </p>
-              <div className="bg-[#0F172A] p-3 rounded-lg border border-slate-800 flex items-center gap-3">
-                <Zap className="w-4 h-4 text-amber-400" />
-                <span className="text-xs text-slate-300 font-mono">Integração via BrasilAPI</span>
+              <div className="flex items-center gap-4 text-sm font-medium text-slate-300">
+                <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-lg"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Baixa Parcial</div>
+                <div className="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-lg"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Múltiplas NFs</div>
               </div>
             </div>
 
-            {/* Feature 2: MAX AI */}
-            <div className="bg-[#1E293B] border border-slate-700 p-8 rounded-2xl relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/10 rounded-bl-full"></div>
-              <div className="w-14 h-14 bg-cyan-500/20 rounded-xl flex items-center justify-center mb-6">
-                <Bot className="w-7 h-7 text-cyan-400" />
+            {/* Feature 2 */}
+            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl relative overflow-hidden">
+              <div className="w-12 h-12 bg-cyan-500/20 rounded-2xl flex items-center justify-center mb-6">
+                <Bot className="w-6 h-6 text-cyan-400" />
               </div>
-              <h3 className="text-xl font-bold mb-3">MAX AI: Seu Analista Comercial</h3>
-              <p className="text-slate-400 leading-relaxed mb-6">
-                Converse com o sistema. Pergunte "quem são meus clientes inativos?" ou "qual produto vendeu menos este mês?" e receba respostas instantâneas baseadas nos seus dados.
-              </p>
-              <div className="bg-[#0F172A] p-3 rounded-lg border border-slate-800 flex items-center gap-3">
-                <Sparkles className="w-4 h-4 text-cyan-400" />
-                <span className="text-xs text-slate-300 font-mono">Processamento via Groq (Llama 3)</span>
+              <h3 className="text-xl font-bold mb-3">MAX AI</h3>
+              <p className="text-slate-400 text-sm">Seu analista comercial com IA. Pergunte sobre clientes inativos, produtos ou vendas e receba respostas em segundos.</p>
+            </div>
+
+            {/* Feature 3 */}
+            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl">
+              <div className="w-12 h-12 bg-emerald-500/20 rounded-2xl flex items-center justify-center mb-6">
+                <Database className="w-6 h-6 text-emerald-400" />
               </div>
+              <h3 className="text-xl font-bold mb-3">Importação de Dados</h3>
+              <p className="text-slate-400 text-sm">Cansado de digitar? Importe catálogos de produtos via Excel/CSV e notas fiscais via XML em segundos.</p>
+            </div>
+
+            {/* Feature 4 */}
+            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl">
+              <div className="w-12 h-12 bg-amber-500/20 rounded-2xl flex items-center justify-center mb-6">
+                <Zap className="w-6 h-6 text-amber-400" />
+              </div>
+              <h3 className="text-xl font-bold mb-3">CNPJ Automático</h3>
+              <p className="text-slate-400 text-sm">Digite o CNPJ do cliente e o sistema preenche automaticamente razão social, endereço e contatos via BrasilAPI.</p>
+            </div>
+
+            {/* Feature 5 */}
+            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl">
+              <div className="w-12 h-12 bg-purple-500/20 rounded-2xl flex items-center justify-center mb-6">
+                <ShieldCheck className="w-6 h-6 text-purple-400" />
+              </div>
+              <h3 className="text-xl font-bold mb-3">Multi-empresa (SaaS)</h3>
+              <p className="text-slate-400 text-sm">Cada usuário tem seu próprio ambiente isolado e seguro. Seus dados nunca se misturam com os de outros.</p>
             </div>
           </div>
         </div>
       </section>
 
-      {/* FUNCIONALIDADES (REPRESENTADAS, CLIENTES, COMISSÕES) */}
-      <section id="funcionalidades" className="py-24">
+      {/* HOW IT WORKS */}
+      <section id="how-it-works" className="py-24 bg-[#0C0C0E] border-y border-slate-800/50">
         <div className="max-w-7xl mx-auto px-6">
-          <div className="grid lg:grid-cols-3 gap-8">
-            
-            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-2xl">
-              <Building2 className="w-10 h-10 text-[#075BFF] mb-6" />
-              <h3 className="text-xl font-bold mb-3">Gestão de Fábricas</h3>
-              <p className="text-sm text-slate-400 mb-6">
-                Cadastre indústrias, controle contratos em PDF, tabelas de preço e defina a regra de comissão (no faturamento ou na liquidez).
-              </p>
-              <ul className="space-y-2 text-sm text-slate-300">
-                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-[#075BFF]" /> Importação de Catálogo TXT</li>
-                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-[#075BFF]" /> Upload de Logo</li>
-              </ul>
-            </div>
+          <div className="text-center mb-16">
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Comece a usar em 3 passos</h2>
+            <p className="text-slate-400 text-lg">Sem instalação, sem burocracia.</p>
+          </div>
 
-            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-2xl">
-              <FileSpreadsheet className="w-10 h-10 text-cyan-400 mb-6" />
-              <h3 className="text-xl font-bold mb-3">Controle de Comissões</h3>
-              <p className="text-sm text-slate-400 mb-6">
-                O valor do pedido é da fábrica. O seu lucro é a comissão. O sistema gera automaticamente as parcelas do seu recebimento e controla as baixas.
-              </p>
-              <ul className="space-y-2 text-sm text-slate-300">
-                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cyan-400" /> Recebimentos Parciais</li>
-                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cyan-400" /> Painel por Representada</li>
-              </ul>
-            </div>
+          <div className="grid md:grid-cols-3 gap-8 relative">
+            {/* Connecting Line */}
+            <div className="hidden md:block absolute top-1/2 left-0 w-full h-0.5 bg-slate-800 -z-10 -translate-y-1/2"></div>
 
-            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-2xl">
-              <TrendingUp className="w-10 h-10 text-emerald-400 mb-6" />
-              <h3 className="text-xl font-bold mb-3">Gestão Financeira</h3>
-              <p className="text-sm text-slate-400 mb-6">
-                Saiba exatamente quanto você tem a receber de cada fábrica. Controle contas a pagar, fluxo de caixa e a saúde financeira do seu negócio.
-              </p>
-              <ul className="space-y-2 text-sm text-slate-300">
-                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Relatórios em Tempo Real</li>
-                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Alerta de Vencimentos</li>
-              </ul>
-            </div>
-
+            {[
+              { icon: Users, title: "1. Crie sua conta", desc: "Cadastre-se em menos de 1 minuto. Teste todos os recursos por 7 dias." },
+              { icon: LayoutDashboard, title: "2. Configure sua operação", desc: "Cadastre suas fábricas, importe seus produtos e clientes." },
+              { icon: TrendingUp, title: "3. Fature e receba", desc: "Lance pedidos, controle faturamentos e acompanhe suas comissões em tempo real." }
+            ].map((step, i) => (
+              <div key={i} className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl text-center relative z-10">
+                <div className="w-16 h-16 bg-[#09090B] border border-slate-700 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <step.icon className="w-8 h-8 text-[#075BFF]" />
+                </div>
+                <h3 className="text-xl font-bold mb-3">{step.title}</h3>
+                <p className="text-slate-400 text-sm">{step.desc}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* CTA FINAL (CHAMADA PARA AÇÃO) */}
-      <section className="py-24 relative overflow-hidden border-t border-slate-800">
-        <div className="absolute inset-0 bg-gradient-to-t from-[#075BFF]/20 to-transparent"></div>
+      {/* PRICING */}
+      <section id="pricing" className="py-24 relative">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center max-w-3xl mx-auto mb-16">
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Planos simples e transparentes</h2>
+            <p className="text-slate-400 text-lg">Escolha o plano ideal para o tamanho da sua representação.</p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6">
+            {/* Plan 1 */}
+            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl flex flex-col">
+              <h3 className="text-xl font-bold mb-2">Solo</h3>
+              <p className="text-slate-400 text-sm mb-6">Para quem está começando.</p>
+              <div className="mb-6"><span className="text-4xl font-bold">R$ 69</span><span className="text-slate-400">/mês</span></div>
+              <ul className="space-y-3 mb-8 flex-1 text-sm text-slate-300">
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Até 2 representadas</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Clientes e produtos ilimitados</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Funil Kanban</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Pedidos e comissões</li>
+              </ul>
+              <Button onClick={() => navigate("/signup")} className="w-full bg-slate-800 hover:bg-slate-700 text-white">Começar Teste</Button>
+            </div>
+
+            {/* Plan 2 - Featured */}
+            <div className="bg-gradient-to-b from-[#075BFF]/20 to-[#1E293B] border-2 border-[#075BFF] p-8 rounded-3xl flex flex-col relative">
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-[#075BFF] text-white text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">Mais Popular</div>
+              <h3 className="text-xl font-bold mb-2">Profissional</h3>
+              <p className="text-slate-400 text-sm mb-6">Para representações em crescimento.</p>
+              <div className="mb-6"><span className="text-4xl font-bold">R$ 99</span><span className="text-slate-400">/mês</span></div>
+              <ul className="space-y-3 mb-8 flex-1 text-sm text-slate-300">
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Representadas ilimitadas</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> MAX AI ilimitado</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Importação XML NF-e</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Contas a pagar/receber</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Até 5 usuários</li>
+              </ul>
+              <Button onClick={() => navigate("/signup")} className="w-full bg-[#075BFF] hover:bg-blue-600 text-white font-bold">Começar Teste</Button>
+            </div>
+
+            {/* Plan 3 */}
+            <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl flex flex-col">
+              <h3 className="text-xl font-bold mb-2">Equipe</h3>
+              <p className="text-slate-400 text-sm mb-6">Para grandes operações.</p>
+              <div className="mb-6"><span className="text-4xl font-bold">R$ 129</span><span className="text-slate-400">/mês</span></div>
+              <ul className="space-y-3 mb-8 flex-1 text-sm text-slate-300">
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Tudo do Profissional</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Usuários ilimitados</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Perfis Admin/Financeiro</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Relatórios exportáveis</li>
+                <li className="flex gap-2"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Suporte WhatsApp</li>
+              </ul>
+              <Button onClick={() => navigate("/signup")} className="w-full bg-slate-800 hover:bg-slate-700 text-white">Começar Teste</Button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section id="faq" className="py-24 bg-[#0C0C0E] border-t border-slate-800/50">
+        <div className="max-w-3xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold mb-4">Perguntas Frequentes</h2>
+          </div>
+          
+          <div className="space-y-4">
+            {[
+              { q: "O OmniRepMax emite Nota Fiscal?", a: "Atualmente o sistema foca no controle de comissões e faturamento. Você pode registrar as NFs emitidas pela fábrica e controlar os recebimentos. A emissão de NFS-e está no roadmap para futuras atualizações." },
+              { q: "Posso importar meus clientes atuais?", a: "Sim! Você pode usar a busca automática de CNPJ para cadastrar clientes em segundos, ou importar sua base via planilha." },
+              { q: "Como funciona o controle de comissão?", a: "O sistema separa o valor total da venda (que pertence à fábrica) do valor da sua comissão (ex: 5%). Quando a fábrica fatura, o sistema cria as parcelas da sua comissão no Contas a Receber automaticamente." },
+              { q: "Meus dados estão seguros?", a: "Absolutamente. Usamos criptografia de ponta a ponta e cada empresa tem um ambiente totalmente isolado (multi-tenant). Ninguém tem acesso aos seus dados além de você." }
+            ].map((item, i) => (
+              <div key={i} className="border border-slate-800 rounded-2xl overflow-hidden bg-[#1E293B]">
+                <button 
+                  onClick={() => toggleFaq(i)}
+                  className="w-full px-6 py-4 flex items-center justify-between text-left font-semibold hover:bg-slate-800/50 transition-colors"
+                >
+                  {item.q}
+                  <ChevronDown className={`w-5 h-5 transition-transform ${faqOpen === i ? 'rotate-180' : ''}`} />
+                </button>
+                {faqOpen === i && (
+                  <div className="px-6 pb-4 text-slate-400 text-sm leading-relaxed border-t border-slate-800/50 pt-4">
+                    {item.a}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* FINAL CTA */}
+      <section className="py-24 relative overflow-hidden">
+        <div className="absolute inset-0 bg-[#075BFF]/10"></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-3xl h-full bg-[#075BFF]/20 blur-[100px]"></div>
         <div className="relative max-w-4xl mx-auto px-6 text-center">
-          <ShieldCheck className="w-16 h-16 text-[#075BFF] mx-auto mb-6" />
-          <h2 className="text-4xl font-bold mb-6 text-white">Pronto para transformar sua representação?</h2>
+          <h2 className="text-4xl md:text-5xl font-bold mb-6 text-white tracking-tight">Pronto para profissionalizar sua representação?</h2>
           <p className="text-lg text-slate-300 mb-10 max-w-2xl mx-auto">
-            Junte-se aos representantes que já abandonaram as planilhas e estão vendendo mais com o OmniRepMax. Comece seu teste de 7 dias agora.
+            Junte-se a centenas de representantes que já economizam tempo e aumentam seus lucros com o OmniRepMax.
           </p>
-          <Link to="/signup">
-            <Button className="bg-red-600 hover:bg-red-700 text-white text-lg px-10 py-7 rounded-full font-bold shadow-xl shadow-red-600/30 transition-transform hover:scale-105">
-              Criar minha conta grátis
-            </Button>
-          </Link>
-          <p className="mt-6 text-sm text-slate-500">Não pedimos cartão de crédito.</p>
+          <Button 
+            onClick={() => navigate("/signup")} 
+            className="bg-white text-[#09090B] hover:bg-slate-200 text-lg px-10 py-7 rounded-full font-bold shadow-xl transition-transform hover:scale-105"
+          >
+            Criar Minha Conta Grátis
+          </Button>
+          <p className="mt-6 text-sm text-slate-400 flex items-center justify-center gap-2">
+            <Lock className="w-4 h-4" /> Ambiente 100% seguro
+          </p>
         </div>
       </section>
 
       {/* FOOTER */}
-      <footer className="border-t border-slate-800 py-8 bg-[#0B1120]">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-[#075BFF] flex items-center justify-center text-white font-bold text-xs">O</div>
-            <span className="font-bold text-slate-300">OMNIREPMAX</span>
+      <footer className="border-t border-slate-800 py-12 bg-[#09090B]">
+        <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-8">
+          <div className="col-span-1 md:col-span-2">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-[#075BFF] flex items-center justify-center text-white font-bold text-sm">O</div>
+              <span className="font-bold text-xl text-white">OMNIREPMAX</span>
+            </div>
+            <p className="text-slate-400 text-sm max-w-xs">
+              O sistema definitivo para gestão de representação comercial. Focado em comissões, faturamento e inteligência artificial.
+            </p>
           </div>
-          <p className="text-sm text-slate-500">© 2026 OmniRepMax. Todos os direitos reservados.</p>
-          <div className="flex gap-4 text-sm text-slate-400">
-            <a href="#" className="hover:text-white">Termos</a>
-            <a href="#" className="hover:text-white">Privacidade</a>
+          <div>
+            <h4 className="font-bold text-white mb-4">Produto</h4>
+            <ul className="space-y-2 text-sm text-slate-400">
+              <li><a href="#features" className="hover:text-white transition-colors">Funcionalidades</a></li>
+              <li><a href="#pricing" className="hover:text-white transition-colors">Planos</a></li>
+              <li><a href="#faq" className="hover:text-white transition-colors">Dúvidas</a></li>
+            </ul>
           </div>
+          <div>
+            <h4 className="font-bold text-white mb-4">Legal</h4>
+            <ul className="space-y-2 text-sm text-slate-400">
+              <li><a href="#" className="hover:text-white transition-colors">Termos de Uso</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Privacidade</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Suporte</a></li>
+            </ul>
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto px-6 mt-12 pt-8 border-t border-slate-800/50 text-center text-sm text-slate-500">
+          © {new Date().getFullYear()} OmniRepMax. Todos os direitos reservados.
         </div>
       </footer>
     </div>
