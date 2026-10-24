@@ -5,7 +5,7 @@ import { fmtBRL } from "../lib/format";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Percent, TrendingUp, DollarSign, Clock, Building2, ListChecks } from "lucide-react";
+import { Percent, TrendingUp, DollarSign, Clock, Building2, ListChecks, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Comissoes() {
@@ -13,7 +13,6 @@ export default function Comissoes() {
   const [reps, setReps] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // Estado para o Modal de Parcelas
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedCom, setSelectedCom] = useState(null);
   const [parcelas, setParcelas] = useState([]);
@@ -42,11 +41,11 @@ export default function Comissoes() {
   const recebido = list.reduce((acc, c) => acc + (c.valor_recebido || 0), 0);
   const hoje = new Date();
   
-  // Consideramos vencidas as comissões que ainda têm saldo e já passaram da data prevista
-  const vencidas = list.filter(c => c.saldo_pendente > 0 && new Date(c.data_prevista) < hoje)
+  // Comissões vencidas ignoram as que estão aguardando liquidez (pois a data prevista ainda pode ser futura)
+  const vencidas = list.filter(c => c.status !== "aguardando_liquidez" && c.saldo_pendente > 0 && new Date(c.data_prevista) < hoje)
                       .reduce((acc, c) => acc + c.saldo_pendente, 0);
 
-  // --- Agrupamento por Representada (Fábrica) ---
+  // --- Agrupamento por Representada ---
   const resumoPorFabrica = reps.map(rep => {
     const comRep = list.filter(c => c.representada_id === rep.id);
     if (comRep.length === 0) return null;
@@ -60,7 +59,7 @@ export default function Comissoes() {
       totalRecebido: comRep.reduce((acc, c) => acc + (c.valor_recebido || 0), 0),
       saldoPendente: comRep.reduce((acc, c) => acc + (c.saldo_pendente || 0), 0),
     };
-  }).filter(Boolean); // Remove nulos
+  }).filter(Boolean);
 
   // --- Função para abrir o Modal de Parcelas ---
   const verParcelas = async (comissao) => {
@@ -68,10 +67,8 @@ export default function Comissoes() {
     setModalOpen(true);
     setLoadingParcelas(true);
     try {
-      // Busca todas as contas a receber e filtra pelo comissao_id
       const res = await api.get("/contas-receber");
       const parcelasFiltradas = res.data.filter(ar => ar.comissao_id === comissao.id);
-      // Ordena pela data de vencimento
       parcelasFiltradas.sort((a, b) => new Date(a.vencimento) - new Date(b.vencimento));
       setParcelas(parcelasFiltradas);
     } catch {
@@ -88,38 +85,27 @@ export default function Comissoes() {
 
   return (
     <div className="pb-10">
-      <PageHeader 
-        title="Gestão de Comissões" 
-        subtitle="Acompanhe o valor gerado por fábrica e veja o detalhamento por pedido" 
-      />
+      <PageHeader title="Gestão de Comissões" subtitle="Acompanhe o valor gerado por fábrica e veja o detalhamento por pedido" />
 
       {/* 1. Cards de Resumo Global */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <Card className="p-5 border-l-4 border-l-blue-500 shadow-sm bg-white dark:bg-slate-900">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
-            <Percent className="w-4 h-4" /> Comissões Geradas
-          </div>
+          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1"><Percent className="w-4 h-4" /> Comissões Geradas</div>
           <div className="text-2xl font-bold text-slate-900 dark:text-white">{fmtBRL(comissoesPrevistas)}</div>
         </Card>
         
         <Card className="p-5 border-l-4 border-l-amber-500 shadow-sm bg-white dark:bg-slate-900">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
-            <Clock className="w-4 h-4" /> Saldo a Receber
-          </div>
+          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1"><Clock className="w-4 h-4" /> Saldo a Receber</div>
           <div className="text-2xl font-bold text-amber-600">{fmtBRL(totalAReceber)}</div>
         </Card>
 
         <Card className="p-5 border-l-4 border-l-emerald-500 shadow-sm bg-white dark:bg-slate-900">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
-            <TrendingUp className="w-4 h-4" /> Já Recebido
-          </div>
+          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1"><TrendingUp className="w-4 h-4" /> Já Recebido</div>
           <div className="text-2xl font-bold text-emerald-600">{fmtBRL(recebido)}</div>
         </Card>
 
         <Card className="p-5 border-l-4 border-l-rose-500 shadow-sm bg-white dark:bg-slate-900">
-          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
-            <DollarSign className="w-4 h-4" /> Comissões Vencidas
-          </div>
+          <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1"><DollarSign className="w-4 h-4" /> Comissões Vencidas</div>
           <div className="text-2xl font-bold text-rose-600">{fmtBRL(vencidas)}</div>
         </Card>
       </div>
@@ -134,31 +120,16 @@ export default function Comissoes() {
             {resumoPorFabrica.map(r => (
               <div key={r.id} className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3 mb-3 border-b border-slate-100 dark:border-slate-800 pb-3">
-                  {r.logo ? (
-                    <img src={r.logo} alt="logo" className="w-10 h-10 rounded-lg object-contain bg-slate-50 p-1" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600">
-                      <Building2 className="w-5 h-5" />
-                    </div>
-                  )}
+                  {r.logo ? <img src={r.logo} alt="logo" className="w-10 h-10 rounded-lg object-contain bg-slate-50 p-1" /> : <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600"><Building2 className="w-5 h-5" /></div>}
                   <div>
                     <h4 className="font-bold text-sm text-slate-900 dark:text-white truncate">{r.nome}</h4>
-                    <p className="text-xs text-slate-500">{r.qtdPedidos} pedidos faturados</p>
+                    <p className="text-xs text-slate-500">{r.qtdPedidos} pedidos</p>
                   </div>
                 </div>
                 <div className="space-y-1.5 text-sm">
-                  <div className="flex justify-between text-slate-600 dark:text-slate-400">
-                    <span>Comissão Total:</span> 
-                    <span className="font-mono">{fmtBRL(r.totalGerado)}</span>
-                  </div>
-                  <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
-                    <span>Já Recebido:</span> 
-                    <span className="font-mono">{fmtBRL(r.totalRecebido)}</span>
-                  </div>
-                  <div className="flex justify-between text-amber-600 font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1.5">
-                    <span>A Receber:</span> 
-                    <span className="font-mono">{fmtBRL(r.saldoPendente)}</span>
-                  </div>
+                  <div className="flex justify-between text-slate-600 dark:text-slate-400"><span>Comissão Total:</span> <span className="font-mono">{fmtBRL(r.totalGerado)}</span></div>
+                  <div className="flex justify-between text-emerald-600 dark:text-emerald-400"><span>Já Recebido:</span> <span className="font-mono">{fmtBRL(r.totalRecebido)}</span></div>
+                  <div className="flex justify-between text-amber-600 font-bold border-t border-slate-100 dark:border-slate-800 pt-1.5 mt-1.5"><span>A Receber:</span> <span className="font-mono">{fmtBRL(r.saldoPendente)}</span></div>
                 </div>
               </div>
             ))}
@@ -166,7 +137,7 @@ export default function Comissoes() {
         </div>
       )}
 
-      {/* 3. Tabela Detalhada por Pedido */}
+      {/* 3. Tabela Detalhada */}
       <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-3 flex items-center gap-2 uppercase tracking-wide">
         <ListChecks className="w-4 h-4 text-[#075BFF]" /> Detalhamento dos Pedidos
       </h3>
@@ -177,7 +148,7 @@ export default function Comissoes() {
               <tr>
                 <th className="px-5 py-4 text-left text-slate-600 dark:text-slate-300">Pedido / NF</th>
                 <th className="px-5 py-4 text-left text-slate-600 dark:text-slate-300">Representada</th>
-                <th className="px-5 py-4 text-right text-slate-600 dark:text-slate-300">Valor Venda</th>
+                <th className="px-5 py-4 text-right text-slate-600 dark:text-slate-300">Valor Faturado</th>
                 <th className="px-5 py-4 text-center text-slate-600 dark:text-slate-300">%</th>
                 <th className="px-5 py-4 text-right text-emerald-600">Comissão Líquida</th>
                 <th className="px-5 py-4 text-right text-amber-600">Saldo Pendente</th>
@@ -192,44 +163,39 @@ export default function Comissoes() {
                     <div className="font-mono font-bold text-slate-900 dark:text-white">{c.pedido_numero}</div>
                     <div className="text-[10px] text-slate-500">{c.nf_numero ? `NF: ${c.nf_numero}` : "Sem NF"}</div>
                   </td>
-                  <td className="px-5 py-3 text-xs font-medium text-slate-700 dark:text-slate-300">
-                    {getRepName(c.representada_id)}
+                  <td className="px-5 py-3 text-xs font-medium text-slate-700 dark:text-slate-300">{getRepName(c.representada_id)}</td>
+                  
+                  {/* Alterado para mostrar o valor faturado e, se diferente, o valor do pedido */}
+                  <td className="px-5 py-3 text-right font-mono text-slate-500">
+                    {fmtBRL(c.valor_faturado || c.valor_total_pedido)}
+                    {c.valor_faturado && c.valor_faturado !== c.valor_total_pedido && (
+                      <div className="text-[10px] text-slate-400">Pedido: {fmtBRL(c.valor_total_pedido)}</div>
+                    )}
                   </td>
-                  <td className="px-5 py-3 text-right font-mono text-slate-500">{fmtBRL(c.valor_total_pedido)}</td>
+                  
                   <td className="px-5 py-3 text-center text-slate-500 font-medium">{c.percentual}%</td>
                   <td className="px-5 py-3 text-right font-mono font-bold text-emerald-600">{fmtBRL(c.valor_liquido)}</td>
                   <td className="px-5 py-3 text-right font-mono font-bold text-amber-600">{fmtBRL(c.saldo_pendente)}</td>
                   <td className="px-5 py-3 text-center"><StatusBadge status={c.status} /></td>
                   <td className="px-5 py-3 text-right">
-                    <Button 
-                      size="sm" 
-                      variant="outline"
-                      onClick={() => verParcelas(c)} 
-                      className="h-8 border-[#075BFF] text-[#075BFF] hover:bg-[#075BFF]/10"
-                    >
+                    <Button size="sm" variant="outline" onClick={() => verParcelas(c)} className="h-8 border-[#075BFF] text-[#075BFF] hover:bg-[#075BFF]/10">
                       Ver Parcelas
                     </Button>
                   </td>
                 </tr>
               ))}
               {list.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={8} className="text-center py-10 text-slate-500">
-                    Nenhuma comissão gerada até o momento.
-                  </td>
-                </tr>
+                <tr><td colSpan={8} className="text-center py-10 text-slate-500">Nenhuma comissão gerada até o momento.</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* 4. Modal de Parcelas (Detalhamento do Contas a Receber) */}
+      {/* 4. Modal de Parcelas */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
         <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Parcelas do Pedido {selectedCom?.pedido_numero}</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Parcelas do Pedido {selectedCom?.pedido_numero}</DialogTitle></DialogHeader>
           
           <div className="py-4">
             <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-lg mb-4 flex justify-between items-center">
@@ -246,6 +212,13 @@ export default function Comissoes() {
             <h4 className="text-sm font-semibold mb-2">Parcelas Geradas</h4>
             {loadingParcelas ? (
               <p className="text-sm text-slate-500 text-center py-4">Carregando...</p>
+            ) : selectedCom?.status === "aguardando_liquidez" ? (
+              // NOVO AVISO DE LIQUIDEZ
+              <div className="flex flex-col items-center justify-center p-6 bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/30 text-center">
+                <AlertCircle className="w-8 h-8 text-amber-500 mb-2" />
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Aguardando Liquidez</p>
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">As parcelas serão geradas no Contas a Receber assim que você confirmar que a fábrica recebeu o pagamento do cliente.</p>
+              </div>
             ) : parcelas.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-4">Nenhuma parcela encontrada no Contas a Receber.</p>
             ) : (
@@ -258,9 +231,7 @@ export default function Comissoes() {
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-mono font-bold text-slate-700 dark:text-slate-300">{fmtBRL(p.valor)}</p>
-                      <div className="mt-1">
-                        <StatusBadge status={p.status === "recebido" ? "pago" : p.status} />
-                      </div>
+                      <div className="mt-1"><StatusBadge status={p.status === "recebido" ? "pago" : p.status} /></div>
                     </div>
                   </div>
                 ))}

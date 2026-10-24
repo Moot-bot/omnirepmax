@@ -14,9 +14,8 @@ import {
 } from "lucide-react";
 import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
-import * as XLSX from 'xlsx'; // Importação do Excel
+import * as XLSX from 'xlsx';
 
-// Formulário da Representada (Completo)
 const emptyRep = { 
   razao_social: "", nome_fantasia: "", cnpj: "", logo: "",
   inscricao_estadual: "", segmento: "",
@@ -25,11 +24,11 @@ const emptyRep = {
   contato_nome: "", contato_cargo: "",
   comissao_padrao: 5.0, 
   modalidade_comissao: "faturamento",
+  base_calculo_comissao: "faturado", // <-- NOVO CAMPO
   prazo_pagamento: "30 dias", 
   observacoes: ""
 };
 
-// Formulário do Produto (Antigo + EAN, SKU, Marca, Categoria)
 const emptyProd = { 
   nome: "", codigo: "", ean: "", sku: "", marca: "", categoria: "", 
   preco_tabela: 0, unidade: "UN" 
@@ -42,22 +41,18 @@ export default function Representadas() {
   const [editing, setEditing] = useState(null);
   const [loadingCnpj, setLoadingCnpj] = useState(false);
 
-  // Estados do Modal de Detalhes (Catálogo & Docs)
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedRep, setSelectedRep] = useState(null);
   
-  // Produtos
   const [produtos, setProdutos] = useState([]);
   const [prodOpen, setProdOpen] = useState(false);
   const [prodForm, setProdForm] = useState(emptyProd);
   const [prodEditing, setProdEditing] = useState(null);
 
-  // Importação Excel
   const [importOpen, setImportOpen] = useState(false);
   const [importPreview, setImportPreview] = useState([]);
   const [importing, setImporting] = useState(false);
 
-  // Documentos
   const [docs, setDocs] = useState([]);
   const [uploading, setUploading] = useState(false);
 
@@ -138,11 +133,9 @@ export default function Representadas() {
     loadProdutos(selectedRep.id);
   };
 
-  // --- IMPORTAÇÃO EXCEL/CSV ---
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -174,21 +167,15 @@ export default function Representadas() {
   const confirmarImportacao = async () => {
     const novos = importPreview.filter(p => !p.isDuplicate);
     if (novos.length === 0) return toast.error("Nenhum produto novo para importar.");
-
     setImporting(true);
     try {
-      await api.post("/produtos/import-txt", {
-        representada_id: selectedRep.id,
-        produtos: novos
-      });
+      await api.post("/produtos/import-txt", { representada_id: selectedRep.id, produtos: novos });
       toast.success(`${novos.length} produtos importados!`);
-      setImportOpen(false); setImportPreview([]);
-      loadProdutos(selectedRep.id);
+      setImportOpen(false); setImportPreview([]); loadProdutos(selectedRep.id);
     } catch { toast.error("Erro ao importar."); }
     finally { setImporting(false); }
   };
 
-  // --- DOCUMENTOS ---
   const loadDocs = async (repId) => {
     const res = await api.get(`/representadas/${repId}/documentos`);
     setDocs(res.data);
@@ -202,20 +189,16 @@ export default function Representadas() {
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        await api.post(`/representadas/${selectedRep.id}/documentos`, {
-          nome: file.name, arquivo_base64: event.target.result
-        });
+        await api.post(`/representadas/${selectedRep.id}/documentos`, { nome: file.name, arquivo_base64: event.target.result });
         toast.success("Contrato anexado!"); loadDocs(selectedRep.id);
-      } catch { toast.error("Erro ao anexar arquivo"); }
-      finally { setUploading(false); }
+      } catch { toast.error("Erro ao anexar arquivo"); } finally { setUploading(false); }
     };
     reader.readAsDataURL(file);
   };
 
   const downloadDoc = async (docId, nome) => {
     const res = await api.get(`/documentos/${docId}/download`);
-    const link = document.createElement("a");
-    link.href = res.data.arquivo_base64; link.download = nome; link.click();
+    const link = document.createElement("a"); link.href = res.data.arquivo_base64; link.download = nome; link.click();
   };
 
   const delDoc = async (docId) => {
@@ -242,6 +225,7 @@ export default function Representadas() {
             <div className="flex flex-col gap-1 mb-4">
               <p className="text-xs font-semibold text-emerald-600 bg-emerald-50 inline-block px-2 py-1 rounded w-fit">Comissão: {rep.comissao_padrao}%</p>
               <p className="text-xs text-slate-500 capitalize">Modalidade: {rep.modalidade_comissao === "faturamento" ? "No Faturamento" : "Na Liquidez"}</p>
+              <p className="text-xs text-slate-500">Base: {rep.base_calculo_comissao || "Faturado"}</p>
               {rep.whatsapp && <p className="text-xs text-slate-500">📱 {rep.whatsapp}</p>}
             </div>
             
@@ -252,7 +236,6 @@ export default function Representadas() {
         ))}
       </div>
 
-      {/* MODAL 1: CADASTRO DA REPRESENTADA (Intacto) */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editing ? "Editar Representada" : "Nova Representada"}</DialogTitle></DialogHeader>
@@ -297,9 +280,25 @@ export default function Representadas() {
 
             <div>
               <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><FileText className="w-4 h-4 text-emerald-500" /> Regras Comerciais</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="space-y-1.5"><Label>Comissão Padrão (%)</Label><Input type="number" value={form.comissao_padrao} onChange={e => setForm({...form, comissao_padrao: parseFloat(e.target.value || 0)})} /></div>
-                <div className="space-y-1.5"><Label>Modalidade de Comissão</Label><Select value={form.modalidade_comissao} onValueChange={(v) => setForm({...form, modalidade_comissao: v})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="faturamento">No Faturamento</SelectItem><SelectItem value="liquidez">Na Liquidez</SelectItem></SelectContent></Select></div>
+                <div className="space-y-1.5"><Label>Forma de Pgto.</Label>
+                  <Select value={form.modalidade_comissao} onValueChange={(v) => setForm({...form, modalidade_comissao: v})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="faturamento">No Faturamento</SelectItem><SelectItem value="liquidez">Na Liquidez</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                {/* NOVO CAMPO: BASE DE CALCULO */}
+                <div className="space-y-1.5"><Label>Base de Cálculo</Label>
+                  <Select value={form.base_calculo_comissao} onValueChange={(v) => setForm({...form, base_calculo_comissao: v})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pedido">Valor do Pedido</SelectItem>
+                      <SelectItem value="faturado">Valor Faturado</SelectItem>
+                      <SelectItem value="recebido">Valor Recebido</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="space-y-1.5"><Label>Prazo de Pagamento</Label><Input value={form.prazo_pagamento} onChange={e => setForm({...form, prazo_pagamento: e.target.value})} placeholder="Ex: 30/60 dias" /></div>
                 <div className="space-y-1.5"><Label>Segmento</Label><Input value={form.segmento} onChange={e => setForm({...form, segmento: e.target.value})} /></div>
               </div>
@@ -311,11 +310,10 @@ export default function Representadas() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 2: DETALHES (PRODUTOS E DOCUMENTOS) */}
+      {/* MODAIS DE DETALHES E PRODUTOS (Mantidos exatamente como você enviou) */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-3">{selectedRep?.logo && <img src={selectedRep.logo} className="w-8 h-8 rounded object-contain" alt="logo"/>}Gerenciando: {selectedRep?.nome_fantasia || selectedRep?.razao_social}</DialogTitle></DialogHeader>
-          
           <Tabs defaultValue="produtos" className="mt-4">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="produtos"><Package className="w-4 h-4 mr-2" /> Produtos</TabsTrigger>
@@ -388,7 +386,6 @@ export default function Representadas() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 3: CADASTRO DE PRODUTO (Completo) */}
       <Dialog open={prodOpen} onOpenChange={setProdOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{prodEditing ? "Editar" : "Novo"} Produto</DialogTitle></DialogHeader>
@@ -405,7 +402,6 @@ export default function Representadas() {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 4: IMPORTAÇÃO EXCEL */}
       <Dialog open={importOpen} onOpenChange={(v) => { setImportOpen(v); if(!v) setImportPreview([]); }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Importar Produtos (Excel/CSV)</DialogTitle></DialogHeader>

@@ -197,6 +197,7 @@ class RepresentadaIn(BaseModel):
     contato_cargo: Optional[str] = ""
     comissao_padrao: float = 5.0
     modalidade_comissao: str = "faturamento"
+    base_calculo_comissao: str = "faturado" # NOVO CAMPO
     prazo_pagamento: Optional[str] = "30 dias"
     logo: Optional[str] = ""
     observacoes: Optional[str] = ""
@@ -206,26 +207,57 @@ class DocumentoIn(BaseModel):
     arquivo_base64: str
 
 class ClienteIn(BaseModel):
+    # Identificação
     razao_social: str
     nome_fantasia: Optional[str] = ""
     cnpj_cpf: Optional[str] = ""
     inscricao_estadual: Optional[str] = ""
+    situacao_cadastral: Optional[str] = "Ativa"
     segmento: Optional[str] = ""
     grupo_economico: Optional[str] = ""
+    origem: Optional[str] = ""
+    status: str = "ativo"
+    potencial: Optional[str] = "medio"
+    
+    # Endereço Faturamento
     endereco: Optional[str] = ""
     cidade: Optional[str] = ""
     estado: Optional[str] = ""
     cep: Optional[str] = ""
+    codigo_ibge: Optional[str] = ""
+    
+    # Endereço Entrega
+    endereco_entrega: Optional[str] = ""
+    cidade_entrega: Optional[str] = ""
+    estado_entrega: Optional[str] = ""
+    cep_entrega: Optional[str] = ""
+    
+    # Contatos
     telefone: Optional[str] = ""
     whatsapp: Optional[str] = ""
     email: Optional[str] = ""
     site: Optional[str] = ""
     responsavel: Optional[str] = ""
     cargo: Optional[str] = ""
-    origem: Optional[str] = ""
-    status: str = "ativo"
-    potencial: Optional[str] = "medio"
+    telefone_comprador: Optional[str] = ""
+    email_comprador: Optional[str] = ""
+    responsavel_financeiro: Optional[str] = ""
+    telefone_financeiro: Optional[str] = ""
+    email_financeiro: Optional[str] = ""
+    
+    # Comercial
+    tabela_precos: Optional[str] = ""
+    condicao_pagamento: Optional[str] = ""
+    limite_credito: float = 0.0
+    vendedor_responsavel: Optional[str] = ""
+    instrucoes_entrega: Optional[str] = ""
+    
+    # Fiscal
+    contribuinte_icms: Optional[str] = "Sim"
+    
+    # Vínculos e Observações
     representadas: List[str] = []
+    representadas_codigos: Dict[str, str] = {} # NOVO CAMPO
     observacoes: Optional[str] = ""
     lat: Optional[float] = None
     lng: Optional[float] = None
@@ -278,6 +310,14 @@ class PedidoIn(BaseModel):
     itens: List[PedidoItemIn]
     parcelas: List[dict] = []
     status: str = "rascunho"
+
+# NOVO MODELO DE FATURAMENTO
+class FaturamentoIn(BaseModel):
+    nf_numero: str
+    nf_serie: Optional[str] = ""
+    data_faturamento: str
+    valor_faturado: float
+    parcelas: List[dict] = []
 
 class OportunidadeIn(BaseModel):
     titulo: str
@@ -435,7 +475,6 @@ async def update_representada(rid: str, body: RepresentadaIn, current=Depends(ge
 @api.delete("/representadas/{rid}")
 async def del_representada(rid: str, current=Depends(get_current_user)):
     tid = tid_of(current)
-    # AQUI ESTÁ A PROTEÇÃO: Não deixa excluir se tiver pedidos
     has_pedidos = await db.pedidos.count_documents({"representada_id": rid, "tenant_id": tid})
     if has_pedidos > 0: 
         raise HTTPException(400, f"Não é possível excluir. Existem {has_pedidos} pedidos vinculados a esta representada.")
@@ -493,7 +532,6 @@ async def update_cliente(cid: str, body: ClienteIn, current=Depends(get_current_
 @api.delete("/clientes/{cid}")
 async def del_cliente(cid: str, current=Depends(get_current_user)):
     tid = tid_of(current)
-    # AQUI ESTÁ A PROTEÇÃO: Não deixa excluir se tiver pedidos
     has_pedidos = await db.pedidos.count_documents({"cliente_id": cid, "tenant_id": tid})
     if has_pedidos > 0: 
         raise HTTPException(400, f"Não é possível excluir. Existem {has_pedidos} pedidos vinculados a este cliente.")
@@ -526,9 +564,20 @@ async def import_txt(body: TXTImportIn, current=Depends(get_current_user)):
     tid = tid_of(current)
     criados = 0
     for p in body.produtos:
+        # O frontend agora manda 'ean', 'marca' e 'categoria'
         existing = await db.produtos.find_one({"tenant_id": tid, "codigo": p.get("codigo"), "representada_id": body.representada_id})
         if not existing:
-            await t_insert("produtos", current, {"representada_id": body.representada_id, "nome": p.get("nome"), "codigo": p.get("codigo"), "preco_tabela": float(p.get("preco", 0)), "unidade": p.get("unidade", "UN"), "status": "ativo"})
+            await t_insert("produtos", current, {
+                "representada_id": body.representada_id, 
+                "nome": p.get("nome"), 
+                "codigo": p.get("codigo"), 
+                "ean": p.get("ean", ""),
+                "marca": p.get("marca", ""),
+                "categoria": p.get("categoria", ""),
+                "preco_tabela": float(p.get("preco", 0)), 
+                "unidade": p.get("unidade", "UN"), 
+                "status": "ativo"
+            })
             criados += 1
     return {"ok": True, "criados": criados}
 
@@ -551,15 +600,15 @@ def calc_pedido_totals(data: dict, repr_comissao: float) -> dict:
     data["comissao_valor"] = round(total * repr_comissao / 100.0, 2)
     return data
 
-async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict):
+async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parcelas_override: List[dict] = None):
     tid = tid_of(current)
-    parcelas = ped.get("parcelas", [])
+    parcelas = parcelas_override if parcelas_override is not None else ped.get("parcelas", [])
     valor_liquido = comissao["valor_liquido"]
     
     if not parcelas:
         parcelas = [{"vencimento": iso(now_utc() + timedelta(days=30)), "valor": valor_liquido}]
     else:
-        # AQUI ESTÁ A CORREÇÃO MATEMÁTICA: Ajusta a última parcela para fechar o valor
+        # Ajusta a última parcela para fechar o valor exato
         soma_parcelas = sum(p["valor"] for p in parcelas)
         if abs(soma_parcelas - valor_liquido) > 0.01:
             diferenca = valor_liquido - soma_parcelas
@@ -568,7 +617,7 @@ async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict):
     for i, p in enumerate(parcelas):
         await t_insert("contas_receber", current, {
             "comissao_id": comissao["id"], "cliente_id": ped.get("cliente_id"), "representada_id": ped.get("representada_id"),
-            "pedido_id": ped["id"], "numero_documento": f"{ped.get('numero')} ({i+1}/{len(parcelas)})",
+            "pedido_id": ped["id"], "numero_documento": f"{ped.get('numero')} (NF {comissao.get('nf_numero')} - {i+1}/{len(parcelas)})",
             "valor": p["valor"], "valor_recebido": 0.0, "saldo_pendente": p["valor"],
             "vencimento": p["vencimento"], "status": "aberto", "historico_recebimentos": [], "forma_pagamento": "Boleto",
         })
@@ -600,7 +649,7 @@ async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_us
     tid = tid_of(current)
     existing = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not existing: raise HTTPException(404, "Pedido não encontrado")
-    if existing.get("status") == "faturado": raise HTTPException(400, "Pedidos faturados não podem ser editados.")
+    if existing.get("status") in ("faturado", "faturado_parcial"): raise HTTPException(400, "Pedidos faturados não podem ser editados.")
 
     data = body.model_dump()
     rep = await db.representadas.find_one({"id": data["representada_id"], "tenant_id": tid}, {"_id": 0})
@@ -616,45 +665,85 @@ async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_us
 async def status_pedido(pid: str, body: dict, current=Depends(get_current_user)):
     novo = body.get("status")
     if not novo: raise HTTPException(400, "status obrigatório")
-    
+    updates = {"status": novo}
+    if "nf_numero" in body: updates["nf_numero"] = body["nf_numero"]
+    return await t_update("pedidos", current, pid, updates)
+
+@api.post("/pedidos/{pid}/faturamento")
+async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(get_current_user)):
     tid = tid_of(current)
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not ped: raise HTTPException(404, "Pedido não encontrado")
     
-    updates = {"status": novo}
-    if "nf_numero" in body: updates["nf_numero"] = body["nf_numero"]
-    ped = await t_update("pedidos", current, pid, updates)
+    rep = await db.representadas.find_one({"id": ped["representada_id"], "tenant_id": tid})
     
-    if novo == "faturado":
-        exists = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid})
-        if not exists:
-            rep = await db.representadas.find_one({"id": ped["representada_id"], "tenant_id": tid})
-            valor_total_pedido = ped.get("total", 0)
-            percentual = rep.get("comissao_padrao", 5.0)
-            valor_liquido = round(valor_total_pedido * (percentual / 100), 2)
-            modalidade = rep.get("modalidade_comissao", "faturamento")
-            
-            comissao_data = {
-                "pedido_id": pid, "pedido_numero": ped.get("numero"), "cliente_id": ped.get("cliente_id"), 
-                "representada_id": ped.get("representada_id"), "nf_numero": updates.get("nf_numero", ""),
-                "valor_total_pedido": valor_total_pedido, "percentual": percentual, "valor_liquido": valor_liquido,
-                "valor_recebido": 0.0, "saldo_pendente": valor_liquido, "modalidade": modalidade,
-                "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez", "historico_recebimentos": [],
-            }
-            comissao = await t_insert("comissoes", current, comissao_data)
-            if modalidade == "faturamento": await gerar_parcelas_comissao(current, ped, comissao)
-    return ped
+    # 1. Salva o histórico do faturamento
+    faturamento_data = {
+        "pedido_id": pid, "nf_numero": body.nf_numero, "nf_serie": body.nf_serie,
+        "data_faturamento": body.data_faturamento, "valor_faturado": body.valor_faturado,
+        "created_at": iso(now_utc())
+    }
+    await t_insert("faturamentos", current, faturamento_data)
+    
+    # 2. Calcula a comissão baseada na regra da representada
+    base = rep.get("base_calculo_comissao", "faturado")
+    if base == "pedido":
+        valor_base = ped.get("total", 0)
+    elif base == "recebido":
+        valor_base = 0 # Será calculado na liquidez
+    else:
+        valor_base = body.valor_faturado
+        
+    percentual = rep.get("comissao_padrao", 5.0)
+    valor_liquido = round(valor_base * (percentual / 100), 2)
+    
+    # 3. Cria a comissão
+    comissao_data = {
+        "pedido_id": pid, "pedido_numero": ped.get("numero"), "cliente_id": ped.get("cliente_id"), 
+        "representada_id": ped.get("representada_id"), "nf_numero": body.nf_numero,
+        "valor_total_pedido": ped.get("total", 0), "valor_faturado": body.valor_faturado,
+        "percentual": percentual, "valor_liquido": valor_liquido,
+        "valor_recebido": 0.0, "saldo_pendente": valor_liquido, 
+        "modalidade": rep.get("modalidade_comissao", "faturamento"),
+        "status": "pendente" if rep.get("modalidade_comissao") == "faturamento" else "aguardando_liquidez", 
+        "historico_recebimentos": [],
+    }
+    comissao = await t_insert("comissoes", current, comissao_data)
+    
+    # 4. Gera Contas a Receber (se for faturamento)
+    if rep.get("modalidade_comissao") == "faturamento" and valor_liquido > 0:
+        await gerar_parcelas_comissao(current, ped, comissao, body.parcelas)
+        
+    # 5. Atualiza o status do pedido (parcial ou total)
+    faturamentos = await t_list("faturamentos", current, {"pedido_id": pid})
+    total_faturado = sum(f["valor_faturado"] for f in faturamentos)
+    novo_status = "faturado" if total_faturado >= ped["total"] else "faturado_parcial"
+    await db.pedidos.update_one({"id": pid}, {"$set": {"status": novo_status}})
+    
+    return {"ok": True, "status": novo_status}
 
 @api.post("/pedidos/{pid}/liquidez")
 async def confirmar_liquidez(pid: str, current=Depends(get_current_user)):
     tid = tid_of(current)
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not ped: raise HTTPException(404, "Pedido não encontrado")
-    com = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid})
-    if not com: raise HTTPException(404, "Comissão não encontrada")
-    if com.get("status") != "aguardando_liquidez": raise HTTPException(400, "Esta comissão já foi liberada ou paga.")
+    
+    # Busca a comissão que está aguardando liquidez
+    com = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid, "status": "aguardando_liquidez"})
+    if not com: raise HTTPException(404, "Comissão não encontrada ou já liberada.")
         
     await db.comissoes.update_one({"id": com["id"]}, {"$set": {"status": "pendente"}})
+    
+    # Se a base de cálculo for "recebido", o valor é calculado aqui
+    rep = await db.representadas.find_one({"id": ped["representada_id"], "tenant_id": tid})
+    if rep.get("base_calculo_comissao") == "recebido":
+        # Recalcula baseado no valor faturado total
+        faturamentos = await t_list("faturamentos", current, {"pedido_id": pid})
+        total_faturado = sum(f["valor_faturado"] for f in faturamentos)
+        novo_valor_liquido = round(total_faturado * (com["percentual"] / 100), 2)
+        await db.comissoes.update_one({"id": com["id"]}, {"$set": {"valor_liquido": novo_valor_liquido, "saldo_pendente": novo_valor_liquido}})
+        com["valor_liquido"] = novo_valor_liquido
+        
     await gerar_parcelas_comissao(current, ped, com)
     return {"ok": True, "message": "Comissão liberada."}
 
@@ -665,6 +754,7 @@ async def del_pedido(pid: str, current=Depends(get_current_user)):
     if paga: raise HTTPException(400, "Pedido possui comissão já recebida. Estorne antes de excluir.")
     await db.comissoes.delete_many({"tenant_id": tid, "pedido_id": pid})
     await db.contas_receber.delete_many({"tenant_id": tid, "pedido_id": pid})
+    await db.faturamentos.delete_many({"tenant_id": tid, "pedido_id": pid})
     return await t_delete("pedidos", current, pid)
 
 # ------------------------------------------------------------
@@ -808,14 +898,13 @@ def _in_year(s, y):
 
 @api.get("/dashboard")
 async def dashboard(current=Depends(get_current_user)):
-    # AQUI ESTÁ A OTIMIZAÇÃO: Tudo em paralelo
     pedidos, reps, comissoes, ap, ar, clientes, visitas, ops = await asyncio.gather(
         t_list("pedidos", current), t_list("representadas", current), t_list("comissoes", current),
         t_list("contas_pagar", current), t_list("contas_receber", current), t_list("clientes", current),
         t_list("visitas", current), t_list("oportunidades", current)
     )
 
-    faturados = [p for p in pedidos if p.get("status") == "faturado"]
+    faturados = [p for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")]
     now = now_utc(); mes = now.month; ano = now.year
     
     fat_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
@@ -824,7 +913,7 @@ async def dashboard(current=Depends(get_current_user)):
     fat_por_rep = [{"nome": r.get("nome_fantasia") or r.get("razao_social"), "valor": round(sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"]), 2)} for r in reps]
         
     com_recebidas = sum(c.get("valor_recebido", 0) for c in comissoes)
-    com_abertas = sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") != "recebida")
+    com_abertas = sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") not in ("recebida", "aguardando_liquidez"))
     
     ap_abertas = sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto")
     ar_abertas = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
@@ -925,7 +1014,7 @@ async def insights_regras(current=Depends(get_current_user)):
         if dias >= 60:
             insights.append({"tipo": "alerta", "titulo": f"Cliente sem compra há {dias} dias", "descricao": f"{c.get('nome_fantasia') or c.get('razao_social')} sem pedidos recentes.", "cliente_id": c["id"]})
     for r in reps:
-        pr = [p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"]
+        pr = [p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") in ("faturado", "faturado_parcial")]
         if len(pr) >= 2:
             total = sum(p.get("total", 0) for p in pr)
             insights.append({"tipo": "oportunidade", "titulo": f"Boa performance: {r.get('nome_fantasia') or r.get('razao_social')}", "descricao": f"Total faturado: R$ {total:,.2f}."})
@@ -940,7 +1029,7 @@ async def _build_ai_context(current: dict) -> str:
     top_c = sorted(clientes, key=lambda c: sum(p.get("total", 0) for p in pedidos if p.get("cliente_id") == c["id"]), reverse=True)[:10]
     top_clientes = []
     for c in top_c:
-        fat = sum(p.get("total", 0) for p in pedidos if p.get("cliente_id") == c["id"] and p.get("status") == "faturado")
+        fat = sum(p.get("total", 0) for p in pedidos if p.get("cliente_id") == c["id"] and p.get("status") in ("faturado", "faturado_parcial"))
         ult_data = max((_parse_date(p.get("data_pedido")) or now for p in pedidos if p.get("cliente_id") == c["id"]), default=None)
         dias = (now - ult_data).days if ult_data else None
         top_clientes.append({"nome": c.get("nome_fantasia") or c.get("razao_social"), "status": c.get("status"), "cidade": c.get("cidade"), "faturamento": round(fat, 2), "dias_ultima_compra": dias})
@@ -954,7 +1043,7 @@ async def _build_ai_context(current: dict) -> str:
         if not datas or (now - max(datas)).days > 30: inativos.append(nome)
     inativos = inativos[:10]
 
-    por_rep = [{"representada": r.get("nome_fantasia") or r.get("razao_social"), "comissao_padrao": r.get("comissao_padrao"), "total_faturado": round(sum(p.get("total", 0) for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"), 2), "pedidos_faturados": len([p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") == "faturado"])} for r in reps]
+    por_rep = [{"representada": r.get("nome_fantasia") or r.get("razao_social"), "comissao_padrao": r.get("comissao_padrao"), "total_faturado": round(sum(p.get("total", 0) for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") in ("faturado", "faturado_parcial")), 2), "pedidos_faturados": len([p for p in pedidos if p.get("representada_id") == r["id"] and p.get("status") in ("faturado", "faturado_parcial")])} for r in reps]
 
     ar_saldo_aberto = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
 
@@ -963,9 +1052,9 @@ async def _build_ai_context(current: dict) -> str:
         "resumo": {
             "clientes_total": len(clientes), "clientes_ativos": sum(1 for c in clientes if c.get("status") == "ativo"),
             "clientes_prospect": sum(1 for c in clientes if c.get("status") == "prospect"), "clientes_inativos": sum(1 for c in clientes if c.get("status") == "inativo"),
-            "pedidos_total": len(pedidos), "pedidos_faturados": sum(1 for p in pedidos if p.get("status") == "faturado"), "pedidos_em_aberto": sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")),
-            "volume_vendas_total": round(sum(p.get("total", 0) for p in pedidos if p.get("status") == "faturado"), 2),
-            "comissoes_a_receber": round(sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") != "recebida"), 2),
+            "pedidos_total": len(pedidos), "pedidos_faturados": sum(1 for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")), "pedidos_em_aberto": sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")),
+            "volume_vendas_total": round(sum(p.get("total", 0) for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")), 2),
+            "comissoes_a_receber": round(sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") not in ("recebida", "aguardando_liquidez")), 2),
             "comissoes_recebidas": round(sum(c.get("valor_recebido", 0) for c in comissoes), 2),
             "contas_a_pagar_aberto": round(sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto"), 2),
             "contas_a_receber_aberto": round(ar_saldo_aberto, 2),
@@ -1123,12 +1212,19 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
     }
     pedido = await t_insert("pedidos", current, pedido_data)
     
+    # Cria o registro de faturamento para o XML
+    await t_insert("faturamentos", current, {
+        "pedido_id": pedido["id"], "nf_numero": parsed.get("numero"), "nf_serie": parsed.get("serie"),
+        "data_faturamento": parsed.get("data_emissao") or iso(now_utc()), "valor_faturado": total,
+        "created_at": iso(now_utc())
+    })
+    
     valor_liquido = pedido_data["comissao_valor"]
     modalidade = rep_match.get("modalidade_comissao", "faturamento")
     
     comissao_data = {
         "pedido_id": pedido["id"], "pedido_numero": pedido["numero"], "cliente_id": cli_match["id"], "representada_id": rep_match["id"],
-        "nf_numero": pedido_data["nf_numero"], "valor_total_pedido": total, "percentual": comm, "valor_liquido": valor_liquido,
+        "nf_numero": pedido_data["nf_numero"], "valor_total_pedido": total, "valor_faturado": total, "percentual": comm, "valor_liquido": valor_liquido,
         "valor_recebido": 0.0, "saldo_pendente": valor_liquido, "modalidade": modalidade,
         "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez", "historico_recebimentos": [], "data_prevista": iso(now_utc() + timedelta(days=30))
     }
@@ -1157,6 +1253,130 @@ async def import_xml(body: XMLImportIn, current=Depends(get_current_user)):
 @api.get("/xml/historico")
 async def xml_historico(current=Depends(get_current_user)):
     return await t_list("xml_files", current)
+# ------------------------------------------------------------
+# Relatórios Avançados
+# ------------------------------------------------------------
+@api.get("/relatorios/geral")
+async def relatorio_geral(current=Depends(get_current_user)):
+    # Carrega todos os dados necessários em paralelo
+    pedidos, reps, clientes, comissoes, ar, faturas, produtos, visitas = await asyncio.gather(
+        t_list("pedidos", current), t_list("representadas", current), t_list("clientes", current),
+        t_list("comissoes", current), t_list("contas_receber", current), t_list("faturamentos", current),
+        t_list("produtos", current), t_list("visitas", current)
+    )
+    
+    now = now_utc(); mes = now.month; ano = now.year
+    
+    # --- 1. DASHBOARD COMERCIAL ---
+    faturados = [p for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")]
+    pendentes = [p for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")]
+    
+    fat_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
+    total_vendas = sum(p.get("total", 0) for p in faturados)
+    ticket_medio = total_vendas / len(faturados) if faturados else 0
+    
+    # Tempo médio de faturamento
+    tempos_fat = []
+    for f in faturas:
+        ped = next((p for p in pedidos if p["id"] == f["pedido_id"]), None)
+        if ped and f.get("data_faturamento") and ped.get("data_pedido"):
+            d1 = _parse_date(ped["data_pedido"])
+            d2 = _parse_date(f["data_faturamento"])
+            if d1 and d2: tempos_fat.append((d2 - d1).days)
+    tempo_medio_fat = sum(tempos_fat) / len(tempos_fat) if tempos_fat else 0
+
+    # --- 2. FINANCEIRO E COMISSÕES ---
+    com_prevista = sum(c.get("valor_liquido", 0) for c in comissoes)
+    com_recebida = sum(c.get("valor_recebido", 0) for c in comissoes)
+    com_a_receber = sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") != "recebida")
+    
+    # Conciliação (Faturado x Pedido)
+    valor_pedido = sum(p.get("total", 0) for p in pedidos)
+    valor_faturado = sum(f.get("valor_faturado", 0) for f in faturas)
+    valor_recebido_fabrica = sum(a.get("valor_recebido", 0) for a in ar) # Apenas comissões recebidas, mas podemos simular o total
+    
+    # --- 3. CLIENTES E CARTEIRA (Curva ABC) ---
+    cli_fat = {}
+    for p in faturados:
+        cid = p.get("cliente_id")
+        cli_fat[cid] = cli_fat.get(cid, 0) + p.get("total", 0)
+    
+    top_cli = sorted(cli_fat.items(), key=lambda x: -x[1])
+    total_fat_cli = sum(cli_fat.values())
+    
+    curva_a, curva_b, curva_c = [], [], []
+    acumulado = 0
+    for cid, valor in top_cli:
+        acumulado += valor
+        perc = (acumulado / total_fat_cli * 100) if total_fat_cli > 0 else 0
+        cli_obj = next((c for c in clientes if c["id"] == cid), {})
+        nome = cli_obj.get("nome_fantasia") or cli_obj.get("razao_social", "Cliente")
+        
+        if perc <= 80: curva_a.append({"nome": nome, "valor": valor})
+        elif perc <= 95: curva_b.append({"nome": nome, "valor": valor})
+        else: curva_c.append({"nome": nome, "valor": valor})
+
+    # Clientes Inativos
+    inativos_30, inativos_60, inativos_90 = [], [], []
+    for c in clientes:
+        pc = [p for p in faturados if p.get("cliente_id") == c["id"]]
+        if not pc:
+            inativos_90.append(c.get("nome_fantasia") or c.get("razao_social"))
+        else:
+            ult = max((_parse_date(p.get("data_pedido")) or now for p in pc))
+            dias = (now - ult).days
+            nome = c.get("nome_fantasia") or c.get("razao_social")
+            if dias > 90: inativos_90.append(nome)
+            elif dias > 60: inativos_60.append(nome)
+            elif dias > 30: inativos_30.append(nome)
+
+    # --- 4. PRODUTOS E MIX ---
+    prod_vendas = {}
+    for p in faturados:
+        for it in p.get("itens", []):
+            pid = it.get("produto_id")
+            prod_vendas[pid] = prod_vendas.get(pid, {"nome": it.get("nome"), "qtd": 0, "valor": 0})
+            prod_vendas[pid]["qtd"] += it.get("quantidade", 0)
+            prod_vendas[pid]["valor"] += it.get("subtotal", 0)
+            
+    top_prods = sorted(prod_vendas.values(), key=lambda x: -x["valor"])[:10]
+    
+    sem_giro = []
+    for p in produtos:
+        if p["id"] not in prod_vendas:
+            sem_giro.append({"nome": p["nome"], "marca": p.get("marca"), "representada_id": p.get("representada_id")})
+
+    # --- 5. PRODUTIVIDADE ---
+    visitas_re = [v for v in visitas if v.get("status") == "realizada"]
+    clientes_visitados = len(set(v["cliente_id"] for v in visitas_re))
+    clientes_positivados = len(set(p["cliente_id"] for p in faturados))
+    conversao = (clientes_positivados / clientes_visitados * 100) if clientes_visitados > 0 else 0
+
+    return {
+        "comercial": {
+            "fat_mes": fat_mes, "total_vendas": total_vendas, "ticket_medio": ticket_medio,
+            "qtd_pedidos": len(pedidos), "qtd_pendentes": len(pendentes),
+            "tempo_medio_faturamento_dias": round(tempo_medio_fat, 1),
+            "por_representada": [{"nome": r.get("nome_fantasia"), "valor": sum(p.get("total", 0) for p in faturados if p.get("representada_id") == r["id"])} for r in reps]
+        },
+        "financeiro": {
+            "com_prevista": com_prevista, "com_recebida": com_recebida, "com_a_receber": com_a_receber,
+            "valor_pedido": valor_pedido, "valor_faturado": valor_faturado,
+            "valor_recebido": valor_recebido_fabrica
+        },
+        "clientes": {
+            "curva_abc": {"A": curva_a[:10], "B": curva_b[:10], "C": curva_c[:10]}, # Limitando a 10 cada para não pesar
+            "inativos": {"d30": inativos_30, "d60": inativos_60, "d90": inativos_90}
+        },
+        "produtos": {
+            "top_produtos": top_prods,
+            "sem_giro": sem_giro[:10]
+        },
+        "produtividade": {
+            "visitas": len(visitas_re), "clientes_atendidos": clientes_visitados,
+            "clientes_positivados": clientes_positivados, "conversao": round(conversao, 1)
+        }
+    }
 
 # ------------------------------------------------------------
 # Backup Cron / Stripe / Reset
@@ -1165,7 +1385,7 @@ async def _run_backup(run_id: str):
     if await db.backups.find_one({"run_id": run_id}): return
     snapshot = {"id": new_id(), "run_id": run_id, "created_at": iso(now_utc()), "collections": {}}
     total = 0
-    for name in ["users", "representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos"]:
+    for name in ["users", "representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos", "faturamentos"]:
         docs = [clean_doc(d) async for d in db[name].find({}, {"_id": 0})]
         if name == "users":
             for u in docs: u.pop("password_hash", None)
@@ -1293,7 +1513,7 @@ async def stripe_webhook(request: Request):
     elif t == "customer.subscription.deleted": await db.users.update_one({"stripe_subscription_id": obj.get("id")}, {"$set": {"subscription_status": "canceled", "plan": "canceled"}})
     return {"status": "ok"}
 
-RESET_COLLECTIONS = ["clientes", "representadas", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos", "insights_ai", "max_ai_messages"]
+RESET_COLLECTIONS = ["clientes", "representadas", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos", "faturamentos", "insights_ai", "max_ai_messages"]
 class SystemResetIn(BaseModel): motivo: str; confirmacao: str
 
 @api.get("/system/reset/preview")
@@ -1351,7 +1571,7 @@ async def startup():
     except Exception: pass
     try: await db.backups.create_index("run_id", unique=True, sparse=True)
     except Exception: pass
-    for col in ["users", "representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos"]:
+    for col in ["users", "representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos", "faturamentos"]:
         try: await db[col].create_index("id")
         except Exception: pass
         try: await db[col].create_index("tenant_id")
@@ -1379,7 +1599,7 @@ async def startup():
         await seed_demo(db)
     except ImportError: pass
 
-    for col in ["representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos"]:
+    for col in ["representadas", "clientes", "produtos", "pedidos", "oportunidades", "visitas", "comissoes", "contas_receber", "contas_pagar", "xml_files", "documentos", "faturamentos"]:
         await db[col].update_many({"tenant_id": {"$exists": False}}, {"$set": {"tenant_id": admin_tid}})
 
 @app.on_event("shutdown")

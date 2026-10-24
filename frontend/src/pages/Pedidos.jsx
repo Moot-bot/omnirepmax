@@ -6,7 +6,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Plus, Trash2, CheckCircle, Calculator, UserPlus, Loader2, Edit2, Landmark, PlusCircle, MinusCircle } from "lucide-react";
+import { Plus, Trash2, CheckCircle, Calculator, UserPlus, Loader2, Edit2, Landmark, PlusCircle, MinusCircle, FileText } from "lucide-react";
 import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
 
@@ -22,9 +22,10 @@ export default function Pedidos() {
   const [selectedProd, setSelectedProd] = useState("");
   const [qtd, setQtd] = useState(1);
 
+  // NOVOS ESTADOS PARA FATURAMENTO PARCIAL
   const [fatOpen, setFatOpen] = useState(false);
   const [selectedPed, setSelectedPed] = useState(null);
-  const [nfNum, setNfNum] = useState("");
+  const [fatForm, setFatForm] = useState({ nf_numero: "", nf_serie: "", valor_faturado: 0, parcelas: [] });
 
   const [cliOpen, setCliOpen] = useState(false);
   const [newCli, setNewCli] = useState({ razao_social: "", nome_fantasia: "", cnpj_cpf: "", cidade: "", estado: "" });
@@ -78,7 +79,6 @@ export default function Pedidos() {
 
   const calcTotal = () => form.itens.reduce((acc, i) => acc + (i.quantidade * i.preco_unitario), 0);
 
-  // Gera parcelas automaticamente
   const gerarParcelas = () => {
     const total = calcTotal();
     if (total <= 0) return toast.error("Adicione itens primeiro");
@@ -91,7 +91,6 @@ export default function Pedidos() {
     setForm({ ...form, parcelas });
   };
 
-  // Adiciona parcela manual
   const addParcelaManual = () => {
     const total = calcTotal();
     const restante = total - form.parcelas.reduce((acc, p) => acc + p.valor, 0);
@@ -125,12 +124,42 @@ export default function Pedidos() {
     setEditingId(p.id); setOpen(true);
   };
 
+  // --- LÓGICA DE FATURAMENTO PARCIAL ---
+  const handleOpenFat = (p) => {
+    setSelectedPed(p);
+    const rep = reps.find(r => r.id === p.representada_id);
+    setFatForm({ 
+      nf_numero: "", 
+      nf_serie: "", 
+      valor_faturado: p.total, 
+      data_faturamento: new Date().toISOString().split('T')[0],
+      parcelas: [] 
+    });
+    setFatOpen(true);
+  };
+
+  const gerarParcelasFaturamento = () => {
+    const rep = reps.find(r => r.id === selectedPed.representada_id);
+    const percentual = rep?.comissao_padrao || 5;
+    const valorComissao = fatForm.valor_faturado * (percentual / 100);
+    const dias = (rep?.prazo_pagamento || "30").split("/").map(d => parseInt(d.trim()) || 30);
+    const valParcela = valorComissao / dias.length;
+    
+    const parcelas = dias.map(d => {
+      const dt = new Date(); dt.setDate(dt.getDate() + d);
+      return { vencimento: dt.toISOString().split('T')[0], valor: Math.round(valParcela * 100) / 100 };
+    });
+    setFatForm({ ...fatForm, parcelas });
+  };
+
   const faturar = async () => {
-    if (!nfNum.trim()) return toast.error("Informe a NF");
+    if (!fatForm.nf_numero.trim()) return toast.error("Informe a NF");
+    if (fatForm.valor_faturado <= 0) return toast.error("Informe o valor faturado");
     try {
-      await api.patch(`/pedidos/${selectedPed.id}/status`, { status: "faturado", nf_numero: nfNum });
-      toast.success("Pedido faturado!"); setFatOpen(false); load();
-    } catch { toast.error("Erro ao faturar"); }
+      await api.post(`/pedidos/${selectedPed.id}/faturamento`, fatForm);
+      toast.success("Faturamento registrado com sucesso!"); 
+      setFatOpen(false); load();
+    } catch (e) { toast.error(e.response?.data?.detail || "Erro ao registrar faturamento"); }
   };
 
   const liberarLiquidez = async (p) => {
@@ -175,7 +204,7 @@ export default function Pedidos() {
                   </td>
                   <td className="px-5 py-3 text-right space-x-1">
                     {(p.status === "rascunho" || p.status === "enviado") && <Button size="sm" variant="outline" onClick={() => handleEdit(p)}><Edit2 className="w-3.5 h-3.5" /></Button>}
-                    {p.status !== "faturado" && <Button size="sm" onClick={() => { setSelectedPed(p); setNfNum(""); setFatOpen(true); }} className="bg-emerald-600 h-8">Faturar</Button>}
+                    {p.status !== "faturado" && <Button size="sm" onClick={() => handleOpenFat(p)} className="bg-emerald-600 h-8"><FileText className="w-3.5 h-3.5 mr-1" /> Faturar</Button>}
                     {isLiquidezPendente && <Button size="sm" onClick={() => liberarLiquidez(p)} className="bg-amber-600 h-8" title="Fábrica Recebeu"><Landmark className="w-3.5 h-3.5 mr-1" /> Liquidez</Button>}
                   </td>
                 </tr>
@@ -185,13 +214,11 @@ export default function Pedidos() {
         </table>
       </div>
 
-      {/* MODAL DE PEDIDO (Com Parcelas Manuais e Auto) */}
+      {/* MODAL DE PEDIDO (Mantido) */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editingId ? "Editar Pedido" : "Novo Pedido"}</DialogTitle></DialogHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
-            
-            {/* Coluna Esquerda: Dados e Itens */}
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <Label>Representada</Label>
@@ -233,18 +260,15 @@ export default function Pedidos() {
               </div>
             </div>
 
-            {/* Coluna Direita: Parcelamento */}
             <div className="border p-4 rounded-xl bg-slate-50 space-y-4">
               <div className="flex justify-between items-center">
                 <Label className="text-base">Parcelamento</Label>
                 <Button onClick={gerarParcelas} variant="secondary" size="sm" disabled={form.itens.length === 0}><Calculator className="w-4 h-4 mr-1" /> Auto-Calcular</Button>
               </div>
-              
               <div className="space-y-1.5">
                 <Label>Condição para Auto-Cálculo</Label>
                 <Input value={form.condicao_pagamento} onChange={e => setForm({...form, condicao_pagamento: e.target.value})} placeholder="Ex: 30/60/90" />
               </div>
-
               <div className="space-y-2 mt-2 max-h-[300px] overflow-y-auto pr-2">
                 {form.parcelas.map((p, i) => (
                   <div key={i} className="flex gap-2 items-center bg-white p-2 rounded border">
@@ -265,7 +289,65 @@ export default function Pedidos() {
         </DialogContent>
       </Dialog>
 
-      {/* Modais de Cliente Rápido e Faturamento (Intactos) */}
+      {/* MODAL DE FATURAMENTO PARCIAL (NOVO) */}
+      <Dialog open={fatOpen} onOpenChange={setFatOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Registrar Faturamento</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="bg-slate-50 p-4 rounded-lg flex justify-between">
+              <div>
+                <p className="text-sm text-slate-500">Valor Total do Pedido</p>
+                <p className="text-xl font-bold">{fmtBRL(selectedPed?.total || 0)}</p>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Nº Nota Fiscal</Label>
+                <Input value={fatForm.nf_numero} onChange={e => setFatForm({...fatForm, nf_numero: e.target.value})} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Série</Label>
+                <Input value={fatForm.nf_serie} onChange={e => setFatForm({...fatForm, nf_serie: e.target.value})} placeholder="Ex: 1" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Data Faturamento</Label>
+                <Input type="date" value={fatForm.data_faturamento} onChange={e => setFatForm({...fatForm, data_faturamento: e.target.value})} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Valor Faturado (R$)</Label>
+                <Input type="number" step="0.01" value={fatForm.valor_faturado} onChange={e => setFatForm({...fatForm, valor_faturado: parseFloat(e.target.value || 0)})} />
+              </div>
+            </div>
+            <p className="text-[10px] text-slate-500 text-center">Altere o valor acima se a indústria emitiu nota parcial.</p>
+
+            <div className="border-t pt-4 mt-2">
+              <div className="flex justify-between items-center mb-2">
+                <Label>Parcelas da Comissão</Label>
+                <Button variant="outline" size="sm" onClick={gerarParcelasFaturamento}><Calculator className="w-3 h-3 mr-1"/> Calcular</Button>
+              </div>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {fatForm.parcelas.map((p, i) => (
+                  <div key={i} className="flex gap-2 items-center bg-slate-50 p-2 rounded">
+                    <Input type="date" value={p.vencimento} onChange={e => {
+                      const novas = [...fatForm.parcelas]; novas[i].vencimento = e.target.value; setFatForm({...fatForm, parcelas: novas});
+                    }} className="flex-1 h-8 text-xs" />
+                    <Input type="number" value={p.valor} onChange={e => {
+                      const novas = [...fatForm.parcelas]; novas[i].valor = parseFloat(e.target.value); setFatForm({...fatForm, parcelas: novas});
+                    }} className="w-24 h-8 text-xs font-mono" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFatOpen(false)}>Cancelar</Button>
+            <Button onClick={faturar} className="bg-emerald-600">Confirmar Faturamento</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modais Cliente Rápido (Mantido) */}
       <Dialog open={cliOpen} onOpenChange={setCliOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Cadastro Rápido de Cliente</DialogTitle></DialogHeader>
@@ -275,14 +357,6 @@ export default function Pedidos() {
             <div className="space-y-1.5"><Label>Nome Fantasia</Label><Input value={newCli.nome_fantasia} onChange={e => setNewCli({...newCli, nome_fantasia: e.target.value})} /></div>
           </div>
           <DialogFooter><Button onClick={saveNewCli} className="bg-[#075BFF]">Salvar</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={fatOpen} onOpenChange={setFatOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Confirmar Faturamento</DialogTitle></DialogHeader>
-          <div className="space-y-4 py-4"><div className="space-y-1.5"><Label>Nota Fiscal</Label><Input value={nfNum} onChange={e => setNfNum(e.target.value)} /></div></div>
-          <DialogFooter><Button variant="outline" onClick={() => setFatOpen(false)}>Cancelar</Button><Button onClick={faturar} className="bg-emerald-600">Faturar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
