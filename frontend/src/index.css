@@ -5,10 +5,10 @@
 @tailwind utilities;
 
 body {
-  margin: 0;
-  font-family: 'Inter', system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  @apply bg-slate-100 text-slate-900 antialiased;
+}
+.dark body {
+  @apply bg-slate-950 text-slate-100;
 }
 
 h1, h2, h3, h4, h5, h6, .font-display {
