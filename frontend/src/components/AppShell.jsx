@@ -238,7 +238,7 @@ export default function AppShell() {
               <Menu className="w-6 h-6" />
             </button>
             
-            {/* BARRA DE PESQUISA (Estilo Dark Metálico) */}
+            {/* BARRA DE PESQUISA */}
             <div className="relative w-full max-w-lg hidden sm:block" ref={searchRef}>
               <div className="relative group">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-[#08D5F5] transition-colors" />
@@ -323,20 +323,30 @@ export default function AppShell() {
             </div>
           </div>
 
-          {/* Ações do Topbar (Lado Direito) */}
-          <div className="flex items-center gap-4 relative z-10">
-            {/* Botão de Tema estilizado */}
-            <button onClick={toggleTheme} className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 hover:border-[#08D5F5]/50 transition-all">
-              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-400" /> : <Moon className="w-5 h-5" />}
+          {/* Ações do Topbar (Lado Direito) - AGORA INTEGRADO AO DESIGN METÁLICO */}
+          <div className="flex items-center gap-3 relative z-10">
+            
+            {/* Divisor Luminoso */}
+            <div className="w-px h-8 bg-gradient-to-b from-transparent via-[#1E3A8A] to-transparent mx-2 hidden sm:block"></div>
+
+            {/* Botão de Tema (Painel Metálico) */}
+            <button 
+              onClick={toggleTheme} 
+              className="w-10 h-10 rounded-xl bg-[#0A1838] border border-[#1E3A8A]/50 flex items-center justify-center text-slate-400 hover:text-[#08D5F5] hover:border-[#08D5F5]/80 hover:shadow-[0_0_15px_rgba(8,213,245,0.3)] hover:-translate-y-0.5 transition-all duration-300 group"
+            >
+              {theme === 'dark' 
+                ? <Sun className="w-5 h-5 text-amber-400 group-hover:text-amber-300 transition-colors" /> 
+                : <Moon className="w-5 h-5 group-hover:text-[#08D5F5] transition-colors" />
+              }
             </button>
             
-            {/* Botão de Notificação estilizado */}
+            {/* Botão de Notificação (Painel Metálico) */}
             <button 
-              className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 hover:border-[#08D5F5]/50 transition-all relative"
+              className="w-10 h-10 rounded-xl bg-[#0A1838] border border-[#1E3A8A]/50 flex items-center justify-center text-slate-400 hover:text-[#08D5F5] hover:border-[#08D5F5]/80 hover:shadow-[0_0_15px_rgba(8,213,245,0.3)] hover:-translate-y-0.5 transition-all duration-300 relative group"
               onClick={() => toast.info("Você não tem novas notificações no momento.")}
             >
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-[#08D5F5] rounded-full border-2 border-[#060C1A] shadow-[0_0_8px_rgba(8,213,245,0.8)]"></span>
+              <Bell className="w-5 h-5 group-hover:text-[#08D5F5] transition-colors" />
+              <span className="absolute top-2 right-2.5 w-2 h-2 bg-[#08D5F5] rounded-full border-2 border-[#0A1838] shadow-[0_0_8px_rgba(8,213,245,0.8)] animate-pulse"></span>
             </button>
           </div>
         </header>
