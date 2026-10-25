@@ -7,9 +7,9 @@ import {
   Bot, Zap, FileSpreadsheet, ShieldCheck, Percent,
   ChevronDown, Check, Lock, LayoutDashboard, Factory,
   BarChart3, Bell, Search, Menu, ArrowUpRight, Settings,
-  Sun, Moon, DollarSign, Clock
+  Sun, Moon, DollarSign, Clock,
+  ShoppingCart // ✅ ADICIONADO AQUI
 } from "lucide-react";
-
 export default function Landing() {
   const [faqOpen, setFaqOpen] = useState(null);
   const { theme, toggleTheme } = useTheme();
