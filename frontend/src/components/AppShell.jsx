@@ -142,22 +142,23 @@ export default function AppShell() {
         />
       )}
 
-      {/* SIDEBAR - FIXA NO DESIGN ESCURO (INDEPENDENTE DO TEMA) */}
+      {/* SIDEBAR - AZUL METÁLICO FUTURISTA CONSTANTE */}
       <aside className={`
-        fixed inset-y-0 left-0 z-50 w-64 bg-[#09090B] text-slate-300 border-r border-white/5 flex flex-col transition-transform duration-300 ease-in-out
+        fixed inset-y-0 left-0 z-50 w-64 flex flex-col transition-transform duration-300 ease-in-out
+        bg-gradient-to-b from-[#060C1A] via-[#0A1838] to-[#060C1A] border-r border-[#1E3A8A]/40
         ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0 md:static"}
       `}>
         
-        {/* Efeito de fundo diagonal/geométrico exclusivo da Sidebar */}
-        <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(7,91,255,0.05)_0%,transparent_40%,rgba(8,213,245,0.02)_100%)] pointer-events-none" />
-        <div className="absolute top-0 left-0 w-full h-[300px] bg-[#075BFF]/10 blur-[80px] pointer-events-none rounded-full" />
+        {/* Glow e Grid de fundo na Sidebar */}
+        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5 pointer-events-none mix-blend-overlay"></div>
+        <div className="absolute top-0 left-0 w-full h-[200px] bg-[#075BFF]/20 blur-[100px] pointer-events-none rounded-full" />
 
         {/* Logo / Header */}
-        <div className="h-20 flex items-center justify-between px-6 border-b border-white/5 relative z-10">
+        <div className="h-20 flex items-center justify-between px-6 border-b border-[#1E3A8A]/40 relative z-10 bg-white/5 backdrop-blur-sm">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
-            <img src="/logo.png" alt="OmniRepMax" className="h-9 w-auto object-contain drop-shadow-[0_0_10px_rgba(8,213,245,0.4)]" />
+            <img src="/logo.png" alt="OmniRepMax" className="h-9 w-auto object-contain drop-shadow-[0_0_12px_rgba(8,213,245,0.6)]" />
             <span className="font-bold text-2xl tracking-tight text-white">
-              OMNIREP<span className="text-[#08D5F5]">MAX</span>
+              OMNIREP<span className="text-[#08D5F5] drop-shadow-[0_0_8px_rgba(8,213,245,0.8)]">MAX</span>
             </span>
           </div>
           <button className="md:hidden text-slate-400" onClick={() => setIsMobileOpen(false)}>
@@ -169,7 +170,7 @@ export default function AppShell() {
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 custom-scrollbar relative z-10">
           {menuSections.map((section) => (
             <div key={section.title}>
-              <h3 className="px-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">
+              <h3 className="px-2 text-[10px] font-bold text-[#4A90E2]/70 uppercase tracking-widest mb-3">
                 {section.title}
               </h3>
               <nav className="space-y-1">
@@ -179,20 +180,20 @@ export default function AppShell() {
                     to={item.path}
                     onClick={() => setIsMobileOpen(false)}
                     className={({ isActive }) =>
-                      `relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
+                      `relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-300 group overflow-hidden ${
                         isActive
-                          ? "bg-white/10 text-white shadow-sm"
+                          ? "bg-gradient-to-r from-[#075BFF]/40 to-transparent text-white shadow-[inset_0_0_20px_rgba(8,213,245,0.1)]"
                           : "text-slate-400 hover:bg-white/5 hover:text-white"
                       }`
                     }
                   >
                     {({ isActive }) => (
                       <>
-                        {/* Barrinha lateral azul para o item ativo */}
+                        {/* Barrinha lateral azul neon para o item ativo */}
                         {isActive && (
-                          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-[#08D5F5] rounded-r-md shadow-[0_0_10px_rgba(8,213,245,0.5)]" />
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#08D5F5] shadow-[0_0_15px_rgba(8,213,245,0.8)]" />
                         )}
-                        <item.icon className={`w-4 h-4 transition-colors ${isActive ? "text-[#08D5F5]" : "text-slate-500 group-hover:text-slate-300"}`} />
+                        <item.icon className={`w-4 h-4 transition-all duration-300 ${isActive ? "text-[#08D5F5] drop-shadow-[0_0_8px_rgba(8,213,245,0.5)]" : "text-slate-500 group-hover:text-slate-300"}`} />
                         {item.label}
                       </>
                     )}
@@ -204,9 +205,9 @@ export default function AppShell() {
         </div>
 
         {/* User Profile / Logout */}
-        <div className="p-4 border-t border-white/5 relative z-10">
-          <div className="flex items-center gap-3 mb-4 p-2 rounded-xl bg-white/5 border border-white/5">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#075BFF] to-[#08D5F5] flex items-center justify-center text-white font-bold overflow-hidden shadow-lg">
+        <div className="p-4 border-t border-[#1E3A8A]/40 relative z-10 bg-black/20">
+          <div className="flex items-center gap-3 mb-2 p-2 rounded-xl bg-white/5 border border-white/5 shadow-inner">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#075BFF] to-[#08D5F5] flex items-center justify-center text-white font-bold overflow-hidden shadow-[0_0_15px_rgba(8,213,245,0.4)]">
               {user?.logo ? (
                 <img src={user.logo} alt="Logo" className="w-full h-full object-cover" />
               ) : (
@@ -215,44 +216,44 @@ export default function AppShell() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-white truncate">{user?.name}</p>
-              <p className="text-xs text-slate-400 truncate">{user?.empresa || "Admin"}</p>
+              <p className="text-xs text-[#4A90E2] truncate">{user?.empresa || "Admin"}</p>
             </div>
-            <button onClick={handleLogout} className="p-2 text-slate-500 hover:text-rose-400 transition-colors" title="Sair">
-              <LogOut className="w-4 h-4" />
-            </button>
           </div>
+          <Button variant="ghost" className="w-full justify-start text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors" onClick={handleLogout}>
+            <LogOut className="w-4 h-4 mr-2" /> Sair
+          </Button>
         </div>
       </aside>
 
       {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col overflow-hidden bg-background transition-colors duration-300">
         
-        {/* TOPBAR - FIXA NO DESIGN ESCURO */}
-        <header className="h-20 border-b border-white/5 bg-[#09090B] flex items-center justify-between px-4 sm:px-6 gap-4 z-30 relative">
-          {/* Efeito sutil de gradiente no Header */}
-          <div className="absolute inset-0 bg-gradient-to-r from-[#09090B] via-[#09090B] to-[#075BFF]/10 pointer-events-none" />
+        {/* TOPBAR - AZUL METÁLICO FUTURISTA CONSTANTE */}
+        <header className="h-20 border-b border-[#1E3A8A]/40 bg-gradient-to-r from-[#060C1A] via-[#0A1838] to-[#060C1A] flex items-center justify-between px-4 sm:px-6 gap-4 z-30 relative shadow-lg">
+          {/* Linha de brilho sutil no topo do header */}
+          <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[#08D5F5]/50 to-transparent"></div>
 
           <div className="flex items-center gap-3 flex-1 relative z-10">
             <button className="md:hidden text-slate-400" onClick={() => setIsMobileOpen(true)}>
               <Menu className="w-6 h-6" />
             </button>
             
-            {/* BARRA DE PESQUISA (Estilo Dark) */}
+            {/* BARRA DE PESQUISA (Estilo Dark Metálico) */}
             <div className="relative w-full max-w-lg hidden sm:block" ref={searchRef}>
-              <div className="relative">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+              <div className="relative group">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-[#08D5F5] transition-colors" />
                 <Input 
                   value={searchQuery}
                   onChange={handleSearchChange}
                   onFocus={() => setShowDropdown(true)}
                   placeholder="Pesquisar clientes, CNPJ, pedidos..." 
-                  className="h-11 pl-11 bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-[#08D5F5] focus:bg-white/10 transition-all rounded-full text-base"
+                  className="h-11 pl-11 bg-[#0A1838]/50 border-[#1E3A8A]/50 text-white placeholder:text-slate-500 focus:border-[#08D5F5] focus:bg-[#0A1838] focus:shadow-[0_0_15px_rgba(8,213,245,0.2)] transition-all rounded-full text-base"
                 />
               </div>
 
-              {/* Dropdown de Busca (Ajustado para Dark) */}
+              {/* Dropdown de Busca */}
               {showDropdown && isCNPJ(searchQuery) && (
-                <div className="absolute top-full mt-2 w-full bg-[#0C0C0E] border border-white/10 rounded-xl shadow-2xl p-3 z-50">
+                <div className="absolute top-full mt-2 w-full bg-[#060C1A] border border-[#1E3A8A]/50 rounded-xl shadow-2xl p-3 z-50">
                   <p className="text-xs font-semibold text-slate-500 mb-2">Ações para o CNPJ digitado:</p>
                   <div className="flex flex-col gap-1">
                     <a href={`https://www.google.com/search?q=${searchQuery}+Receita+Federal`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-white/5 rounded-lg text-slate-300 transition-colors">
@@ -269,7 +270,7 @@ export default function AppShell() {
               )}
 
               {showDropdown && !isCNPJ(searchQuery) && searchResults && (
-                <div className="absolute top-full mt-2 w-full bg-[#0C0C0E] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto">
+                <div className="absolute top-full mt-2 w-full bg-[#060C1A] border border-[#1E3A8A]/50 rounded-xl shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto">
                   {isSearching && <div className="p-4 text-center text-sm text-slate-500">Buscando...</div>}
                   
                   {!isSearching && searchResults.clientes?.length === 0 && searchResults.produtos?.length === 0 && searchResults.pedidos?.length === 0 && (
@@ -322,21 +323,21 @@ export default function AppShell() {
             </div>
           </div>
 
-          {/* Ações do Topbar */}
-          <div className="flex items-center gap-3 relative z-10">
-            <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full h-10 w-10 text-slate-400 hover:bg-white/10 hover:text-white">
-              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5" />}
-            </Button>
+          {/* Ações do Topbar (Lado Direito) */}
+          <div className="flex items-center gap-4 relative z-10">
+            {/* Botão de Tema estilizado */}
+            <button onClick={toggleTheme} className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 hover:border-[#08D5F5]/50 transition-all">
+              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-400" /> : <Moon className="w-5 h-5" />}
+            </button>
             
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              className="rounded-full relative h-10 w-10 text-slate-400 hover:bg-white/10 hover:text-white"
+            {/* Botão de Notificação estilizado */}
+            <button 
+              className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 hover:border-[#08D5F5]/50 transition-all relative"
               onClick={() => toast.info("Você não tem novas notificações no momento.")}
             >
               <Bell className="w-5 h-5" />
-              <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-rose-500 rounded-full border-2 border-[#09090B]"></span>
-            </Button>
+              <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-[#08D5F5] rounded-full border-2 border-[#060C1A] shadow-[0_0_8px_rgba(8,213,245,0.8)]"></span>
+            </button>
           </div>
         </header>
 
