@@ -51,7 +51,7 @@ export default function Login() {
           </Button>
         </div>
 
-        {/* Fundo Grade Tecnológica - Opacidade menor no modo claro */}
+        {/* Fundo Grade Tecnológica */}
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#4f4f4f2e_1px,transparent_1px),linear-gradient(to_bottom,#4f4f4f2e_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,#000_40%,transparent_100%)] opacity-20 dark:opacity-100"></div>
         
         {/* Glows Neon */}
@@ -67,7 +67,8 @@ export default function Login() {
 
         {/* Conteúdo Superior */}
         <div className="relative z-10 mt-12">
-          <img src="/logo.png" alt="OmniRepMax" className="h-16 sm:h-20 w-auto object-contain mb-8 dark:drop-shadow-[0_0_20px_rgba(8,213,245,0.4)]" />
+          {/* ✅ LOGO AUMENTADA AQUI */}
+          <img src="/logo.png" alt="OmniRepMax" className="h-24 sm:h-32 w-auto object-contain mb-8 dark:drop-shadow-[0_0_20px_rgba(8,213,245,0.4)]" />
           
           <h1 className="text-4xl xl:text-5xl font-extrabold tracking-tight leading-[1.1] text-slate-900 dark:text-white">
             A central inteligente <br />
@@ -146,7 +147,8 @@ export default function Login() {
         <div className="w-full max-w-md bg-transparent relative z-10">
           
           <div className="lg:hidden mb-8 flex justify-center">
-            <img src="/logo.png" alt="OmniRepMax" className="h-16 w-auto object-contain" />
+            {/* ✅ LOGO MOBILE AUMENTADA */}
+            <img src="/logo.png" alt="OmniRepMax" className="h-20 sm:h-24 w-auto object-contain" />
           </div>
           
           <div className="mb-8 text-center">

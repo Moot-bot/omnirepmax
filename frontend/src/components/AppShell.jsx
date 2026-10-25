@@ -5,12 +5,9 @@ import { useTheme } from "../context/ThemeContext";
 import {
   LayoutDashboard, Sparkles, BarChart3, MessageSquare,
   Building2, Users, Filter, Calendar,
-  ShoppingCart, UploadCloud,
-  Percent, TrendingUp, TrendingDown,
-  FileText, Map, Settings, LogOut,
-  Search, Menu, X, ExternalLink, UserPlus,
-  Sun, Moon, Bell, Package, ShieldAlert,
-  Clock, Landmark
+  ShoppingCart, UploadCloud, Percent, TrendingUp, TrendingDown,
+  FileText, Map, Settings, LogOut, Search, Menu, X, ExternalLink, UserPlus,
+  Sun, Moon, Bell, Package, ShieldAlert, Clock, Landmark
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -69,7 +66,6 @@ export default function AppShell() {
   const navigate = useNavigate();
   
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -126,8 +122,7 @@ export default function AppShell() {
   }, [searchQuery]);
 
   const handleSearchChange = (e) => {
-    const val = e.target.value;
-    setSearchQuery(val);
+    setSearchQuery(e.target.value);
     setShowDropdown(true);
   };
 
@@ -138,8 +133,7 @@ export default function AppShell() {
   };
 
   return (
-    /* Fundo geral: Azul acinzentado super claro (Slate-50) */
-    <div className="flex h-screen bg-slate-50 dark:bg-[#09090B] overflow-hidden transition-colors duration-300">
+    <div className="flex h-screen bg-background overflow-hidden transition-colors duration-300">
       
       {isMobileOpen && (
         <div 
@@ -150,19 +144,21 @@ export default function AppShell() {
 
       {/* SIDEBAR */}
       <aside className={`
-        fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col transition-transform duration-300 ease-in-out
+        fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border flex flex-col transition-transform duration-300 ease-in-out
         ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0 md:static"}
       `}>
         
-        {/* Logo / Header - Aumentado para h-20 */}
-        <div className="h-20 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('/dashboard')}>
-            <img src="/logo.png" alt="OmniRepMax" className="h-8 w-auto object-contain" />
-            <span className="font-bold text-xl tracking-tight text-[#075BFF]">
-              OMNIREP<span className="text-slate-900 dark:text-white">MAX</span>
+        {/* Logo / Header */}
+        <div className="h-20 flex items-center justify-between px-6 border-b border-border">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
+            {/* ✅ LOGO AUMENTADA */}
+            <img src="/logo.png" alt="OmniRepMax" className="h-12 w-auto object-contain" />
+            {/* ✅ TEXTO AUMENTADO */}
+            <span className="font-bold text-2xl tracking-tight text-primary">
+              OMNIREP<span className="text-foreground">MAX</span>
             </span>
           </div>
-          <button className="md:hidden text-slate-500" onClick={() => setIsMobileOpen(false)}>
+          <button className="md:hidden text-muted-foreground" onClick={() => setIsMobileOpen(false)}>
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -171,7 +167,7 @@ export default function AppShell() {
         <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6 custom-scrollbar">
           {menuSections.map((section) => (
             <div key={section.title}>
-              <h3 className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+              <h3 className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                 {section.title}
               </h3>
               <nav className="space-y-1">
@@ -183,14 +179,14 @@ export default function AppShell() {
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
                         isActive
-                          ? "bg-[#075BFF]/10 text-[#075BFF] dark:bg-[#075BFF]/20 dark:text-[#3b82f6]"
-                          : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200"
+                          ? "bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground"
+                          : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                       }`
                     }
                   >
                     {({ isActive }) => (
                       <>
-                        <item.icon className={`w-4 h-4 ${isActive ? "text-[#075BFF] dark:text-[#3b82f6]" : ""}`} />
+                        <item.icon className={`w-4 h-4 ${isActive ? "text-primary dark:text-primary-foreground" : ""}`} />
                         {item.label}
                       </>
                     )}
@@ -202,9 +198,9 @@ export default function AppShell() {
         </div>
 
         {/* User Profile / Logout */}
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800">
+        <div className="p-4 border-t border-border">
           <div className="flex items-center gap-3 mb-3">
-            <div className="w-9 h-9 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 font-bold overflow-hidden border border-slate-300 dark:border-slate-700">
+            <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-foreground font-bold overflow-hidden border border-border">
               {user?.logo ? (
                 <img src={user.logo} alt="Logo" className="w-full h-full object-cover" />
               ) : (
@@ -212,51 +208,51 @@ export default function AppShell() {
               )}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">{user?.name}</p>
-              <p className="text-xs text-slate-500 truncate">{user?.empresa || "Admin"}</p>
+              <p className="text-sm font-semibold text-foreground truncate">{user?.name}</p>
+              <p className="text-xs text-muted-foreground truncate">{user?.empresa || "Admin"}</p>
             </div>
           </div>
-          <Button variant="outline" className="w-full justify-start text-slate-600 dark:text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 border-slate-200 dark:border-slate-800 transition-colors" onClick={handleLogout}>
+          <Button variant="outline" className="w-full justify-start text-muted-foreground hover:text-destructive hover:bg-destructive/10 border-border transition-colors" onClick={handleLogout}>
             <LogOut className="w-4 h-4 mr-2" /> Sair
           </Button>
         </div>
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-[#09090B] transition-colors duration-300">
+      <main className="flex-1 flex flex-col overflow-hidden bg-background transition-colors duration-300">
         
-        {/* TOPBAR - Aumentada para h-20 e com efeito vidro no modo claro */}
-        <header className="h-20 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl flex items-center justify-between px-4 sm:px-6 gap-4 z-30">
+        {/* TOPBAR */}
+        <header className="h-20 border-b border-border bg-card/80 backdrop-blur-xl flex items-center justify-between px-4 sm:px-6 gap-4 z-30">
           
           <div className="flex items-center gap-3 flex-1">
-            <button className="md:hidden text-slate-600 dark:text-slate-300" onClick={() => setIsMobileOpen(true)}>
+            <button className="md:hidden text-muted-foreground" onClick={() => setIsMobileOpen(true)}>
               <Menu className="w-6 h-6" />
             </button>
             
-            {/* BARRA DE PESQUISA - Mais alta */}
+            {/* BARRA DE PESQUISA */}
             <div className="relative w-full max-w-lg hidden sm:block" ref={searchRef}>
               <div className="relative">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                 <Input 
                   value={searchQuery}
                   onChange={handleSearchChange}
                   onFocus={() => setShowDropdown(true)}
                   placeholder="Pesquisar clientes, CNPJ, pedidos..." 
-                  className="h-11 pl-11 bg-slate-100 dark:bg-slate-800 border-transparent focus:border-[#075BFF] focus:bg-white dark:focus:bg-slate-900 transition-all rounded-full text-base"
+                  className="h-11 pl-11 bg-secondary border-transparent focus:border-primary focus:bg-background transition-all rounded-full text-base"
                 />
               </div>
 
               {showDropdown && isCNPJ(searchQuery) && (
-                <div className="absolute top-full mt-2 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-3 z-50">
-                  <p className="text-xs font-semibold text-slate-500 mb-2">Ações para o CNPJ digitado:</p>
+                <div className="absolute top-full mt-2 w-full bg-popover text-popover-foreground border border-border rounded-xl shadow-xl p-3 z-50">
+                  <p className="text-xs font-semibold text-muted-foreground mb-2">Ações para o CNPJ digitado:</p>
                   <div className="flex flex-col gap-1">
-                    <a href={`https://www.google.com/search?q=${searchQuery}+Receita+Federal`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-300">
-                      <ExternalLink className="w-4 h-4 text-blue-500" /> Consultar na Receita Federal
+                    <a href={`https://www.google.com/search?q=${searchQuery}+Receita+Federal`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-secondary rounded-lg text-foreground transition-colors">
+                      <ExternalLink className="w-4 h-4 text-primary" /> Consultar na Receita Federal
                     </a>
-                    <a href={`https://www.linkedin.com/search/results/companies/?keywords=${searchQuery}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-700 dark:text-slate-300">
-                      <ExternalLink className="w-4 h-4 text-blue-700" /> Buscar no LinkedIn
+                    <a href={`https://www.linkedin.com/search/results/companies/?keywords=${searchQuery}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-secondary rounded-lg text-foreground transition-colors">
+                      <ExternalLink className="w-4 h-4 text-primary" /> Buscar no LinkedIn
                     </a>
-                    <button onClick={() => { navigate(`/clientes?cnpj=${searchQuery}`); setShowDropdown(false); }} className="flex items-center gap-2 text-sm p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-[#075BFF] font-medium text-left">
+                    <button onClick={() => { navigate(`/clientes?cnpj=${searchQuery}`); setShowDropdown(false); }} className="flex items-center gap-2 text-sm p-2 hover:bg-secondary rounded-lg text-primary font-medium text-left transition-colors">
                       <UserPlus className="w-4 h-4" /> Cadastrar Cliente com este CNPJ
                     </button>
                   </div>
@@ -264,22 +260,22 @@ export default function AppShell() {
               )}
 
               {showDropdown && !isCNPJ(searchQuery) && searchResults && (
-                <div className="absolute top-full mt-2 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden z-50 max-h-96 overflow-y-auto">
-                  {isSearching && <div className="p-4 text-center text-sm text-slate-500">Buscando...</div>}
+                <div className="absolute top-full mt-2 w-full bg-popover text-popover-foreground border border-border rounded-xl shadow-xl overflow-hidden z-50 max-h-96 overflow-y-auto">
+                  {isSearching && <div className="p-4 text-center text-sm text-muted-foreground">Buscando...</div>}
                   
                   {!isSearching && searchResults.clientes?.length === 0 && searchResults.produtos?.length === 0 && searchResults.pedidos?.length === 0 && (
-                    <div className="p-4 text-center text-sm text-slate-500">Nenhum resultado encontrado.</div>
+                    <div className="p-4 text-center text-sm text-muted-foreground">Nenhum resultado encontrado.</div>
                   )}
 
                   {searchResults.clientes?.length > 0 && (
-                    <div className="border-b border-slate-100 dark:border-slate-700">
-                      <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase bg-slate-50 dark:bg-slate-900/50">Clientes</div>
+                    <div className="border-b border-border">
+                      <div className="px-3 py-2 text-[10px] font-bold text-muted-foreground uppercase bg-secondary">Clientes</div>
                       {searchResults.clientes.map(c => (
-                        <div key={c.id} onClick={() => navigateToResult(`/clientes`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer flex items-center gap-3">
-                          <Users className="w-4 h-4 text-blue-500" />
+                        <div key={c.id} onClick={() => navigateToResult(`/clientes`)} className="px-4 py-2 hover:bg-secondary cursor-pointer flex items-center gap-3 transition-colors">
+                          <Users className="w-4 h-4 text-primary" />
                           <div>
                             <div className="text-sm font-semibold">{c.nome_fantasia || c.razao_social}</div>
-                            <div className="text-xs text-slate-500">{c.cnpj_cpf}</div>
+                            <div className="text-xs text-muted-foreground">{c.cnpj_cpf}</div>
                           </div>
                         </div>
                       ))}
@@ -287,14 +283,14 @@ export default function AppShell() {
                   )}
 
                   {searchResults.produtos?.length > 0 && (
-                    <div className="border-b border-slate-100 dark:border-slate-700">
-                      <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase bg-slate-50 dark:bg-slate-900/50">Produtos</div>
+                    <div className="border-b border-border">
+                      <div className="px-3 py-2 text-[10px] font-bold text-muted-foreground uppercase bg-secondary">Produtos</div>
                       {searchResults.produtos.map(p => (
-                        <div key={p.id} onClick={() => navigateToResult(`/representadas`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer flex items-center gap-3">
+                        <div key={p.id} onClick={() => navigateToResult(`/representadas`)} className="px-4 py-2 hover:bg-secondary cursor-pointer flex items-center gap-3 transition-colors">
                           <Package className="w-4 h-4 text-emerald-500" />
                           <div>
                             <div className="text-sm font-semibold">{p.nome}</div>
-                            <div className="text-xs text-slate-500">{p.codigo || p.sku}</div>
+                            <div className="text-xs text-muted-foreground">{p.codigo || p.sku}</div>
                           </div>
                         </div>
                       ))}
@@ -303,9 +299,9 @@ export default function AppShell() {
 
                   {searchResults.pedidos?.length > 0 && (
                     <div>
-                      <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase bg-slate-50 dark:bg-slate-900/50">Pedidos</div>
+                      <div className="px-3 py-2 text-[10px] font-bold text-muted-foreground uppercase bg-secondary">Pedidos</div>
                       {searchResults.pedidos.map(p => (
-                        <div key={p.id} onClick={() => navigateToResult(`/pedidos`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer flex items-center gap-3">
+                        <div key={p.id} onClick={() => navigateToResult(`/pedidos`)} className="px-4 py-2 hover:bg-secondary cursor-pointer flex items-center gap-3 transition-colors">
                           <ShoppingCart className="w-4 h-4 text-amber-500" />
                           <div className="text-sm font-semibold">{p.numero}</div>
                         </div>
@@ -319,18 +315,18 @@ export default function AppShell() {
 
           {/* Ações do Topbar */}
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full h-10 w-10">
-              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-600" />}
+            <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full h-10 w-10 text-muted-foreground hover:bg-secondary">
+              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5" />}
             </Button>
             
             <Button 
               variant="ghost" 
               size="icon" 
-              className="rounded-full relative h-10 w-10"
+              className="rounded-full relative h-10 w-10 text-muted-foreground hover:bg-secondary"
               onClick={() => toast.info("Você não tem novas notificações no momento.")}
             >
-              <Bell className="w-5 h-5 text-slate-500" />
-              <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900"></span>
+              <Bell className="w-5 h-5" />
+              <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-destructive rounded-full border-2 border-background"></span>
             </Button>
           </div>
         </header>
