@@ -151,9 +151,7 @@ export default function AppShell() {
         {/* Logo / Header */}
         <div className="h-20 flex items-center justify-between px-6 border-b border-border">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
-            {/* ✅ LOGO AUMENTADA */}
             <img src="/logo.png" alt="OmniRepMax" className="h-12 w-auto object-contain" />
-            {/* ✅ TEXTO AUMENTADO */}
             <span className="font-bold text-2xl tracking-tight text-primary">
               OMNIREP<span className="text-foreground">MAX</span>
             </span>

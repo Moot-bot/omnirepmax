@@ -6,66 +6,68 @@
 
 @layer base {
   :root {
-    /* MODO CLARO: Azul acinzentado premium (Slate-100) com cards brancos */
-    --background: 210 40% 96.1%;
-    --foreground: 222.2 84% 4.9%;
+    /* MODO CLARO: Azul Bebê (Fundo) + Texto Azul Escuro/Navy */
+    --background: 200 100% 95%; /* Azul bebê suave */
+    --foreground: 218 40% 20%;  /* Azul navy escuro para leitura */
     
+    /* Cards brancos para dar contraste com o fundo azul bebê */
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 218 40% 20%;
     
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 218 40% 20%;
     
-    --primary: 221.2 83.2% 53.3%;
+    --primary: 221 83% 53%; /* Azul Royal para botões */
     --primary-foreground: 210 40% 98%;
     
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 200 50% 88%; /* Azulzinho um pouco mais escuro para hovers */
+    --secondary-foreground: 218 40% 20%;
     
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 200 50% 88%;
+    --muted-foreground: 215 20% 45%;
     
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 200 50% 88%;
+    --accent-foreground: 218 40% 20%;
     
-    --destructive: 0 84.2% 60.2%;
+    --destructive: 0 84% 60%;
     --destructive-foreground: 210 40% 98%;
     
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    --border: 200 30% 82%; /* Bordas azuladas suaves */
+    --input: 200 30% 82%;
+    --ring: 221 83% 53%;
     --radius: 0.75rem;
   }
 
   .dark {
-    /* MODO ESCURO: Azul profundo (Slate-950) */
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    /* MODO ESCURO: Azul Metálico (Aço) + Texto Cinza Claro */
+    --background: 217 33% 12%; /* Azul metálico profundo */
+    --foreground: 210 20% 75%; /* Letra cinza prateado */
     
-    --card: 217.2 32.6% 17.5%;
-    --card-foreground: 210 40% 98%;
+    /* Cards um pouco mais claros que o fundo metálico */
+    --card: 217 33% 16%;
+    --card-foreground: 210 20% 75%;
     
-    --popover: 217.2 32.6% 17.5%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 217 33% 16%;
+    --popover-foreground: 210 20% 75%;
     
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 217 91% 60%; /* Azul neon para destaque */
+    --primary-foreground: 210 40% 98%;
     
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 217 33% 20%; /* Hover metálico */
+    --secondary-foreground: 210 20% 75%;
     
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 217 33% 20%;
+    --muted-foreground: 215 20% 55%;
     
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 217 33% 20%;
+    --accent-foreground: 210 20% 75%;
     
-    --destructive: 0 62.8% 30.6%;
+    --destructive: 0 62% 40%;
     --destructive-foreground: 210 40% 98%;
     
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --border: 217 33% 22%; /* Bordas de aço */
+    --input: 217 33% 22%;
+    --ring: 217 91% 60%;
   }
 }
 
@@ -74,7 +76,7 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background text-foreground antialiased transition-colors duration-300;
   }
 }
 
