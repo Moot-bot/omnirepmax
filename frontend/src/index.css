@@ -6,21 +6,20 @@
 
 @layer base {
   :root {
-    /* MODO CLARO: Azul Bebê (Fundo) + Texto Azul Escuro/Navy */
-    --background: 200 100% 95%; /* Azul bebê suave */
-    --foreground: 218 40% 20%;  /* Azul navy escuro para leitura */
+    /* MODO CLARO: Azul Bebê (Fundo) + Texto Navy Escuro */
+    --background: 200 100% 95%; 
+    --foreground: 218 40% 20%;  
     
-    /* Cards brancos para dar contraste com o fundo azul bebê */
     --card: 0 0% 100%;
     --card-foreground: 218 40% 20%;
     
     --popover: 0 0% 100%;
     --popover-foreground: 218 40% 20%;
     
-    --primary: 221 83% 53%; /* Azul Royal para botões */
+    --primary: 221 83% 53%;
     --primary-foreground: 210 40% 98%;
     
-    --secondary: 200 50% 88%; /* Azulzinho um pouco mais escuro para hovers */
+    --secondary: 200 50% 88%;
     --secondary-foreground: 218 40% 20%;
     
     --muted: 200 50% 88%;
@@ -32,7 +31,7 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 210 40% 98%;
     
-    --border: 200 30% 82%; /* Bordas azuladas suaves */
+    --border: 200 30% 82%;
     --input: 200 30% 82%;
     --ring: 221 83% 53%;
     --radius: 0.75rem;
@@ -40,20 +39,19 @@
 
   .dark {
     /* MODO ESCURO: Azul Metálico (Aço) + Texto Cinza Claro */
-    --background: 217 33% 12%; /* Azul metálico profundo */
-    --foreground: 210 20% 75%; /* Letra cinza prateado */
+    --background: 217 33% 12%; 
+    --foreground: 210 20% 75%; 
     
-    /* Cards um pouco mais claros que o fundo metálico */
     --card: 217 33% 16%;
     --card-foreground: 210 20% 75%;
     
     --popover: 217 33% 16%;
     --popover-foreground: 210 20% 75%;
     
-    --primary: 217 91% 60%; /* Azul neon para destaque */
+    --primary: 217 91% 60%;
     --primary-foreground: 210 40% 98%;
     
-    --secondary: 217 33% 20%; /* Hover metálico */
+    --secondary: 217 33% 20%;
     --secondary-foreground: 210 20% 75%;
     
     --muted: 217 33% 20%;
@@ -65,7 +63,7 @@
     --destructive: 0 62% 40%;
     --destructive-foreground: 210 40% 98%;
     
-    --border: 217 33% 22%; /* Bordas de aço */
+    --border: 217 33% 22%;
     --input: 217 33% 22%;
     --ring: 217 91% 60%;
   }

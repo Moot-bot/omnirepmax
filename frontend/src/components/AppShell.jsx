@@ -142,17 +142,19 @@ export default function AppShell() {
         />
       )}
 
-      {/* SIDEBAR */}
+      {/* SIDEBAR - Usando bg-background para ficar azul igual o fundo */}
       <aside className={`
-        fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border flex flex-col transition-transform duration-300 ease-in-out
+        fixed inset-y-0 left-0 z-50 w-64 bg-background border-r border-border flex flex-col transition-transform duration-300 ease-in-out
         ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0 md:static"}
       `}>
         
         {/* Logo / Header */}
         <div className="h-20 flex items-center justify-between px-6 border-b border-border">
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
-            <img src="/logo.png" alt="OmniRepMax" className="h-12 w-auto object-contain" />
-            <span className="font-bold text-2xl tracking-tight text-primary">
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('/dashboard')}>
+            {/* ✅ Logo ajustada para não estourar */}
+            <img src="/logo.png" alt="OmniRepMax" className="h-10 w-auto object-contain" />
+            {/* ✅ Texto ajustado para text-xl */}
+            <span className="font-bold text-xl tracking-tight text-primary">
               OMNIREP<span className="text-foreground">MAX</span>
             </span>
           </div>
@@ -219,8 +221,8 @@ export default function AppShell() {
       {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col overflow-hidden bg-background transition-colors duration-300">
         
-        {/* TOPBAR */}
-        <header className="h-20 border-b border-border bg-card/80 backdrop-blur-xl flex items-center justify-between px-4 sm:px-6 gap-4 z-30">
+        {/* TOPBAR - Usando bg-background com transparência para efeito de vidro */}
+        <header className="h-20 border-b border-border bg-background/90 backdrop-blur-xl flex items-center justify-between px-4 sm:px-6 gap-4 z-30">
           
           <div className="flex items-center gap-3 flex-1">
             <button className="md:hidden text-muted-foreground" onClick={() => setIsMobileOpen(true)}>
@@ -236,7 +238,7 @@ export default function AppShell() {
                   onChange={handleSearchChange}
                   onFocus={() => setShowDropdown(true)}
                   placeholder="Pesquisar clientes, CNPJ, pedidos..." 
-                  className="h-11 pl-11 bg-secondary border-transparent focus:border-primary focus:bg-background transition-all rounded-full text-base"
+                  className="h-11 pl-11 bg-card border-transparent focus:border-primary focus:bg-background transition-all rounded-full text-base shadow-sm"
                 />
               </div>
 
