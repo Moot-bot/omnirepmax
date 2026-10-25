@@ -5,7 +5,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { toast } from "sonner";
-import { Zap, TrendingUp, Shield, ArrowRight, Lock, Mail } from "lucide-react";
+import { Zap, TrendingUp, Shield, ArrowRight, Lock, Mail, Database, Users } from "lucide-react";
 
 export default function Login() {
   const { user, login, loading } = useAuth();
@@ -46,10 +46,17 @@ export default function Login() {
         <div className="absolute top-0 left-0 w-[500px] h-[500px] bg-[#075BFF]/20 rounded-full blur-[100px]"></div>
         <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-cyan-500/10 rounded-full blur-[100px]"></div>
 
+        {/* LOGO DE FUNDO (WATERMARK) */}
+        <img 
+          src="/logo.png" 
+          alt="" 
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[80%] max-w-[700px] opacity-[0.03] pointer-events-none select-none" 
+        />
+
         {/* Conteúdo Superior */}
         <div className="relative z-10">
-          {/* USA A LOGO PNG AQUI */}
-          <img src="/logo.png" alt="OmniRepMax" className="h-12 w-auto object-contain mb-12 drop-shadow-[0_0_15px_rgba(8,213,245,0.4)]" />
+          {/* LOGO AUMENTADA */}
+          <img src="/logo.png" alt="OmniRepMax" className="h-20 sm:h-24 w-auto object-contain mb-10 drop-shadow-[0_0_20px_rgba(8,213,245,0.4)]" />
           
           <h1 className="text-4xl xl:text-5xl font-extrabold tracking-tight leading-[1.1]">
             A central inteligente <br />
@@ -62,32 +69,62 @@ export default function Login() {
           </p>
         </div>
 
-        {/* Card Flutuante Simulando o Sistema (Mockup) */}
-        <div className="relative z-10 mt-12 bg-[#1E293B]/60 border border-slate-700/50 backdrop-blur-md rounded-2xl p-6 shadow-[0_0_40px_-10px_rgba(8,213,245,0.3)] max-w-md">
-          <div className="flex justify-between items-center mb-4">
-            <div className="text-sm font-semibold text-white flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-cyan-400" /> Resumo de Comissões
+        {/* MOCKUP DO SISTEMA (MAIS ROBUSTO) */}
+        <div className="relative z-10 mt-10 bg-[#1E293B]/70 border border-slate-700/50 backdrop-blur-xl rounded-2xl p-4 shadow-[0_0_50px_-10px_rgba(8,213,245,0.3)] max-w-2xl h-72 flex gap-4 overflow-hidden">
+          {/* Barra Lateral Mockup */}
+          <div className="w-16 h-full border-r border-slate-700/50 flex flex-col items-center py-2 gap-4">
+            <div className="w-10 h-10 rounded-xl bg-[#075BFF]/20 flex items-center justify-center">
+              <TrendingUp className="w-5 h-5 text-cyan-400" />
             </div>
-            <div className="text-[10px] text-cyan-400 bg-cyan-400/10 px-2 py-1 rounded font-bold uppercase">Mês Atual</div>
-          </div>
-          <div className="flex gap-4 mb-5">
-            <div className="flex-1 bg-slate-800/50 p-3 rounded-xl border border-slate-700">
-              <div className="text-[10px] text-slate-400 uppercase mb-1">Previstas</div>
-              <div className="text-xl font-bold text-white">R$ 14.250</div>
+            <div className="w-10 h-10 rounded-xl bg-slate-800/50 flex items-center justify-center">
+              <Users className="w-5 h-5 text-slate-500" />
             </div>
-            <div className="flex-1 bg-slate-800/50 p-3 rounded-xl border border-slate-700">
-              <div className="text-[10px] text-slate-400 uppercase mb-1">Recebidas</div>
-              <div className="text-xl font-bold text-emerald-400">R$ 8.400</div>
+            <div className="w-10 h-10 rounded-xl bg-slate-800/50 flex items-center justify-center">
+              <Database className="w-5 h-5 text-slate-500" />
             </div>
           </div>
-          <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-[#075BFF] to-cyan-400 w-[65%]"></div>
+
+          {/* Conteúdo Mockup */}
+          <div className="flex-1 flex flex-col gap-4">
+            {/* Header Mockup */}
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700/50">
+              <div className="flex gap-2">
+                <div className="w-24 h-4 bg-slate-700/50 rounded"></div>
+                <div className="w-12 h-4 bg-slate-700/30 rounded"></div>
+              </div>
+              <div className="w-8 h-8 rounded-full bg-slate-700/50"></div>
+            </div>
+
+            {/* Cards Mockup */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                <div className="w-16 h-2 bg-slate-600 rounded mb-2"></div>
+                <div className="text-lg font-bold text-white">R$ 14.250</div>
+                <div className="text-[10px] text-emerald-400 mt-1">+12% este mês</div>
+              </div>
+              <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                <div className="w-16 h-2 bg-slate-600 rounded mb-2"></div>
+                <div className="text-lg font-bold text-white">R$ 8.400</div>
+                <div className="text-[10px] text-slate-400 mt-1">Recebidas</div>
+              </div>
+              <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700/50">
+                <div className="w-16 h-2 bg-slate-600 rounded mb-2"></div>
+                <div className="text-lg font-bold text-white">42</div>
+                <div className="text-[10px] text-cyan-400 mt-1">Pedidos abertos</div>
+              </div>
+            </div>
+
+            {/* Gráfico Mockup */}
+            <div className="flex-1 bg-slate-900/50 rounded-xl border border-slate-700/50 flex items-end p-3 gap-1.5">
+              {[40, 70, 45, 90, 65, 100, 80, 50, 95, 60, 75, 85].map((h, i) => (
+                <div key={i} className="flex-1 bg-gradient-to-t from-[#075BFF] to-cyan-400/80 rounded-t-sm" style={{ height: `${h}%` }}></div>
+              ))}
+            </div>
           </div>
-          <div className="text-[10px] text-slate-400 mt-2 text-right">65% da meta</div>
         </div>
 
         {/* Rodapé do Painel */}
-        <div className="relative z-10 flex items-center gap-4 mt-12 text-xs text-slate-500">
+        <div className="relative z-10 flex items-center gap-4 mt-6 text-xs text-slate-500">
           <div className="flex items-center gap-1.5"><Shield className="w-3.5 h-3.5 text-emerald-400" /> Multi-tenant</div>
           <div className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-amber-400" /> MAX AI</div>
         </div>
@@ -99,7 +136,8 @@ export default function Login() {
         <div className="w-full max-w-md bg-white dark:bg-slate-900 p-8 sm:p-10 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 relative z-10">
           
           <div className="lg:hidden mb-8 flex justify-center">
-            <img src="/logo.png" alt="OmniRepMax" className="h-10 w-auto object-contain" />
+            {/* LOGO MOBILE AUMENTADA */}
+            <img src="/logo.png" alt="OmniRepMax" className="h-16 w-auto object-contain" />
           </div>
           
           <div className="mb-8 text-center">

@@ -21,8 +21,8 @@ export default function Landing() {
       <header className="fixed top-0 w-full z-50 bg-[#09090B]/80 backdrop-blur-xl border-b border-slate-800/50">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2 cursor-pointer">
-            {/* LOGO AQUI: Certifique-se de ter a imagem em public/logo.png */}
-            <img src="/logo.png" alt="OmniRepMax" className="h-10 w-auto object-contain" />
+            {/* LOGO AUMENTADA */}
+            <img src="/logo.png" alt="OmniRepMax" className="h-14 sm:h-16 w-auto object-contain drop-shadow-[0_0_15px_rgba(8,213,245,0.3)]" />
           </Link>
 
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
@@ -65,8 +65,12 @@ export default function Landing() {
             O ERP definitivo para representantes comerciais
           </div>
           
+          {/* TÍTULO COM GRADIENTE MAIS COLORIDO */}
           <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[1.05] tracking-tight mb-8">
-            A forma mais inteligente de <br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-white via-cyan-200 to-cyan-500 drop-shadow-sm">
+              A forma mais inteligente de
+            </span>
+            <br />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-[#075BFF] to-fuchsia-500 drop-shadow-[0_0_30px_rgba(8,213,245,0.3)]">
               gerir suas comissões.
             </span>
@@ -183,12 +187,13 @@ export default function Landing() {
               <p className="text-slate-400 text-sm">Digite o CNPJ do cliente e o sistema preenche automaticamente razão social, endereço e contatos via BrasilAPI.</p>
             </div>
 
+            {/* CARD SUBSTITUÍDO: Gestão Segura de Dados */}
             <div className="bg-[#1E293B] border border-slate-800 p-8 rounded-3xl group hover:border-cyan-500/50 transition-colors">
-              <div className="w-12 h-12 bg-purple-500/20 rounded-2xl flex items-center justify-center mb-6">
-                <ShieldCheck className="w-6 h-6 text-purple-400" />
+              <div className="w-12 h-12 bg-blue-500/20 rounded-2xl flex items-center justify-center mb-6">
+                <ShieldCheck className="w-6 h-6 text-blue-400" />
               </div>
-              <h3 className="text-xl font-bold mb-3">Multi-empresa (SaaS)</h3>
-              <p className="text-slate-400 text-sm">Cada usuário tem seu próprio ambiente isolado e seguro. Seus dados nunca se misturam com os de outros.</p>
+              <h3 className="text-xl font-bold mb-3">Gestão Segura de Dados</h3>
+              <p className="text-slate-400 text-sm">Seus dados estão criptografados e isolados por ambiente. Segurança de nível empresarial para o seu negócio.</p>
             </div>
           </div>
         </div>
@@ -338,8 +343,8 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-8">
           <div className="col-span-1 md:col-span-2">
             <div className="flex items-center gap-2 mb-4">
-              {/* LOGO FOOTER */}
-              <img src="/logo.png" alt="OmniRepMax" className="h-8 w-auto object-contain" />
+              {/* LOGO AUMENTADA NO FOOTER */}
+              <img src="/logo.png" alt="OmniRepMax" className="h-12 w-auto object-contain" />
             </div>
             <p className="text-slate-400 text-sm max-w-xs">
               O sistema definitivo para gestão de representação comercial. Focado em comissões, faturamento e inteligência artificial.
