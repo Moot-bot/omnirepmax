@@ -138,8 +138,8 @@ export default function AppShell() {
   };
 
   return (
-    /* ✅ FUNDO AZUL/CINZA FORÇADO */
-    <div className="flex h-screen bg-slate-100 dark:bg-slate-950 overflow-hidden transition-colors duration-300">
+    /* Fundo geral: Azul acinzentado super claro (Slate-50) */
+    <div className="flex h-screen bg-slate-50 dark:bg-[#09090B] overflow-hidden transition-colors duration-300">
       
       {isMobileOpen && (
         <div 
@@ -154,10 +154,9 @@ export default function AppShell() {
         ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0 md:static"}
       `}>
         
-        {/* Logo / Header */}
-        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800">
+        {/* Logo / Header - Aumentado para h-20 */}
+        <div className="h-20 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('/dashboard')}>
-            {/* ✅ LOGO + NOME RESTAURADOS */}
             <img src="/logo.png" alt="OmniRepMax" className="h-8 w-auto object-contain" />
             <span className="font-bold text-xl tracking-tight text-[#075BFF]">
               OMNIREP<span className="text-slate-900 dark:text-white">MAX</span>
@@ -182,7 +181,7 @@ export default function AppShell() {
                     to={item.path}
                     onClick={() => setIsMobileOpen(false)}
                     className={({ isActive }) =>
-                      `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                      `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
                         isActive
                           ? "bg-[#075BFF]/10 text-[#075BFF] dark:bg-[#075BFF]/20 dark:text-[#3b82f6]"
                           : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200"
@@ -224,27 +223,26 @@ export default function AppShell() {
       </aside>
 
       {/* MAIN CONTENT */}
-      {/* ✅ FUNDO AZUL/CINZA FORÇADO TAMBÉM NO MAIN */}
-      <main className="flex-1 flex flex-col overflow-hidden bg-slate-100 dark:bg-slate-950 transition-colors duration-300">
+      <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-[#09090B] transition-colors duration-300">
         
-        {/* TOPBAR */}
-        <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between px-4 sm:px-6 gap-4 z-30">
+        {/* TOPBAR - Aumentada para h-20 e com efeito vidro no modo claro */}
+        <header className="h-20 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl flex items-center justify-between px-4 sm:px-6 gap-4 z-30">
           
           <div className="flex items-center gap-3 flex-1">
             <button className="md:hidden text-slate-600 dark:text-slate-300" onClick={() => setIsMobileOpen(true)}>
               <Menu className="w-6 h-6" />
             </button>
             
-            {/* BARRA DE PESQUISA */}
-            <div className="relative w-full max-w-md hidden sm:block" ref={searchRef}>
+            {/* BARRA DE PESQUISA - Mais alta */}
+            <div className="relative w-full max-w-lg hidden sm:block" ref={searchRef}>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <Input 
                   value={searchQuery}
                   onChange={handleSearchChange}
                   onFocus={() => setShowDropdown(true)}
                   placeholder="Pesquisar clientes, CNPJ, pedidos..." 
-                  className="pl-9 bg-slate-100 dark:bg-slate-800 border-transparent focus:border-[#075BFF] focus:bg-white dark:focus:bg-slate-900 transition-all rounded-full"
+                  className="h-11 pl-11 bg-slate-100 dark:bg-slate-800 border-transparent focus:border-[#075BFF] focus:bg-white dark:focus:bg-slate-900 transition-all rounded-full text-base"
                 />
               </div>
 
@@ -320,19 +318,19 @@ export default function AppShell() {
           </div>
 
           {/* Ações do Topbar */}
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full">
-              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-700" />}
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full h-10 w-10">
+              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-slate-600" />}
             </Button>
             
             <Button 
               variant="ghost" 
               size="icon" 
-              className="rounded-full relative"
+              className="rounded-full relative h-10 w-10"
               onClick={() => toast.info("Você não tem novas notificações no momento.")}
             >
               <Bell className="w-5 h-5 text-slate-500" />
-              <span className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900"></span>
+              <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900"></span>
             </Button>
           </div>
         </header>
