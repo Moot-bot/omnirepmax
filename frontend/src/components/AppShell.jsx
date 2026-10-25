@@ -10,7 +10,7 @@ import {
   FileText, Map, Settings, LogOut,
   Search, Menu, X, ExternalLink, UserPlus,
   Sun, Moon, Bell, Package, ShieldAlert,
-  Clock, Landmark  // ✅ NOVO
+  Clock, Landmark
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -76,7 +76,6 @@ export default function AppShell() {
   const [showDropdown, setShowDropdown] = useState(false);
   const searchRef = useRef(null);
 
-  // ✅ LÓGICA DO MENU DINÂMICO: Adiciona a seção Admin se o usuário for admin
   const menuSections = [...MENU_SECTIONS];
   if (user?.role === "admin") {
     menuSections.push({
@@ -139,7 +138,8 @@ export default function AppShell() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden transition-colors duration-300">
+    /* ✅ MUDANÇA 1: bg-slate-50 alterado para bg-background */
+    <div className="flex h-screen bg-background dark:bg-slate-950 overflow-hidden transition-colors duration-300">
       
       {isMobileOpen && (
         <div 
@@ -157,17 +157,11 @@ export default function AppShell() {
         {/* Logo / Header */}
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('/dashboard')}>
-            <div className="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/30 animate-pulse">
-              🚀
-            </div>
-            <div className="flex items-center">
-              <span className="font-bold text-xl tracking-tight text-[#075BFF]">
-                OMNIREP<span className="text-slate-900 dark:text-white">MAX</span>
-              </span>
-              <span className="ml-2 text-[10px] font-bold bg-rose-500 text-white px-2 py-0.5 rounded-full">
-                v2.0
-              </span>
-            </div>
+            {/* ✅ MUDANÇA 2: Logo substituindo o foguete e o texto */}
+            <img src="/logo.png" alt="OmniRepMax" className="h-8 w-auto object-contain" />
+            <span className="ml-1 text-[10px] font-bold bg-[#075BFF] text-white px-2 py-0.5 rounded-full">
+              v2.0
+            </span>
           </div>
           <button className="md:hidden text-slate-500" onClick={() => setIsMobileOpen(false)}>
             <X className="w-5 h-5" />
@@ -176,7 +170,6 @@ export default function AppShell() {
 
         {/* Links de Navegação */}
         <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6 custom-scrollbar">
-          {/* ✅ USA O menuSections DINÂMICO AQUI */}
           {menuSections.map((section) => (
             <div key={section.title}>
               <h3 className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -231,7 +224,8 @@ export default function AppShell() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950 transition-colors duration-300">
+      {/* ✅ MUDANÇA 3: bg-slate-50 alterado para bg-background */}
+      <main className="flex-1 flex flex-col overflow-hidden bg-background dark:bg-slate-950 transition-colors duration-300">
         
         {/* TOPBAR */}
         <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between px-4 sm:px-6 gap-4 z-30">

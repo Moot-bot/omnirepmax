@@ -19,45 +19,32 @@ h1, h2, h3, h4, h5, h6, .font-display {
 .font-mono, .mono { font-family: 'JetBrains Mono', monospace; }
 
 @layer base {
-  :root {
-    /* --- Shadcn surface tokens (OMNIREP MAX light theme) --- */
-    --background: 220 50% 97%;              /* #F4F7FC */
-    --foreground: 220 46% 15%;              /* #152238 */
-    --card: 0 0% 100%;
-    --card-foreground: 220 46% 15%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 220 46% 15%;
-    --primary: 218 100% 51%;                /* Royal blue #075BFF */
-    --primary-foreground: 0 0% 100%;
-    --secondary: 216 44% 94%;               /* light silver */
-    --secondary-foreground: 220 46% 15%;
-    --muted: 216 44% 94%;
-    --muted-foreground: 215 16% 47%;        /* #64748B */
-    --accent: 190 92% 50%;                  /* Cyan tech #08D5F5 */
-    --accent-foreground: 220 75% 15%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 214 32% 91%;                  /* #E2E8F0 */
-    --input: 214 32% 91%;
-    --ring: 218 100% 51%;
-    --radius: 0.75rem;
-
-    --chart-1: 218 100% 51%;                /* Royal */
-    --chart-2: 190 92% 50%;                 /* Cyan */
-    --chart-3: 220 75% 15%;                 /* Navy */
-    --chart-4: 38 92% 50%;                  /* Amber (atenção) */
-    --chart-5: 142 71% 45%;                 /* Emerald (sucesso) */
-
-    /* --- OMNIREP MAX brand tokens (official palette) --- */
-    --brand-navy-deep: 219 79% 10%;         /* #06152F */
-    --brand-navy: 219 86% 22%;              /* #082B68 */
-    --brand-royal: 218 100% 51%;            /* #075BFF */
-    --brand-electric: 211 100% 52%;         /* #087BFF */
-    --brand-cyan: 190 100% 47%;             /* #00C8F0 */
-    --brand-silver: 216 20% 83%;            /* #C8D0DC */
-    --brand-text-primary: 220 46% 15%;      /* #152238 */
-    --brand-text-secondary: 215 16% 47%;    /* #64748B */
-  }
+:root {
+  /* Fundo Azul Claro (Slate-100 do Tailwind) */
+  --background: 210 40% 96.1%; 
+  --foreground: 222.2 84% 4.9%;
+  
+  /* Cards permanecem BRANCOS para dar contraste com o fundo azulado */
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+  --radius: 0.75rem;
+}
 
   .dark {
     --background: 219 79% 10%;              /* #06152F — navy deep */
