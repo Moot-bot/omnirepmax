@@ -149,11 +149,9 @@ export default function AppShell() {
         ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0 md:static"}
       `}>
         
-        {/* Glow e Grid de fundo na Sidebar */}
         <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5 pointer-events-none mix-blend-overlay"></div>
         <div className="absolute top-0 left-0 w-full h-[200px] bg-[#075BFF]/20 blur-[100px] pointer-events-none rounded-full" />
 
-        {/* Logo / Header */}
         <div className="h-20 flex items-center justify-between px-6 border-b border-[#1E3A8A]/40 relative z-10 bg-white/5 backdrop-blur-sm">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
             <img src="/logo.png" alt="OmniRepMax" className="h-9 w-auto object-contain drop-shadow-[0_0_12px_rgba(8,213,245,0.6)]" />
@@ -166,7 +164,6 @@ export default function AppShell() {
           </button>
         </div>
 
-        {/* Links de Navegação */}
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 custom-scrollbar relative z-10">
           {menuSections.map((section) => (
             <div key={section.title}>
@@ -189,7 +186,6 @@ export default function AppShell() {
                   >
                     {({ isActive }) => (
                       <>
-                        {/* Barrinha lateral azul neon para o item ativo */}
                         {isActive && (
                           <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#08D5F5] shadow-[0_0_15px_rgba(8,213,245,0.8)]" />
                         )}
@@ -204,7 +200,6 @@ export default function AppShell() {
           ))}
         </div>
 
-        {/* User Profile / Logout */}
         <div className="p-4 border-t border-[#1E3A8A]/40 relative z-10 bg-black/20">
           <div className="flex items-center gap-3 mb-2 p-2 rounded-xl bg-white/5 border border-white/5 shadow-inner">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#075BFF] to-[#08D5F5] flex items-center justify-center text-white font-bold overflow-hidden shadow-[0_0_15px_rgba(8,213,245,0.4)]">
@@ -228,17 +223,15 @@ export default function AppShell() {
       {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col overflow-hidden bg-background transition-colors duration-300">
         
-        {/* TOPBAR - AZUL METÁLICO FUTURISTA CONSTANTE */}
-        <header className="h-20 border-b border-[#1E3A8A]/40 bg-gradient-to-r from-[#060C1A] via-[#0A1838] to-[#060C1A] flex items-center justify-between px-4 sm:px-6 gap-4 z-30 relative shadow-lg">
-          {/* Linha de brilho sutil no topo do header */}
-          <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[#08D5F5]/50 to-transparent"></div>
-
+        {/* TOPBAR - ESQUERDA FIXA, DIREITA DINÂMICA */}
+        <header className="h-20 border-b border-border dark:border-[#1E3A8A]/40 bg-gradient-to-r from-[#060C1A] via-[#0A1838] via-40% to-background dark:to-[#060C1A] flex items-center justify-between px-4 sm:px-6 gap-4 z-30 relative shadow-lg transition-colors duration-300">
+          
           <div className="flex items-center gap-3 flex-1 relative z-10">
             <button className="md:hidden text-slate-400" onClick={() => setIsMobileOpen(true)}>
               <Menu className="w-6 h-6" />
             </button>
             
-            {/* BARRA DE PESQUISA */}
+            {/* BARRA DE PESQUISA (Fixa no Escuro) */}
             <div className="relative w-full max-w-lg hidden sm:block" ref={searchRef}>
               <div className="relative group">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-[#08D5F5] transition-colors" />
@@ -323,30 +316,30 @@ export default function AppShell() {
             </div>
           </div>
 
-          {/* Ações do Topbar (Lado Direito) - AGORA INTEGRADO AO DESIGN METÁLICO */}
-          <div className="flex items-center gap-3 relative z-10">
+          {/* Ações do Topbar (Lado Direito) - DINÂMICO CONFORME O TEMA */}
+          <div className="flex items-center gap-3 relative z-10 pl-4">
             
-            {/* Divisor Luminoso */}
-            <div className="w-px h-8 bg-gradient-to-b from-transparent via-[#1E3A8A] to-transparent mx-2 hidden sm:block"></div>
+            {/* Divisor Luminoso - Adaptável */}
+            <div className="w-px h-8 bg-border dark:bg-gradient-to-b dark:from-transparent dark:via-[#1E3A8A] dark:to-transparent mx-2 hidden sm:block transition-colors"></div>
 
-            {/* Botão de Tema (Painel Metálico) */}
+            {/* Botão de Tema - Adaptável */}
             <button 
               onClick={toggleTheme} 
-              className="w-10 h-10 rounded-xl bg-[#0A1838] border border-[#1E3A8A]/50 flex items-center justify-center text-slate-400 hover:text-[#08D5F5] hover:border-[#08D5F5]/80 hover:shadow-[0_0_15px_rgba(8,213,245,0.3)] hover:-translate-y-0.5 transition-all duration-300 group"
+              className="w-10 h-10 rounded-xl bg-card border border-border text-foreground dark:bg-[#0A1838] dark:border-[#1E3A8A]/50 dark:text-slate-400 hover:text-primary dark:hover:text-[#08D5F5] hover:border-primary/50 dark:hover:border-[#08D5F5]/80 hover:shadow-md dark:hover:shadow-[0_0_15px_rgba(8,213,245,0.3)] hover:-translate-y-0.5 transition-all duration-300 group"
             >
               {theme === 'dark' 
                 ? <Sun className="w-5 h-5 text-amber-400 group-hover:text-amber-300 transition-colors" /> 
-                : <Moon className="w-5 h-5 group-hover:text-[#08D5F5] transition-colors" />
+                : <Moon className="w-5 h-5 group-hover:text-primary transition-colors" />
               }
             </button>
             
-            {/* Botão de Notificação (Painel Metálico) */}
+            {/* Botão de Notificação - Adaptável */}
             <button 
-              className="w-10 h-10 rounded-xl bg-[#0A1838] border border-[#1E3A8A]/50 flex items-center justify-center text-slate-400 hover:text-[#08D5F5] hover:border-[#08D5F5]/80 hover:shadow-[0_0_15px_rgba(8,213,245,0.3)] hover:-translate-y-0.5 transition-all duration-300 relative group"
+              className="w-10 h-10 rounded-xl bg-card border border-border text-foreground dark:bg-[#0A1838] dark:border-[#1E3A8A]/50 dark:text-slate-400 hover:text-primary dark:hover:text-[#08D5F5] hover:border-primary/50 dark:hover:border-[#08D5F5]/80 hover:shadow-md dark:hover:shadow-[0_0_15px_rgba(8,213,245,0.3)] hover:-translate-y-0.5 transition-all duration-300 relative group"
               onClick={() => toast.info("Você não tem novas notificações no momento.")}
             >
-              <Bell className="w-5 h-5 group-hover:text-[#08D5F5] transition-colors" />
-              <span className="absolute top-2 right-2.5 w-2 h-2 bg-[#08D5F5] rounded-full border-2 border-[#0A1838] shadow-[0_0_8px_rgba(8,213,245,0.8)] animate-pulse"></span>
+              <Bell className="w-5 h-5 group-hover:text-primary dark:group-hover:text-[#08D5F5] transition-colors" />
+              <span className="absolute top-2 right-2.5 w-2 h-2 bg-primary dark:bg-[#08D5F5] rounded-full border-2 border-card dark:border-[#0A1838] shadow-sm dark:shadow-[0_0_8px_rgba(8,213,245,0.8)] animate-pulse"></span>
             </button>
           </div>
         </header>
