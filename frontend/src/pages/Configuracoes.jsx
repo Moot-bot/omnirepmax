@@ -214,7 +214,34 @@ export default function Configuracoes() {
               />
             </div>
           </div>
-
+            <div className="mt-6 p-5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+  <h3 className="text-sm font-semibold mb-3">Suporte</h3>
+  <div className="space-y-2 text-sm">
+    <div className="flex items-center gap-2">
+      <span className="text-slate-500 w-20">E-mail</span>
+      <a href="mailto:suporte@nortmarkas.com.br" className="text-[#075BFF] hover:underline">
+        suporte@nortmarkas.com.br
+      </a>
+    </div>
+    <div className="flex items-center gap-2">
+      <span className="text-slate-500 w-20">WhatsApp</span>
+      <a
+        href="https://wa.me/5547992065908"
+        target="_blank"
+        rel="noreferrer"
+        className="text-emerald-600 hover:underline"
+      >
+        (47) 99206-5908
+      </a>
+    </div>
+    <div className="flex items-center gap-2">
+      <span className="text-slate-500 w-20">Site</span>
+      <a href="https://omnirepmax.com.br" className="text-[#075BFF] hover:underline">
+        omnirepmax.com.br
+      </a>
+    </div>
+  </div>
+</div>
           {/* Footer fixo no final do modal */}
           <DialogFooter className="border-t border-slate-100 dark:border-slate-800 pt-4 mt-auto">
             <Button variant="outline" onClick={() => setResetOpen(false)}>Cancelar</Button>

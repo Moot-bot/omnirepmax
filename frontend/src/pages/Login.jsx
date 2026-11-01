@@ -185,7 +185,7 @@ export default function Login() {
                   required
                   className="h-12 pl-10 bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus-visible:ring-[#075BFF]" 
                 />
-              </div>
+              </div>[]
             </div>
 
             <Button 
@@ -196,7 +196,21 @@ export default function Login() {
               {busy ? "Entrando..." : "Entrar"}
             </Button>
           </form>
-
+              <p className="text-center text-xs text-slate-500 mt-6">
+  Problemas para acessar?{" "}
+  <a href="mailto:suporte@nortmarkas.com.br" className="text-[#075BFF] hover:underline">
+    suporte@nortmarkas.com.br
+  </a>{" "}
+  ·{" "}
+  <a
+    href="https://wa.me/5547992065908"
+    target="_blank"
+    rel="noreferrer"
+    className="text-emerald-600 hover:underline"
+  >
+    WhatsApp
+  </a>
+</p>
           <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 text-center">
             <p className="text-sm text-slate-500">
               Ainda não tem conta? <Link to="/signup" className="font-semibold text-[#075BFF] hover:underline">Criar conta grátis <ArrowRight className="inline w-3 h-3 ml-1"/></Link>

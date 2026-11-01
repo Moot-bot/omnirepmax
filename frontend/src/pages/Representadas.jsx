@@ -17,6 +17,7 @@ import { fmtBRL } from "../lib/format";
 import { toast } from "sonner";
 import * as XLSX from 'xlsx';
 import HistoricoRegrasModal from "../components/HistoricoRegrasModal";
+import * as XLSX from 'xlsx';
 
 const emptyRep = { 
   razao_social: "", nome_fantasia: "", cnpj: "", logo: "",
