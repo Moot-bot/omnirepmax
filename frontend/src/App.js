@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
 import { Toaster } from "sonner"; // <-- IMPORTANTE: Importa o Toaster
+import { Analytics } from "@vercel/analytics/react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import AppShell from "./components/AppShell";
@@ -81,6 +82,7 @@ export default function App() {
         </BrowserRouter>
         {/* ✅ FIX: Adiciona o componente que desenha os toasts na tela */}
         <Toaster position="top-right" richColors />
+        <Analytics />
       </AuthProvider>
     </ThemeProvider>
   );
