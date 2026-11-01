@@ -39,17 +39,26 @@ MAX_LOGO = 700_000
 APP_ENV = os.environ.get('APP_ENV', 'prod')
 IS_PROD = APP_ENV == 'prod'
 
-ALLOWED_ORIGINS = [
-    o.strip() for o in os.environ.get(
-        'ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000','https://omnirepmax.com.br','https://www.omnirepmax.com.br'
-    ).split(',') if o.strip()
+# ✅ CORS: domínios de produção SEMPRE liberados; a env ALLOWED_ORIGINS soma (não substitui).
+# rstrip("/") evita erro clássico de "https://site.com.br/" na variável de ambiente.
+DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://omnirepmax.com.br",
+    "https://www.omnirepmax.com.br",
 ]
+ALLOWED_ORIGINS = sorted({
+    o.strip().rstrip("/")
+    for o in DEFAULT_ORIGINS + os.environ.get("ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+})
 
 app = FastAPI(title="OMNIREPMAX API", version="2.2.1")
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("omnirepmax")
+logger.info(f"CORS liberado para: {ALLOWED_ORIGINS}")
 
 @app.get("/health")
 async def health_root():
@@ -1042,6 +1051,45 @@ async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_us
         )
         atualizado["parcelas_regeneradas"] = res
 
+    return atualizado
+
+# ✅ NOVO: edição só das parcelas (não recalcula itens/total — seguro para pedidos importados de XML)
+class ParcelasUpdateIn(BaseModel):
+    parcelas: List[dict]
+
+@api.patch("/pedidos/{pid}/parcelas")
+async def atualizar_parcelas_pedido(pid: str, body: ParcelasUpdateIn, current=Depends(get_current_user)):
+    tid = tid_of(current)
+    existing = await db.pedidos.find_one({"id": pid, "tenant_id": tid}, {"_id": 0})
+    if not existing: raise HTTPException(404, "Pedido não encontrado")
+    if existing.get("status") == "cancelado":
+        raise HTTPException(400, "Pedido cancelado não pode ter parcelas alteradas.")
+
+    parcelas = []
+    for i, p in enumerate(body.parcelas or []):
+        d = _parse_date(p.get("vencimento"))
+        if not d: raise HTTPException(400, f"Parcela {i+1}: vencimento inválido")
+        v = round(_to_float(p.get("valor_base", p.get("valor"))), 2)
+        if v <= 0: raise HTTPException(400, f"Parcela {i+1}: valor deve ser maior que zero")
+        parcelas.append({
+            "numero": str(p.get("numero") or f"{i+1:03d}"),
+            "vencimento": iso(d),
+            "valor": v,
+            "valor_base": v,
+            "origem": p.get("origem") or "manual",
+        })
+    if not parcelas: raise HTTPException(400, "Informe ao menos uma parcela")
+
+    atualizado = await t_update("pedidos", current, pid, {"parcelas": parcelas})
+    res = None
+    if atualizado.get("status") in ("faturado", "faturado_parcial"):
+        res = await _regerar_parcelas_pedido(current, atualizado)
+    await _log_auditoria(
+        current, "pedido_parcelas_alteradas", "pedidos", pid,
+        before={"parcelas": existing.get("parcelas", [])}, after={"parcelas": parcelas},
+        extra=res or {},
+    )
+    atualizado["parcelas_regeneradas"] = res
     return atualizado
 
 @api.patch("/pedidos/{pid}/status")
