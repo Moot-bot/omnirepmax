@@ -538,7 +538,28 @@ export default function Landing() {
             </ul>
           </div>
         </div>
-        
+        <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-slate-500">
+  <a
+    href="mailto:suporte@nortmarkas.com.br"
+    className="hover:text-[#075BFF] transition-colors"
+  >
+    suporte@nortmarkas.com.br
+  </a>
+  <a
+    href="https://wa.me/5547992065908"
+    target="_blank"
+    rel="noreferrer"
+    className="hover:text-emerald-600 transition-colors"
+  >
+    WhatsApp (47) 99206-5908
+  </a>
+  <a
+    href="https://omnirepmax.com.br"
+    className="hover:text-[#075BFF] transition-colors"
+  >
+    omnirepmax.com.br
+  </a>
+</div>
         {/* DIREITOS E DESENVOLVEDOR */}
         <div className="max-w-7xl mx-auto px-6 mt-16 pt-8 border-t border-slate-200 dark:border-white/10 flex flex-col md:flex-row items-center justify-between text-sm text-slate-500 gap-4">
           <p>Â© {new Date().getFullYear()} OmniRepMax. Todos os direitos reservados.</p>
