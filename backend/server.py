@@ -41,11 +41,11 @@ IS_PROD = APP_ENV == 'prod'
 
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get(
-        'ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000'
+        'ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000','https://omnirepmax.com.br','https://www.omnirepmax.com.br'
     ).split(',') if o.strip()
 ]
 
-app = FastAPI(title="OMNIREPMAX API", version="2.2.0")
+app = FastAPI(title="OMNIREPMAX API", version="2.2.1")
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
@@ -111,6 +111,33 @@ def _parse_date(s):
         if d.tzinfo is None: d = d.replace(tzinfo=timezone.utc)
         return d
     except Exception: return None
+
+# ✅ NOVO: conversão numérica tolerante (aceita "1.234,56", "1234.56", None, strings vazias)
+def _to_float(v, default: float = 0.0) -> float:
+    if v is None or v == "": return default
+    if isinstance(v, bool): return default
+    if isinstance(v, (int, float)): return float(v)
+    s = str(v).strip()
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try: return float(s)
+    except ValueError: return default
+
+# ✅ NOVO: rateio de um total por pesos, com ajuste de centavos na última parcela.
+# Se algum peso for <= 0 (ou todos ausentes), divide em partes iguais.
+def _ratear(total: float, pesos: List[float]) -> List[float]:
+    n = len(pesos)
+    if n == 0: return []
+    soma = sum(pesos)
+    if soma > 0 and all(w > 0 for w in pesos):
+        vals = [round(total * w / soma, 2) for w in pesos]
+    else:
+        v = round(total / n, 2)
+        vals = [v] * n
+    vals[-1] = round(vals[-1] + round(total - sum(vals), 2), 2)
+    return vals
 
 async def get_current_user(request: Request) -> dict:
     token = None
@@ -805,21 +832,36 @@ def calc_pedido_totals(data: dict, repr_comissao: float) -> dict:
     data["comissao_valor"] = round(total * repr_comissao / 100.0, 2)
     return data
 
-async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parcelas_override: List[dict] = None):
-    """Divide o valor LÍQUIDO da comissão entre as parcelas, ignorando valores do frontend."""
-    parcelas = parcelas_override if parcelas_override is not None else ped.get("parcelas", [])
-    valor_liquido = comissao["valor_liquido"]
-
+# ✅ NOVO: monta as parcelas de comissão sem mutar a entrada
+def _calcular_parcelas_comissao(parcelas_in: Optional[List[dict]], valor_liquido: float) -> List[dict]:
+    """
+    - Duplicatas da NF-e (todas com `valor_base` > 0): rateio PROPORCIONAL ao valor
+      de cada duplicata, mantendo os vencimentos reais (dVenc).
+    - Parcelas do frontend (sem `valor_base`): divisão igual; valores enviados são ignorados.
+    - Parcela sem vencimento válido: hoje + 30*(i+1) dias.
+    - Sem parcelas: parcela única em 30 dias.
+    """
+    base = now_utc()
+    parcelas = [dict(p) for p in (parcelas_in or []) if isinstance(p, dict)]
     if not parcelas:
-        parcelas = [{"vencimento": iso(now_utc() + timedelta(days=30)), "valor": valor_liquido}]
-    else:
-        num = len(parcelas)
-        valor_parcela = round(valor_liquido / num, 2)
-        diferenca = round(valor_liquido - (valor_parcela * num), 2)
-        for i, p in enumerate(parcelas):
-            p["valor"] = valor_parcela
-            if i == num - 1:
-                p["valor"] = round(p["valor"] + diferenca, 2)
+        return [{"vencimento": iso(base + timedelta(days=30)), "valor": round(valor_liquido, 2)}]
+
+    for i, p in enumerate(parcelas):
+        d = _parse_date(p.get("vencimento"))
+        p["vencimento"] = iso(d) if d else iso(base + timedelta(days=30 * (i + 1)))
+
+    pesos = [_to_float(p.get("valor_base")) for p in parcelas]
+    valores = _ratear(valor_liquido, pesos)
+    for p, v in zip(parcelas, valores):
+        p["valor"] = v
+    return parcelas
+
+async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parcelas_override: Optional[List[dict]] = None):
+    """Distribui o valor LÍQUIDO da comissão entre as parcelas.
+    Usa `parcelas_override` quando informado (não vazio); senão, as parcelas do pedido."""
+    parcelas_in = parcelas_override if parcelas_override else ped.get("parcelas", [])
+    parcelas = _calcular_parcelas_comissao(parcelas_in, _to_float(comissao.get("valor_liquido")))
+    n = len(parcelas)
 
     for i, p in enumerate(parcelas):
         await t_insert("contas_receber", current, {
@@ -827,7 +869,8 @@ async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parc
             "cliente_id": ped.get("cliente_id"),
             "representada_id": ped.get("representada_id"),
             "pedido_id": ped["id"],
-            "numero_documento": f"{ped.get('numero')} ({i+1}/{len(parcelas)})",
+            "numero_documento": f"{ped.get('numero')} ({i+1}/{n})",
+            "numero_duplicata": str(p.get("numero") or ""),
             "valor": p["valor"],
             "valor_recebido": 0.0,
             "saldo_pendente": p["valor"],
@@ -836,6 +879,46 @@ async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parc
             "historico_recebimentos": [],
             "forma_pagamento": "Boleto",
         })
+
+# ✅ NOVO: regenera as parcelas das comissões de um pedido já faturado após edição.
+# Não mexe em comissões que já tiveram qualquer recebimento (preserva histórico).
+async def _regerar_parcelas_pedido(current: dict, ped: dict) -> dict:
+    tid = tid_of(current)
+    resultado = {"regeneradas": 0, "bloqueadas_por_recebimento": 0}
+    comissoes = await db.comissoes.find({
+        "tenant_id": tid,
+        "pedido_id": ped["id"],
+        "modalidade": "faturamento",
+        "status": {"$nin": ["cancelada", "recebida"]},
+    }, {"_id": 0}).to_list(100)
+
+    for com in comissoes:
+        ja_recebeu = _to_float(com.get("valor_recebido")) > 0 or await db.contas_receber.count_documents({
+            "tenant_id": tid, "comissao_id": com["id"], "valor_recebido": {"$gt": 0},
+        }) > 0
+        if ja_recebeu:
+            resultado["bloqueadas_por_recebimento"] += 1
+            continue
+
+        updates: Dict[str, Any] = {}
+        if com.get("base_calculo") == "pedido":
+            novo = round(_to_float(ped.get("total")) * _to_float(com.get("percentual")) / 100.0, 2)
+            if abs(novo - _to_float(com.get("valor_liquido"))) >= 0.01:
+                updates = {"valor_liquido": novo, "saldo_pendente": novo,
+                           "valor_total_pedido": ped.get("total", 0)}
+                com.update(updates)
+
+        await db.contas_receber.delete_many({"tenant_id": tid, "comissao_id": com["id"]})
+        if updates:
+            await db.comissoes.update_one(
+                {"id": com["id"], "tenant_id": tid},
+                {"$set": {**updates, "updated_at": iso(now_utc())}}
+            )
+        if _to_float(com.get("valor_liquido")) > 0:
+            await gerar_parcelas_comissao(current, ped, com)
+        resultado["regeneradas"] += 1
+
+    return resultado
 
 @api.get("/pedidos")
 async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_current_user)):
@@ -926,10 +1009,8 @@ async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
 @api.put("/pedidos/{pid}")
 async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_user)):
     tid = tid_of(current)
-    existing = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
+    existing = await db.pedidos.find_one({"id": pid, "tenant_id": tid}, {"_id": 0})
     if not existing: raise HTTPException(404, "Pedido não encontrado")
-    if existing.get("status") in ("faturado", "faturado_parcial"):
-        raise HTTPException(400, "Pedidos faturados não podem ser editados.")
     data = body.model_dump()
     rep = await db.representadas.find_one({"id": data["representada_id"], "tenant_id": tid}, {"_id": 0})
     if not rep: raise HTTPException(404, "Representada não encontrada")
@@ -940,7 +1021,28 @@ async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_us
     regra = await comissao_vigente_em(tid, data["representada_id"], data_ref)
     data = calc_pedido_totals(data, regra.get("comissao_padrao", 5.0))
     data["numero"] = existing["numero"]
-    return await t_update("pedidos", current, pid, data)
+
+    # ✅ NOVO: status de pedido faturado/cancelado só muda via faturamento/cancelamento.
+    # Evita que o default "rascunho" do PedidoIn rebaixe um pedido já faturado.
+    if existing.get("status") in ("faturado", "faturado_parcial", "cancelado"):
+        data["status"] = existing["status"]
+
+    # ✅ NOVO: não apaga as parcelas existentes (ex.: duplicatas da NF-e) se o front não enviar
+    if not data.get("parcelas") and existing.get("parcelas"):
+        data["parcelas"] = existing["parcelas"]
+
+    atualizado = await t_update("pedidos", current, pid, data)
+
+    # ✅ NOVO: pedido faturado editado → regenera parcelas das comissões ainda não recebidas
+    if atualizado.get("status") in ("faturado", "faturado_parcial"):
+        res = await _regerar_parcelas_pedido(current, atualizado)
+        await _log_auditoria(
+            current, "pedido_editado_pos_faturamento", "pedidos", pid,
+            before=existing, after=atualizado, extra=res,
+        )
+        atualizado["parcelas_regeneradas"] = res
+
+    return atualizado
 
 @api.patch("/pedidos/{pid}/status")
 async def status_pedido(pid: str, body: dict, current=Depends(get_current_user)):
@@ -1026,14 +1128,15 @@ async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(g
     comissao = await t_insert("comissoes", current, comissao_data)
 
     # 4. Gera contas a receber se for faturamento
+    #    (parcelas do body; se vierem vazias, usa as parcelas do pedido)
     if modalidade == "faturamento" and valor_liquido > 0:
-        await gerar_parcelas_comissao(current, ped, comissao, body.parcelas)
+        await gerar_parcelas_comissao(current, ped, comissao, body.parcelas or None)
 
     # 5. Atualiza status do pedido
     faturamentos = await t_list("faturamentos", current, {"pedido_id": pid})
     total_faturado = sum(f["valor_faturado"] for f in faturamentos)
     novo_status = "faturado" if total_faturado >= ped["total"] else "faturado_parcial"
-    await db.pedidos.update_one({"id": pid}, {"$set": {"status": novo_status}})
+    await db.pedidos.update_one({"id": pid, "tenant_id": tid}, {"$set": {"status": novo_status}})
 
     return {"ok": True, "status": novo_status, "valor_liquido": valor_liquido}
 
@@ -1270,9 +1373,14 @@ async def create_recebivel_industria(body: RecebivelIndustriaIn, current=Depends
     cli = await db.clientes.find_one({"id": body.cliente_id, "tenant_id": tid})
     if not cli: raise HTTPException(404, "Cliente não encontrado")
 
+    # ✅ NOVO: força float numérico — saldo_pendente nunca é gravado como string
+    valor = round(_to_float(body.valor), 2)
+    if valor <= 0: raise HTTPException(400, "Valor deve ser maior que zero")
+
     data = body.model_dump()
+    data["valor"] = valor
     data["valor_recebido"] = 0.0
-    data["saldo_pendente"] = body.valor
+    data["saldo_pendente"] = valor
     data["historico_recebimentos"] = []
     doc = await t_insert("recebiveis_industria", current, data)
     await _log_auditoria(
@@ -1287,13 +1395,14 @@ async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_
     rec = await db.recebiveis_industria.find_one({"id": rid, "tenant_id": tid})
     if not rec: raise HTTPException(404, "Recebível não encontrado")
 
-    valor = float(body.get("valor", 0))
+    valor = _to_float(body.get("valor"))
     if valor <= 0: raise HTTPException(400, "Valor deve ser maior que zero")
     data_receb = body.get("data", iso(now_utc()))
 
-    saldo_atual = rec.get("saldo_pendente", rec.get("valor", 0))
+    # ✅ NOVO: tolera registros legados com valores gravados como string
+    saldo_atual = _to_float(rec.get("saldo_pendente"), _to_float(rec.get("valor")))
     novo_saldo = max(0.0, saldo_atual - valor)
-    novo_total = rec.get("valor_recebido", 0) + valor
+    novo_total = _to_float(rec.get("valor_recebido")) + valor
     novo_status = "recebido" if novo_saldo <= 0.01 else "parcial"
 
     historico = rec.get("historico_recebimentos", [])
@@ -1349,9 +1458,9 @@ async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_
 
 @api.delete("/recebiveis-industria/{rid}")
 async def del_recebivel_industria(rid: str, current=Depends(get_current_user)):
-    rec = await db.recebiveis_industria.find_one({"id": rid, "tenant_id": tid_of(current)})
+    rec = await db.recebiveis_industria.find_one({"id": rid, "tenant_id": tid_of(current)}, {"_id": 0})
     if not rec: raise HTTPException(404, "Recebível não encontrado")
-    if rec.get("valor_recebido", 0) > 0:
+    if _to_float(rec.get("valor_recebido")) > 0:
         raise HTTPException(400, "Recebíveis com valor recebido não podem ser excluídos. Use estorno.")
     await _log_auditoria(
         current, "recebivel_industria_excluido", "recebiveis_industria", rid,
@@ -1677,35 +1786,69 @@ class XMLImportIn(BaseModel):
 
 def _only_digits(s: Optional[str]) -> str: return re.sub(r"\D", "", s or "")
 
-def _parse_nfe(x: str) -> dict:
-    x_clean = re.sub(r'xmlns(:\w+)?="[^"]+"', '', x)
-    def f(pat, default=""):
-        m = re.search(pat, x_clean, re.S | re.I)
-        return m.group(1).strip() if m else default
+# ✅ NOVO: regex em um trecho específico do XML
+def _rx(pat: str, text: str, default: str = "") -> str:
+    m = re.search(pat, text or "", re.S | re.I)
+    return m.group(1).strip() if m else default
 
+# ✅ NOVO: normaliza XML com/sem namespace — remove BOM, declarações xmlns
+# e prefixos de tag (<nfe:det>, </ns2:vNF>), cobrindo layouts antigos e proc.
+def _normalizar_xml_nfe(x: str) -> str:
+    x = (x or "").lstrip("\ufeff")
+    x = re.sub(r'\s+xmlns(:[\w.-]+)?\s*=\s*"[^"]*"', "", x)
+    x = re.sub(r"<(/?)[A-Za-z_][\w.-]*:", r"<\1", x)
+    return x
+
+def _parse_nfe(x: str) -> dict:
+    xc = _normalizar_xml_nfe(x)
+
+    def f(pat, default=""):
+        return _rx(pat, xc, default)
+
+    # ✅ FIX: antes, f(pat, seg) usava `seg` como DEFAULT e buscava no documento
+    # inteiro → todos os itens herdavam qCom/vUnCom/vProd do primeiro item.
+    # `\b` evita casar <detPag>.
     itens = []
-    for m in re.finditer(r"<det[^>]*>(.*?)</det>", x_clean, re.S | re.I):
+    for m in re.finditer(r"<det\b[^>]*>(.*?)</det>", xc, re.S | re.I):
         seg = m.group(1)
-        qtd = f(r"<qCom>(.*?)</qCom>", seg)
-        preco = f(r"<vUnCom>(.*?)</vUnCom>", seg)
-        total = f(r"<vProd>(.*?)</vProd>", seg)
         itens.append({
-            "codigo": f(r"<cProd>(.*?)</cProd>", seg),
-            "ean": f(r"<cEAN>(.*?)</cEAN>", seg),
-            "nome": f(r"<xProd>(.*?)</xProd>", seg),
-            "quantidade": float(qtd) if qtd else 0.0,
-            "preco": float(preco) if preco else 0.0,
-            "total": float(total) if total else 0.0,
+            "codigo": _rx(r"<cProd>(.*?)</cProd>", seg),
+            "ean": _rx(r"<cEAN>(.*?)</cEAN>", seg),
+            "nome": _rx(r"<xProd>(.*?)</xProd>", seg),
+            "quantidade": _to_float(_rx(r"<qCom>(.*?)</qCom>", seg)),
+            "preco": _to_float(_rx(r"<vUnCom>(.*?)</vUnCom>", seg)),
+            "total": _to_float(_rx(r"<vProd>(.*?)</vProd>", seg)),
         })
 
-    tot = f(r"<vNF>(.*?)</vNF>", "0")
+    # ✅ NOVO: duplicatas de cobrança <cobr><dup> (nDup, dVenc, vDup)
+    parcelas = []
+    cobr = f(r"<cobr\b[^>]*>(.*?)</cobr>")
+    for i, m in enumerate(re.finditer(r"<dup\b[^>]*>(.*?)</dup>", cobr, re.S | re.I)):
+        seg = m.group(1)
+        venc = _parse_date(_rx(r"<dVenc>(.*?)</dVenc>", seg))
+        parcelas.append({
+            "numero": _rx(r"<nDup>(.*?)</nDup>", seg) or f"{i+1:03d}",
+            "vencimento": iso(venc) if venc else None,
+            "valor_base": round(_to_float(_rx(r"<vDup>(.*?)</vDup>", seg)), 2),
+            "origem": "nfe_dup",
+        })
+
+    # ✅ NOVO: dhEmi (layout 3.10/4.00) com fallback dEmi (layout 2.00)
+    emissao_raw = f(r"<dhEmi>(.*?)</dhEmi>") or f(r"<dEmi>(.*?)</dEmi>")
+    emissao_dt = _parse_date(emissao_raw)
+
     return {
-        "emitente": {"cnpj": f(r"<emit>.*?<CNPJ>(.*?)</CNPJ>"), "nome": f(r"<emit>.*?<xNome>(.*?)</xNome>")},
-        "destinatario": {"cnpj": f(r"<dest>.*?<CNPJ>(.*?)</CNPJ>") or f(r"<dest>.*?<CPF>(.*?)</CPF>"),
-                         "nome": f(r"<dest>.*?<xNome>(.*?)</xNome>")},
+        "emitente": {"cnpj": f(r"<emit\b[^>]*>.*?<CNPJ>(.*?)</CNPJ>"), "nome": f(r"<emit\b[^>]*>.*?<xNome>(.*?)</xNome>")},
+        "destinatario": {"cnpj": f(r"<dest\b[^>]*>.*?<CNPJ>(.*?)</CNPJ>") or f(r"<dest\b[^>]*>.*?<CPF>(.*?)</CPF>"),
+                         "nome": f(r"<dest\b[^>]*>.*?<xNome>(.*?)</xNome>")},
         "numero": f(r"<nNF>(.*?)</nNF>"), "serie": f(r"<serie>(.*?)</serie>"),
-        "data_emissao": f(r"<dhEmi>(.*?)</dhEmi>"),
-        "valor_total": float(tot) if tot else 0.0,
+        "data_emissao": iso(emissao_dt) if emissao_dt else emissao_raw,
+        "valor_total": _to_float(f(r"<vNF>(.*?)</vNF>")),
+        "fatura": {
+            "numero": _rx(r"<nFat>(.*?)</nFat>", cobr),
+            "valor_liquido": _to_float(_rx(r"<vLiq>(.*?)</vLiq>", cobr)),
+        },
+        "parcelas": parcelas,
         "itens": itens,
     }
 
@@ -1772,6 +1915,9 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
     total = parsed.get("valor_total") or subtotal
     numero = await next_numero(tid, "PED", "pedidos")
 
+    # ✅ NOVO: duplicatas da NF-e viram as parcelas do pedido
+    parcelas_nfe = parsed.get("parcelas") or []
+
     pedido = await t_insert("pedidos", current, {
         "numero": numero, "cliente_id": cli["id"], "representada_id": rep["id"],
         "condicao_pagamento": rep.get("prazo_pagamento") or "30 dias",
@@ -1783,6 +1929,7 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
         "data_pedido": data_emissao,
         "observacoes": f"Importado de NF-e nº {parsed.get('numero')}",
         "nf_numero": parsed.get("numero"), "nf_serie": parsed.get("serie"),
+        "parcelas": parcelas_nfe,
     })
 
     await t_insert("faturamentos", current, {
@@ -1798,6 +1945,10 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
     valor_liquido = round(total * comm / 100.0, 2)
     modalidade = regra.get("modalidade_comissao", "faturamento")
 
+    # ✅ NOVO: data prevista = 1º vencimento real da duplicata (fallback 30 dias)
+    venc_validos = [p["vencimento"] for p in parcelas_nfe if p.get("vencimento")]
+    data_prevista = min(venc_validos) if venc_validos else iso(now_utc() + timedelta(days=30))
+
     comissao = await t_insert("comissoes", current, {
         "pedido_id": pedido["id"], "pedido_numero": pedido["numero"],
         "cliente_id": cli["id"], "representada_id": rep["id"],
@@ -1812,10 +1963,11 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
         "modalidade": modalidade,
         "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez",
         "historico_recebimentos": [],
-        "data_prevista": iso(now_utc() + timedelta(days=30)),
+        "data_prevista": data_prevista,
     })
-    if modalidade == "faturamento":
-        await gerar_parcelas_comissao(current, pedido, comissao)
+    if modalidade == "faturamento" and valor_liquido > 0:
+        # ✅ NOVO: passa as duplicatas → rateio proporcional com vencimentos reais
+        await gerar_parcelas_comissao(current, pedido, comissao, parcelas_nfe or None)
 
     res["pedido_criado"] = pedido
     return res
@@ -2056,16 +2208,12 @@ async def recalcular_comissoes(current=Depends(get_current_user)):
         ).sort("vencimento", 1).to_list(100)
 
         if parcelas:
-            num = len(parcelas)
-            valor_parcela = round(valor_liquido_correto / num, 2)
-            diferenca = round(valor_liquido_correto - (valor_parcela * num), 2)
+            # ✅ NOVO: preserva a proporção atual entre parcelas (ex.: duplicatas da NF-e
+            # com valores diferentes) em vez de redistribuir em partes iguais.
+            novos_valores = _ratear(valor_liquido_correto, [_to_float(p.get("valor")) for p in parcelas])
 
-            for i, p in enumerate(parcelas):
-                novo_valor = valor_parcela
-                if i == num - 1:
-                    novo_valor = round(novo_valor + diferenca, 2)
-
-                valor_receb_parcela = p.get("valor_recebido", 0)
+            for p, novo_valor in zip(parcelas, novos_valores):
+                valor_receb_parcela = _to_float(p.get("valor_recebido"))
                 saldo_parcela = round(max(0.0, novo_valor - valor_receb_parcela), 2)
                 status_parcela = "recebido" if saldo_parcela <= 0.01 else "aberto"
 
