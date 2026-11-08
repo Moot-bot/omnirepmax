@@ -109,11 +109,11 @@ if IS_PROD and not RESEND_API_KEY:
 if IS_PROD and not SUPERADMIN_EMAILS:
     logger.warning("Nenhum superadmin configurado (ADMIN_EMAIL/SUPERADMIN_EMAILS): painel de leads ficará inacessível.")
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD", "POST"])
 async def health_root():
     return {"status": "ok"}
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD", "POST"])
 async def health_api():
     return {"status": "ok"}
 
@@ -3569,9 +3569,7 @@ async def _run_backup(run_id: str):
 async def cron_backup(background: BackgroundTasks,
                       authorization: Optional[str] = Header(None),
                       x_webhook_id: Optional[str] = Header(None, alias="X-Webhook-Id")):
-    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
-    if not secret or not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(authorization[7:], secret):
-        raise HTTPException(401, "Unauthorized")
+    _check_cron_secret(authorization)
     run_id = x_webhook_id or new_id()
     if await db.backups.find_one({"run_id": run_id}):
         return {"status": "duplicate", "run_id": run_id}
@@ -3594,9 +3592,13 @@ async def run_backup_now(background: BackgroundTasks, current=Depends(get_curren
     background.add_task(_run_backup_wrapper, run_id)
     return {"status": "accepted", "run_id": run_id}
 
-STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+def _env_limpo(nome: str) -> str:
+    """Remove espaços, aspas e quebras de linha coladas junto no painel do Render."""
+    return (os.environ.get(nome) or "").strip().strip('"').strip("'").strip()
+
+STRIPE_SECRET_KEY = _env_limpo("STRIPE_SECRET_KEY")
 stripe.api_key = STRIPE_SECRET_KEY or None
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_WEBHOOK_SECRET = _env_limpo("STRIPE_WEBHOOK_SECRET")
 if IS_PROD and STRIPE_SECRET_KEY and not STRIPE_WEBHOOK_SECRET:
     logger.warning("STRIPE_WEBHOOK_SECRET ausente: pagamentos não vão atualizar as assinaturas.")
 
@@ -3656,9 +3658,17 @@ async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
     try:
         prices = await asyncio.to_thread(
             lambda: stripe.Price.list(lookup_keys=[req.lookup_key], active=True, limit=1).data)
+    except stripe.error.AuthenticationError as e:
+        logger.error(f"Stripe recusou a chave: {e}")
+        raise HTTPException(503, "Pagamento indisponível: a chave do Stripe configurada no servidor foi recusada (inválida ou revogada). "
+                                 "Administrador: veja Admin → Diagnóstico.")
+    except stripe.error.PermissionError as e:
+        logger.error(f"Chave do Stripe sem permissão: {e}")
+        raise HTTPException(503, "Pagamento indisponível: a chave do Stripe não tem permissão para ler preços. "
+                                 "Use a Secret key (sk_...). Administrador: veja Admin → Diagnóstico.")
     except stripe.error.StripeError as e:
         logger.error(f"Stripe Price.list falhou: {e}")
-        raise HTTPException(502, "Não foi possível falar com o provedor de pagamento. Tente novamente.")
+        raise HTTPException(502, f"Não foi possível falar com o Stripe: {getattr(e, 'user_message', None) or str(e)[:160]}")
     if not prices or not getattr(prices[0], "recurring", None):
         logger.error(f"Preço mensal não encontrado no Stripe para lookup_key={req.lookup_key}")
         raise HTTPException(400, "Plano indisponível no momento. Fale com o suporte.")
@@ -3874,7 +3884,8 @@ async def diagnostico(current=Depends(get_current_user)):
          "Adicione FRONTEND_URL = https://www.omnirepmax.com.br no Render (é para onde o cliente volta depois de pagar).")
     item("E-mails (RESEND_API_KEY)", bool(RESEND_API_KEY), "Configurado" if RESEND_API_KEY else "Sem e-mails: recuperação de senha e avisos não saem.",
          "Opcional para cobrar. Crie a conta no resend.com, valide o domínio e adicione RESEND_API_KEY.")
-    item("Agendamento diário (WEBHOOK_CRON_SECRET)", bool(os.environ.get("WEBHOOK_CRON_SECRET")), "",
+    item("Agendamento diário (WEBHOOK_CRON_SECRET)", bool(_env_limpo("WEBHOOK_CRON_SECRET")),
+         f"Configurado ({len(_env_limpo('WEBHOOK_CRON_SECRET'))} caracteres). No cron-job.org use o Value: Bearer + esse mesmo texto." if _env_limpo("WEBHOOK_CRON_SECRET") else "",
          "Opcional para cobrar. Adicione WEBHOOK_CRON_SECRET (um texto aleatório) e use no cron-job.org.")
 
     if modo:
@@ -3941,9 +3952,17 @@ async def diagnostico(current=Depends(get_current_user)):
 # ✅ Cron diário: avisos de fim de teste (acionar 1x/dia com WEBHOOK_CRON_SECRET)
 # ------------------------------------------------------------
 def _check_cron_secret(authorization: Optional[str]):
-    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
-    if not secret or not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(authorization[7:], secret):
-        raise HTTPException(401, "Unauthorized")
+    secret = (os.environ.get("WEBHOOK_CRON_SECRET") or "").strip().strip('"').strip("'").strip()
+    if not secret:
+        raise HTTPException(503, "WEBHOOK_CRON_SECRET não está configurado no servidor (Render → Environment).")
+    valor = (authorization or "").strip()
+    if not valor:
+        raise HTTPException(401, "Falta o cabeçalho Authorization (Key: Authorization, Value: Bearer SEU_SEGREDO).")
+    if valor.lower().startswith("bearer"):
+        valor = valor[6:].strip()          # aceita "Bearer x", "bearer x" e "Bearerx"
+    valor = valor.strip('"').strip("'").strip()
+    if not hmac.compare_digest(valor.encode(), secret.encode()):
+        raise HTTPException(401, "O segredo do cabeçalho Authorization não confere com WEBHOOK_CRON_SECRET do servidor.")
 
 @api.post("/cron/diario")
 async def cron_diario(authorization: Optional[str] = Header(None)):
