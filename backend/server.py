@@ -82,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.7.0",
+    title="OMNIREPMAX API", version="2.7.3",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -109,13 +109,21 @@ if IS_PROD and not RESEND_API_KEY:
 if IS_PROD and not SUPERADMIN_EMAILS:
     logger.warning("Nenhum superadmin configurado (ADMIN_EMAIL/SUPERADMIN_EMAILS): painel de leads ficará inacessível.")
 
+def _info_saude() -> dict:
+    """Versão no ar + quais configurações existem (sem revelar segredos)."""
+    chave = (os.environ.get("STRIPE_SECRET_KEY") or "").strip().strip('"').strip("'").strip()
+    conta = chave[8:24] if chave.startswith(("sk_test_51", "sk_live_51", "rk_test_51", "rk_live_51")) else None
+    return {"status": "ok", "versao": app.version,
+            "stripe": {"configurado": bool(chave), "modo": ("teste" if "_test_" in chave else "produção") if chave else None,
+                       "conta": f"…{conta[2:]}" if conta else None}}
+
 @app.api_route("/health", methods=["GET", "HEAD", "POST"])
 async def health_root():
-    return {"status": "ok"}
+    return _info_saude()
 
 @app.api_route("/api/health", methods=["GET", "HEAD", "POST"])
 async def health_api():
-    return {"status": "ok"}
+    return _info_saude()
 
 # ------------------------------------------------------------
 # Helpers
@@ -3901,7 +3909,16 @@ async def diagnostico(current=Depends(get_current_user)):
         try:
             precos = await asyncio.to_thread(lambda: stripe.Price.list(
                 lookup_keys=[p["lookup_key"] for p in PLANS], active=True, limit=10).data)
-            achados = {getattr(p, "lookup_key", None): p for p in precos}
+            achados = {_sg(p, "lookup_key"): p for p in precos}
+            if len(achados) < len(PLANS):
+                try:
+                    existentes = await asyncio.to_thread(_precos_mensais_brl)
+                    item("Preços encontrados nesta conta", None if existentes else False,
+                         "; ".join(_descreve_preco(p) for p in existentes[:10]) if existentes else
+                         "Nenhum preço recorrente em BRL nesta conta/área restrita.",
+                         "Use o botão 'Configurar planos automaticamente' abaixo." )
+                except stripe.error.StripeError:
+                    pass
             for plano in PLANS:
                 p = achados.get(plano["lookup_key"])
                 if not p:
@@ -3910,10 +3927,10 @@ async def diagnostico(current=Depends(get_current_user)):
                          f"'Chave de pesquisa' = {plano['lookup_key']}. Produtos de teste e de produção são separados.")
                     continue
                 problemas = []
-                if not getattr(p, "recurring", None): problemas.append("não é recorrente")
-                elif (p.recurring.get("interval") if isinstance(p.recurring, dict) else getattr(p.recurring, "interval", None)) != "month": problemas.append("não é mensal")
-                if (getattr(p, "currency", "") or "").lower() != "brl": problemas.append(f"moeda {getattr(p, 'currency', '?')} (deveria ser BRL)")
-                valor = (getattr(p, "unit_amount", 0) or 0) / 100
+                if not _sg(p, "recurring"): problemas.append("não é recorrente")
+                elif _sg(_sg(p, "recurring"), "interval") != "month": problemas.append("não é mensal")
+                if (_sg(p, "currency", "") or "").lower() != "brl": problemas.append(f"moeda {_sg(p, 'currency', '?')} (deveria ser BRL)")
+                valor = (_sg(p, "unit_amount", 0) or 0) / 100
                 if abs(valor - plano["price_brl"]) > 0.01: problemas.append(f"valor R$ {valor:.2f} diferente do anunciado (R$ {plano['price_brl']})")
                 item(f"Preço do plano {plano['name']}", not problemas, f"R$ {valor:.2f}/mês" if not problemas else "; ".join(problemas),
                      "Crie um novo preço Recorrente, Mensal, em BRL, com o valor certo, e mova a chave de pesquisa para ele.")
@@ -3956,7 +3973,95 @@ async def diagnostico(current=Depends(get_current_user)):
 
     essenciais = [i for i in itens if i["item"].startswith(("Chave secreta", "Segredo do webhook", "Preço do plano", "Webhook no Stripe", "Conexão"))]
     pronto = bool(essenciais) and all(i["ok"] for i in essenciais) and bool(modo)
-    return {"pronto_para_cobrar": pronto, "modo_stripe": modo, "itens": itens}
+    pode_autoconfigurar = bool(modo) and any(i["item"].startswith(("Preço do plano", "Portal do cliente")) and i["ok"] is False for i in itens)
+    return {"pronto_para_cobrar": pronto, "modo_stripe": modo, "itens": itens, "pode_autoconfigurar": pode_autoconfigurar}
+
+def _sg(obj, chave, padrao=None):
+    """Lê campo de objeto do Stripe (aceita objeto ou dicionário)."""
+    if obj is None: return padrao
+    try:
+        v = obj[chave]
+        return padrao if v is None else v
+    except (KeyError, TypeError, IndexError):
+        return getattr(obj, chave, padrao)
+
+def _precos_mensais_brl() -> List[Any]:
+    return stripe.Price.list(active=True, type="recurring", currency="brl", limit=100, expand=["data.product"]).data
+
+def _descreve_preco(p) -> str:
+    prod = _sg(p, "product")
+    nome = _sg(prod, "name") if not isinstance(prod, str) else prod
+    lk = _sg(p, "lookup_key")
+    return f"{nome or 'produto'} — R$ {(_sg(p, 'unit_amount', 0) or 0) / 100:.2f}/{_sg(_sg(p, 'recurring'), 'interval', '?')}" + \
+           (f" (chave de pesquisa: {lk})" if lk else " (sem chave de pesquisa)")
+
+@api.post("/admin/stripe/configurar-planos")
+async def configurar_planos_stripe(current=Depends(get_current_user)):
+    """Deixa a conta Stripe pronta para cobrar:
+    1) cada plano ganha a chave de pesquisa num preço mensal em BRL de mesmo valor (ou cria produto+preço);
+    2) cria a configuração do Portal do cliente, se não existir."""
+    require_superadmin(current)
+    _require_stripe()
+    acoes: List[str] = []
+    try:
+        precos = await asyncio.to_thread(_precos_mensais_brl)
+        produtos_planos: Dict[str, str] = {}
+        precos_planos: Dict[str, str] = {}
+        for plano in PLANS:
+            centavos = plano["price_brl"] * 100
+            ja = next((p for p in precos if _sg(p, "lookup_key") == plano["lookup_key"]), None)
+            if ja and _sg(ja, "unit_amount") == centavos and _sg(_sg(ja, "recurring"), "interval") == "month":
+                acoes.append(f"{plano['name']}: já estava certo ({_descreve_preco(ja)}).")
+                escolhido = ja
+            else:
+                candidatos = [p for p in precos if _sg(p, "unit_amount") == centavos
+                              and _sg(_sg(p, "recurring"), "interval") == "month"]
+                # prefere o produto cujo nome lembra o plano
+                candidatos.sort(key=lambda p: 0 if plano["name"].lower()[:4] in str(_sg(_sg(p, "product"), "name", "")).lower() else 1)
+                if candidatos:
+                    escolhido = candidatos[0]
+                    await asyncio.to_thread(lambda: stripe.Price.modify(
+                        _sg(escolhido, "id"), lookup_key=plano["lookup_key"], transfer_lookup_key=True))
+                    acoes.append(f"{plano['name']}: chave de pesquisa colocada no preço existente {_descreve_preco(escolhido)}.")
+                else:
+                    prod = await asyncio.to_thread(lambda: stripe.Product.create(
+                        name=f"OmniRepMax {plano['name']}", metadata={"plan_id": plano["id"]}))
+                    escolhido = await asyncio.to_thread(lambda: stripe.Price.create(
+                        product=_sg(prod, "id"), unit_amount=centavos, currency="brl", recurring={"interval": "month"},
+                        lookup_key=plano["lookup_key"], transfer_lookup_key=True, nickname=f"{plano['name']} mensal"))
+                    acoes.append(f"{plano['name']}: produto e preço criados (R$ {plano['price_brl']}/mês).")
+            prod_id = _sg(escolhido, "product")
+            produtos_planos[plano["id"]] = prod_id if isinstance(prod_id, str) else _sg(prod_id, "id")
+            precos_planos[plano["id"]] = _sg(escolhido, "id")
+
+        # Portal do cliente
+        try:
+            confs = await asyncio.to_thread(lambda: stripe.billing_portal.Configuration.list(limit=5).data)
+        except stripe.error.StripeError:
+            confs = None
+        if confs:
+            acoes.append("Portal do cliente: já estava configurado.")
+        elif confs is not None:
+            await asyncio.to_thread(lambda: stripe.billing_portal.Configuration.create(
+                business_profile={"headline": "OmniRepMax — gerencie sua assinatura"},
+                default_return_url=f"{FRONTEND_URL}/planos",
+                features={
+                    "customer_update": {"enabled": True, "allowed_updates": ["email", "address", "tax_id"]},
+                    "invoice_history": {"enabled": True},
+                    "payment_method_update": {"enabled": True},
+                    "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
+                    "subscription_update": {
+                        "enabled": True, "default_allowed_updates": ["price"], "proration_behavior": "create_prorations",
+                        "products": [{"product": produtos_planos[pid], "prices": [precos_planos[pid]]} for pid in produtos_planos],
+                    },
+                }))
+            acoes.append("Portal do cliente: configurado (cancelar, trocar cartão, trocar de plano e ver faturas).")
+    except stripe.error.PermissionError:
+        raise HTTPException(403, "A chave do Stripe não tem permissão para criar ou editar produtos e preços. Use a Secret key (sk_...).")
+    except stripe.error.StripeError as e:
+        raise HTTPException(502, f"O Stripe recusou a configuração: {getattr(e, 'user_message', None) or str(e)[:200]}")
+    await _log_auditoria(current, "stripe_planos_configurados", "stripe", "-", extra={"acoes": acoes})
+    return {"ok": True, "acoes": acoes}
 
 # ------------------------------------------------------------
 # ✅ Cron diário: avisos de fim de teste (acionar 1x/dia com WEBHOOK_CRON_SECRET)

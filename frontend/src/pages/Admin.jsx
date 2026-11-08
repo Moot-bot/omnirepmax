@@ -75,6 +75,20 @@ export default function Admin() {
   }, []);
   useEffect(() => { if (aba === "diagnostico" && !diag) carregarDiag(); }, [aba, diag, carregarDiag]);
 
+  const [configurando, setConfigurando] = useState(false);
+  const [acoesStripe, setAcoesStripe] = useState([]);
+  const configurarPlanos = async () => {
+    if (!window.confirm("Configurar os 3 planos e o portal do cliente na sua conta Stripe? Preços existentes com o mesmo valor são aproveitados; o que faltar é criado.")) return;
+    setConfigurando(true);
+    try {
+      const r = await api.post("/admin/stripe/configurar-planos");
+      setAcoesStripe(r.data.acoes || []);
+      toast.success("Planos configurados no Stripe!");
+      await carregarDiag();
+    } catch (e) { toast.error(e.response?.data?.detail || "Não foi possível configurar."); }
+    finally { setConfigurando(false); }
+  };
+
   const carregar = useCallback(async () => {
     setCarregando(true);
     try {
@@ -318,6 +332,24 @@ export default function Admin() {
               <RefreshCw className={`w-4 h-4 mr-2 ${diagCarregando ? "animate-spin" : ""}`} /> Conferir de novo
             </Button>
           </div>
+          {diag?.pode_autoconfigurar && (
+            <div className="rounded-2xl border border-[#075BFF]/30 bg-[#075BFF]/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-sm">
+                <p className="font-bold text-slate-900 dark:text-white">Configurar planos automaticamente</p>
+                <p className="text-slate-600 dark:text-slate-300">
+                  Coloca as chaves de pesquisa nos preços de R$ 39, 69 e 99/mês que já existem (ou cria os que faltam) e configura o portal do cliente.
+                </p>
+              </div>
+              <Button onClick={configurarPlanos} disabled={configurando} className="bg-[#075BFF] hover:bg-blue-600 shrink-0">
+                {configurando && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Configurar agora
+              </Button>
+            </div>
+          )}
+          {acoesStripe.length > 0 && (
+            <ul className="text-sm text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl p-4 list-disc pl-8 space-y-0.5">
+              {acoesStripe.map((a, i) => <li key={i}>{a}</li>)}
+            </ul>
+          )}
           {(diag?.itens || []).map((i, n) => (
             <div key={n} className="flex gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
               {i.ok === true ? <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
