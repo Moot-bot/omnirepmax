@@ -14,6 +14,9 @@ import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, 
   CartesianGrid, PieChart, Pie, Cell, BarChart, Bar
 } from "recharts";
+import { useDashboardComercial } from "../lib/dashboardComercial";            // ✅ NOVO
+import VisaoGeralComercial from "../components/dashboard/VisaoGeralComercial"; // ✅ NOVO
+import Comparativos, { semRegistrosNoMes } from "../components/dashboard/Comparativos"; // ✅ NOVO
 
 const CAT_COLORS = ["#075BFF", "#08D5F5", "#F59E0B", "#8B5CF6", "#10B981", "#EC4899", "#06B6D4", "#F43F5E"];
 
@@ -38,7 +41,7 @@ const tooltipStyle = {
   fontSize: "12px"
 };
 
-function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, badge, onClick }) {
+function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, badge, onClick, children }) {
   const bg = { 
     emerald: "from-emerald-500 to-emerald-600 shadow-emerald-500/20", 
     rose: "from-rose-500 to-rose-600 shadow-rose-500/20", 
@@ -50,7 +53,7 @@ function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, b
   return (
     <div
       onClick={onClick}
-      className={`relative overflow-hidden rounded-2xl p-5 bg-gradient-to-br ${bg} text-white shadow-lg transition-all duration-300 hover:-translate-y-1 hover:shadow-xl group ${onClick ? "cursor-pointer" : "cursor-default"}`}
+      className={`relative overflow-hidden rounded-2xl p-5 h-full flex flex-col bg-gradient-to-br ${bg} text-white shadow-lg transition-all duration-300 hover:-translate-y-1 hover:shadow-xl group ${onClick ? "cursor-pointer" : "cursor-default"}`}
     >
       <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-white/10 group-hover:scale-110 transition-transform duration-500" />
       <div className="relative flex items-center justify-between">
@@ -68,7 +71,8 @@ function Chip({ label, value, color = "emerald", icon: Icon, isZero, subtitle, b
       {subtitle && (
         <div className="relative text-[10px] text-white/75 mt-1 font-medium">{subtitle}</div>
       )}
-      {isZero && <div className="text-[10px] text-white/70 mt-1">Nenhum registro</div>}
+      {isZero && <div className="relative text-[10px] text-white/70 mt-1">Nenhum registro</div>}
+      {children && <div className="relative mt-auto">{children}</div>}
     </div>
   );
 }
@@ -105,6 +109,12 @@ export default function Dashboard() {
   
   // ✅ NOVO: estado para recebíveis da indústria (item 10 do Prompt Mestre)
   const [recebiveisIndustria, setRecebiveisIndustria] = useState([]);
+
+  // ✅ NOVO: indicadores comparativos + meta (uma requisição, respeita os filtros)
+  const [filtros, setFiltros] = useState({ representada_id: "", rede: "" });
+  const { dados: com, recarregar: recarregarComercial } = useDashboardComercial(filtros);
+  const cards = com?.cards;
+  const filtrado = !!(filtros.representada_id || filtros.rede);
 
   useEffect(() => { 
     api.get("/dashboard").then((r) => setD(r.data)); 
@@ -178,44 +188,56 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 4 chips coloridas — agora clicáveis */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* ✅ NOVO: Visão Geral Comercial (filtros + meta do mês) */}
+      <VisaoGeralComercial dados={com} filtros={filtros} onFiltros={setFiltros} onMetasSalvas={recarregarComercial} />
+
+      {/* 4 chips coloridas — agora com comparativos (mês anterior, ano vigente, ano anterior) */}
+      {filtrado && (
+        <p className="-mb-2 text-xs text-slate-500">Indicadores filtrados pela Visão Geral Comercial.</p>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-stretch">
         <Chip 
           label="Volume de Vendas (Mês)" 
-          value={fmtBRL(d.volume_vendas_mes)} 
+          value={fmtBRL(cards?.volume_vendas.valor ?? d.volume_vendas_mes)} 
           color="blue" 
           icon={TrendingUp} 
-          isZero={d.volume_vendas_mes === 0}
-          subtitle={d.volume_vendas_ano ? `Ano: ${fmtBRL(d.volume_vendas_ano)}` : undefined}
+          isZero={cards ? semRegistrosNoMes(cards.volume_vendas) : d.volume_vendas_mes === 0}
           onClick={() => navigate("/pedidos")}
-        />
+        >
+          <Comparativos dados={cards?.volume_vendas} variante="chip" />
+        </Chip>
         <Chip 
           label="Faturamento Real (Mês)" 
-          value={fmtBRL(d.valor_faturado_mes)} 
+          value={fmtBRL(cards?.faturamento.valor ?? d.valor_faturado_mes)} 
           color="emerald" 
           icon={FileText} 
-          isZero={d.valor_faturado_mes === 0}
-          subtitle={d.valor_faturado_ano ? `Ano: ${fmtBRL(d.valor_faturado_ano)}` : undefined}
+          isZero={cards ? semRegistrosNoMes(cards.faturamento) : d.valor_faturado_mes === 0}
           onClick={() => navigate("/pedidos")}
-        />
+        >
+          <Comparativos dados={cards?.faturamento} variante="chip" />
+        </Chip>
         <Chip 
-          label="Comissões Previstas" 
-          value={fmtBRL(d.comissoes_previstas)} 
+          label="Comissões Previstas (Mês)" 
+          value={fmtBRL(cards?.comissoes_previstas.valor ?? d.comissoes_previstas)} 
           color="teal" 
           icon={Percent} 
-          isZero={d.comissoes_previstas === 0}
-          subtitle={d.comissoes_recebidas ? `Recebido: ${fmtBRL(d.comissoes_recebidas)}` : undefined}
+          isZero={cards ? semRegistrosNoMes(cards.comissoes_previstas) : d.comissoes_previstas === 0}
+          subtitle={!filtrado && d.comissoes_recebidas ? `Recebido: ${fmtBRL(d.comissoes_recebidas)}` : undefined}
           onClick={() => navigate("/comissoes")}
-        />
+        >
+          <Comparativos dados={cards?.comissoes_previstas} variante="chip" />
+        </Chip>
         <Chip 
           label="Em atraso" 
-          value={fmtBRL(d.em_atraso)} 
+          value={fmtBRL(cards?.em_atraso.valor ?? d.em_atraso)} 
           color="rose" 
           icon={AlertCircle} 
-          isZero={d.em_atraso === 0}
-          badge={emAtrasoCount > 0 ? `${emAtrasoCount} título${emAtrasoCount > 1 ? 's' : ''}` : undefined}
+          isZero={(cards?.em_atraso.valor ?? d.em_atraso) === 0}
+          badge={(cards?.em_atraso.qtd ?? emAtrasoCount) > 0 ? `${cards?.em_atraso.qtd ?? emAtrasoCount} título${(cards?.em_atraso.qtd ?? emAtrasoCount) > 1 ? 's' : ''}` : undefined}
           onClick={() => navigate("/contas-receber")}
-        />
+        >
+          <Comparativos dados={cards?.em_atraso} variante="chip" inverso />
+        </Chip>
       </div>
 
       {/* Saúde + Projeção */}
@@ -273,7 +295,7 @@ export default function Dashboard() {
             <ResumoRow icon={<Users className="w-4 h-4 text-indigo-500" />} label="Clientes ativos / Novos" value={`${fmtNum(d.clientes_ativos)} / ${fmtNum(d.novos_clientes)}`} onClick={() => navigate("/clientes")} />
             <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-amber-500" />} label="Pedidos abertos / Faturados" value={`${fmtNum(d.pedidos_abertos)} / ${fmtNum(d.pedidos_faturados)}`} onClick={() => navigate("/pedidos")} />
             <ResumoRow icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} label="Comissão recebida" value={fmtBRL(d.comissoes_recebidas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
-            <ResumoRow icon={<Percent className="w-4 h-4 text-emerald-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_abertas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
+            <ResumoRow icon={<Percent className="w-4 h-4 text-emerald-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_a_receber ?? d.comissoes_abertas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
           </div>
         </div>
 

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Users, Clock, CreditCard, Gift, Lock, Search, Download, Loader2, Trash2,
-  Settings2, Star, ExternalLink, RefreshCw, AlertTriangle, ShieldCheck
+  Settings2, Star, ExternalLink, RefreshCw, AlertTriangle, ShieldCheck, CheckCircle2, XCircle, HelpCircle, Stethoscope
 } from "lucide-react";
 import { fmtBRL, fmtDate } from "../lib/format";
 import { toast } from "sonner";
@@ -64,6 +64,16 @@ export default function Admin() {
   const [salvando, setSalvando] = useState(null);
   const [excluirOpen, setExcluirOpen] = useState(false);
   const [confirmEmail, setConfirmEmail] = useState("");
+  const [diag, setDiag] = useState(null);
+  const [diagCarregando, setDiagCarregando] = useState(false);
+
+  const carregarDiag = useCallback(async () => {
+    setDiagCarregando(true);
+    try { setDiag((await api.get("/admin/diagnostico")).data); }
+    catch (e) { toast.error(e.response?.data?.detail || "Erro ao rodar o diagnóstico."); }
+    finally { setDiagCarregando(false); }
+  }, []);
+  useEffect(() => { if (aba === "diagnostico" && !diag) carregarDiag(); }, [aba, diag, carregarDiag]);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -169,6 +179,7 @@ export default function Admin() {
           <TabsTrigger value="contas">Contas ({contas.length})</TabsTrigger>
           <TabsTrigger value="leads">Leads ({leads.length})</TabsTrigger>
           <TabsTrigger value="feedbacks">Feedbacks ({feedbacks.length})</TabsTrigger>
+          <TabsTrigger value="diagnostico"><Stethoscope className="w-3.5 h-3.5 mr-1" /> Diagnóstico</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -286,6 +297,39 @@ export default function Admin() {
             </div>
           ))}
           {!carregando && feedbacks.length === 0 && <p className="text-slate-500">Nenhum feedback ainda.</p>}
+        </div>
+      )}
+
+      {aba === "diagnostico" && (
+        <div className="space-y-4 max-w-4xl">
+          <div className={`rounded-2xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            !diag ? "border-slate-200 dark:border-slate-800" : diag.pronto_para_cobrar
+              ? "border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30"
+              : "border-amber-200 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30"}`}>
+            <div className="text-sm">
+              <p className="font-bold text-slate-900 dark:text-white">
+                {!diag ? "Conferindo a configuração…" : diag.pronto_para_cobrar
+                  ? `Pronto para cobrar (Stripe em modo ${diag.modo_stripe})`
+                  : "Ainda falta configuração para cobrar"}
+              </p>
+              <p className="text-slate-600 dark:text-slate-300">Confere chaves, preços dos planos, webhook e portal do cliente no servidor que está no ar.</p>
+            </div>
+            <Button variant="outline" onClick={carregarDiag} disabled={diagCarregando}>
+              <RefreshCw className={`w-4 h-4 mr-2 ${diagCarregando ? "animate-spin" : ""}`} /> Conferir de novo
+            </Button>
+          </div>
+          {(diag?.itens || []).map((i, n) => (
+            <div key={n} className="flex gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+              {i.ok === true ? <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                : i.ok === false ? <XCircle className="w-5 h-5 text-rose-500 shrink-0" />
+                : <HelpCircle className="w-5 h-5 text-slate-400 shrink-0" />}
+              <div className="text-sm min-w-0">
+                <p className="font-semibold text-slate-900 dark:text-white">{i.item}</p>
+                {i.detalhe && <p className="text-slate-600 dark:text-slate-400 break-words">{i.detalhe}</p>}
+                {i.como_resolver && <p className="mt-1 text-[#075BFF] dark:text-cyan-400"><b>Como resolver:</b> {i.como_resolver}</p>}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

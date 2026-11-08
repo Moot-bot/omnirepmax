@@ -21,7 +21,8 @@ import secrets
 import hashlib
 import urllib.request
 from collections import defaultdict, deque
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
+import calendar
 from typing import List, Optional, Any, Dict
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, Header, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -81,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.6.0",
+    title="OMNIREPMAX API", version="2.7.0",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -2286,6 +2287,338 @@ def _in_month(s, y, m):
 def _in_year(s, y):
     d = _parse_date(s); return bool(d and d.year == y)
 
+
+# ------------------------------------------------------------
+# ✅ CALENDÁRIO (America/Sao_Paulo) e DIAS ÚTEIS
+# ------------------------------------------------------------
+try:
+    from zoneinfo import ZoneInfo
+    TZ_BR = ZoneInfo("America/Sao_Paulo")
+except Exception:  # sem base de fusos no servidor: Brasília não tem horário de verão desde 2019
+    TZ_BR = timezone(timedelta(hours=-3))
+
+_DATA_PURA = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:$|[T ]00:00(?::00(?:\.0+)?)?(?:Z|\+00:00)?$)")
+
+def _data_local(v) -> Optional[date]:
+    """Data no calendário de Brasília. Datas sem hora ("2026-11-01" ou meia-noite UTC) valem como
+    estão — não podem 'voltar' para o dia anterior por causa do fuso."""
+    if not v: return None
+    if isinstance(v, date) and not isinstance(v, datetime): return v
+    if isinstance(v, datetime):
+        d = v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        return d.astimezone(TZ_BR).date()
+    s = str(v).strip()
+    m = _DATA_PURA.match(s)
+    if m:
+        try: return date.fromisoformat(m.group(1))
+        except ValueError: return None
+    d = _parse_date(s)
+    return d.astimezone(TZ_BR).date() if d else None
+
+def hoje_br() -> date:
+    return datetime.now(TZ_BR).date()
+
+def _pascoa(ano: int) -> date:
+    a = ano % 19; b, c = divmod(ano, 100); d, e = divmod(b, 4); f = (b + 8) // 25
+    g = (b - f + 1) // 3; h = (19 * a + b - d - g + 15) % 30; i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7; m = (a + 11 * h + 22 * l) // 451
+    mes, dia = divmod(h + l - 7 * m + 114, 31)
+    return date(ano, mes, dia + 1)
+
+def feriados_nacionais(ano: int) -> Dict[date, str]:
+    """Feriados nacionais (lei federal). Carnaval e Corpus Christi são pontos facultativos:
+    entram só se FERIADOS_INCLUIR_FACULTATIVOS=1."""
+    f = {date(ano, 1, 1): "Confraternização Universal", date(ano, 4, 21): "Tiradentes",
+         date(ano, 5, 1): "Dia do Trabalho", date(ano, 9, 7): "Independência",
+         date(ano, 10, 12): "Nossa Senhora Aparecida", date(ano, 11, 2): "Finados",
+         date(ano, 11, 15): "Proclamação da República", date(ano, 12, 25): "Natal",
+         _pascoa(ano) - timedelta(days=2): "Sexta-feira Santa"}
+    if ano >= 2024:
+        f[date(ano, 11, 20)] = "Dia Nacional de Zumbi e da Consciência Negra"
+    if os.environ.get("FERIADOS_INCLUIR_FACULTATIVOS") == "1":
+        p = _pascoa(ano)
+        f[p - timedelta(days=48)] = "Carnaval"; f[p - timedelta(days=47)] = "Carnaval"
+        f[p + timedelta(days=60)] = "Corpus Christi"
+    return f
+
+def dias_uteis_do_mes(ano: int, mes: int) -> List[date]:
+    fer = feriados_nacionais(ano)
+    ultimo = calendar.monthrange(ano, mes)[1]
+    return [date(ano, mes, d) for d in range(1, ultimo + 1)
+            if date(ano, mes, d).weekday() < 5 and date(ano, mes, d) not in fer]
+
+def _mes_anterior(ano: int, mes: int):
+    return (ano - 1, 12) if mes == 1 else (ano, mes - 1)
+
+def _variacao(atual: float, anterior: float) -> Optional[float]:
+    if anterior and anterior > 0:
+        return round((atual - anterior) / anterior * 100, 1)
+    return None
+
+# ------------------------------------------------------------
+# ✅ INDICADORES COMPARATIVOS (cada card com sua própria fonte e regra)
+# ------------------------------------------------------------
+STATUS_FORA_DO_VOLUME = ["cancelado", "orcamento", "rascunho"]
+
+async def _clientes_da_rede(tid: str, rede: Optional[str]) -> Optional[set]:
+    if not rede: return None
+    alvo = " ".join(rede.split()).lower()
+    return {c["id"] async for c in db.clientes.find({"tenant_id": tid}, {"_id": 0, "id": 1, "grupo_economico": 1})
+            if " ".join((c.get("grupo_economico") or "").split()).lower() == alvo}
+
+async def _indicadores_comerciais(tid: str, ano: int, mes: int, representada_id: Optional[str] = None,
+                                  rede: Optional[str] = None, hoje: Optional[date] = None) -> dict:
+    """Uma consulta por fonte (pedidos, faturamentos, comissões, contas a receber) cobrindo
+    do ano anterior até hoje; os períodos são separados em memória no fuso de Brasília."""
+    hoje = hoje or hoje_br()
+    ano_ant_m, mes_ant_m = _mes_anterior(ano, mes)
+    limite = f"{ano - 2}-12-31"            # folga de 1 dia para o fuso
+    clientes_rede = await _clientes_da_rede(tid, rede)
+    fim_ano_vig = hoje if ano == hoje.year else date(ano, 12, 31)
+
+    def filtra(doc) -> bool:
+        if representada_id and doc.get("representada_id") != representada_id: return False
+        if clientes_rede is not None and doc.get("cliente_id") not in clientes_rede: return False
+        return True
+
+    def periodos(d: Optional[date]) -> List[str]:
+        if not d: return []
+        out = []
+        if d.year == ano and d.month == mes: out.append("mes")
+        if d.year == ano_ant_m and d.month == mes_ant_m: out.append("mes_anterior")
+        if d.year == ano and d <= fim_ano_vig: out.append("ano_vigente")
+        if d.year == ano - 1: out.append("ano_anterior")
+        return out
+
+    def zero(): return {"mes": 0.0, "mes_anterior": 0.0, "ano_vigente": 0.0, "ano_anterior": 0.0, "qtd_mes": 0}
+
+    # 1) VOLUME DE VENDAS — pedidos realizados, pela DATA DO PEDIDO
+    vol = zero(); vendido_hoje = 0.0
+    async for p in db.pedidos.find(
+            {"tenant_id": tid, "status": {"$nin": STATUS_FORA_DO_VOLUME},
+             "$or": [{"data_pedido": {"$gte": limite}}, {"data_pedido": {"$in": [None, ""]}, "created_at": {"$gte": limite}}]},
+            {"_id": 0, "total": 1, "data_pedido": 1, "created_at": 1, "representada_id": 1, "cliente_id": 1}):
+        if not filtra(p): continue
+        d = _data_local(p.get("data_pedido") or p.get("created_at"))
+        v = _to_float(p.get("total"))
+        for k in periodos(d): vol[k] += v
+        if d and d.year == ano and d.month == mes: vol["qtd_mes"] += 1
+        if d == hoje: vendido_hoje += v
+
+    # 2) FATURAMENTO REAL — notas fiscais, pela DATA DE EMISSÃO DA NF (fonte própria)
+    fat = zero()
+    fats = await db.faturamentos.find({"tenant_id": tid, "data_faturamento": {"$gte": limite}},
+                                      {"_id": 0, "pedido_id": 1, "representada_id": 1, "valor_faturado": 1, "data_faturamento": 1}).to_list(None)
+    ped_ids = list({f.get("pedido_id") for f in fats if f.get("pedido_id")})
+    ped_info = {x["id"]: x async for x in db.pedidos.find({"tenant_id": tid, "id": {"$in": ped_ids}},
+                                                         {"_id": 0, "id": 1, "status": 1, "cliente_id": 1, "representada_id": 1})}
+    for f in fats:
+        pinfo = ped_info.get(f.get("pedido_id"), {})
+        if pinfo.get("status") == "cancelado": continue
+        doc = {"representada_id": f.get("representada_id") or pinfo.get("representada_id"), "cliente_id": pinfo.get("cliente_id")}
+        if not filtra(doc): continue
+        d = _data_local(f.get("data_faturamento"))
+        v = _to_float(f.get("valor_faturado"))
+        for k in periodos(d): fat[k] += v
+        if d and d.year == ano and d.month == mes: fat["qtd_mes"] += 1
+
+    # 3) COMISSÕES PREVISTAS — comissões calculadas, pela data de referência do módulo (faturamento)
+    com = zero()
+    async for c in db.comissoes.find(
+            {"tenant_id": tid, "status": {"$ne": "cancelada"},
+             "$or": [{"data_faturamento": {"$gte": limite}}, {"data_faturamento": {"$in": [None, ""]}, "created_at": {"$gte": limite}}]},
+            {"_id": 0, "valor_liquido": 1, "data_faturamento": 1, "created_at": 1, "representada_id": 1, "cliente_id": 1}):
+        if not filtra(c): continue
+        d = _data_local(c.get("data_faturamento") or c.get("created_at"))
+        v = _to_float(c.get("valor_liquido"))
+        for k in periodos(d): com[k] += v
+        if d and d.year == ano and d.month == mes: com["qtd_mes"] += 1
+
+    # 4) EM ATRASO — títulos de comissão vencidos e com saldo (a regra atual: vencido até hoje)
+    atr = {**zero(), "total": 0.0, "qtd": 0}
+    async for a in db.contas_receber.find({"tenant_id": tid, "status": {"$in": ["aberto", "vencido"]}},
+                                          {"_id": 0, "valor": 1, "valor_recebido": 1, "saldo_pendente": 1,
+                                           "vencimento": 1, "representada_id": 1, "cliente_id": 1}):
+        if not filtra(a): continue
+        saldo = _to_float(a.get("saldo_pendente"), _to_float(a.get("valor")) - _to_float(a.get("valor_recebido")))
+        venc = _data_local(a.get("vencimento"))
+        if saldo <= 0.009 or not venc or venc >= hoje: continue
+        atr["total"] += saldo; atr["qtd"] += 1
+        for k in periodos(venc): atr[k] += saldo
+        if venc.year == ano and venc.month == mes: atr["qtd_mes"] += 1
+
+    def fecha(x: dict, principal: str = "mes", menor_melhor: bool = False) -> dict:
+        r = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in x.items()}
+        r["valor"] = r[principal]
+        r["variacao_pct"] = _variacao(r["mes"], r["mes_anterior"])
+        r["tendencia"] = (None if r["variacao_pct"] is None else
+                          ("melhora" if (r["variacao_pct"] < 0) == menor_melhor and r["variacao_pct"] != 0 else
+                           ("estavel" if r["variacao_pct"] == 0 else "piora")))
+        return r
+
+    return {
+        "volume_vendas": fecha(vol),
+        "faturamento": fecha(fat),
+        "comissoes_previstas": fecha(com),
+        "em_atraso": fecha(atr, principal="total", menor_melhor=True),
+        "vendido_hoje": round(vendido_hoje, 2),
+    }
+
+# ------------------------------------------------------------
+# ✅ METAS
+# ------------------------------------------------------------
+def _pode_gerir_metas(user: dict) -> bool:
+    return user.get("role") in ("admin", "gestor", "gerente") or is_superadmin(user)
+
+async def _resolver_meta(tid: str, ano: int, mes: int, representada_id: Optional[str], rede: Optional[str],
+                         nomes_rep: Dict[str, str]) -> dict:
+    """Precedência: meta exata da combinação filtrada; sem ela, soma das metas mais específicas
+    DENTRO do filtro — nunca soma uma meta geral com metas específicas."""
+    metas = await db.metas.find({"tenant_id": tid, "ano": ano, "mes": mes}, {"_id": 0}).to_list(500)
+    norm = lambda s: " ".join((s or "").split()).lower() or None
+    rep, rd = representada_id or None, norm(rede)
+    exata = next((m for m in metas if (m.get("representada_id") or None) == rep and norm(m.get("rede")) == rd), None)
+    nome_rep = nomes_rep.get(rep or "", "") if rep else ""
+    if exata:
+        if rep and rd: origem = f"Meta de {nome_rep} na rede {exata.get('rede')}"
+        elif rep: origem = f"Meta da representada {nome_rep}"
+        elif rd: origem = f"Meta da rede {exata.get('rede')}"
+        else: origem = "Meta geral"
+        return {"valor": _to_float(exata.get("valor")), "origem": origem, "meta_id": exata.get("id"), "tipo": "exata"}
+    if rep and rd:
+        return {"valor": None, "origem": f"Sem meta para {nome_rep} na rede {rede}", "meta_id": None, "tipo": None}
+    if rep:
+        partes = [m for m in metas if m.get("representada_id") == rep and norm(m.get("rede"))]
+        if partes:
+            return {"valor": round(sum(_to_float(m.get("valor")) for m in partes), 2),
+                    "origem": f"Soma das metas por rede de {nome_rep} ({len(partes)})", "meta_id": None, "tipo": "soma"}
+        return {"valor": None, "origem": f"Sem meta para {nome_rep}", "meta_id": None, "tipo": None}
+    if rd:
+        partes = [m for m in metas if norm(m.get("rede")) == rd and m.get("representada_id")]
+        if partes:
+            return {"valor": round(sum(_to_float(m.get("valor")) for m in partes), 2),
+                    "origem": f"Soma das metas por representada na rede {rede} ({len(partes)})", "meta_id": None, "tipo": "soma"}
+        return {"valor": None, "origem": f"Sem meta para a rede {rede}", "meta_id": None, "tipo": None}
+    # sem filtros e sem meta geral: soma das metas por representada (ou, se não houver, por rede)
+    por_rep = [m for m in metas if m.get("representada_id") and not norm(m.get("rede"))]
+    if por_rep:
+        return {"valor": round(sum(_to_float(m.get("valor")) for m in por_rep), 2),
+                "origem": f"Soma das metas por representada ({len(por_rep)})", "meta_id": None, "tipo": "soma"}
+    por_rede = [m for m in metas if norm(m.get("rede")) and not m.get("representada_id")]
+    if por_rede:
+        return {"valor": round(sum(_to_float(m.get("valor")) for m in por_rede), 2),
+                "origem": f"Soma das metas por rede ({len(por_rede)})", "meta_id": None, "tipo": "soma"}
+    return {"valor": None, "origem": None, "meta_id": None, "tipo": None}
+
+def _situacao_meta(meta_valor: Optional[float], vendido: float, ano: int, mes: int, hoje: date) -> dict:
+    uteis = dias_uteis_do_mes(ano, mes)
+    total = len(uteis)
+    if (ano, mes) < (hoje.year, hoje.month):
+        passados, restantes = total, 0
+    elif (ano, mes) > (hoje.year, hoje.month):
+        passados, restantes = 0, total
+    else:
+        passados = sum(1 for d in uteis if d < hoje)
+        restantes = sum(1 for d in uteis if d >= hoje)   # inclui hoje se for dia útil
+    esperado = round(passados / total * 100, 2) if total else 100.0
+    out = {"dias_uteis_total": total, "dias_uteis_passados": passados, "dias_uteis_restantes": restantes,
+           "ultimo_dia_util": restantes == 1, "esperado_pct": esperado}
+    if not meta_valor:
+        return {**out, "status": "sem_meta", "percentual": None, "falta_total": None, "necessario_por_dia": None}
+    pct = round(vendido / meta_valor * 100, 2)
+    falta = round(max(0.0, meta_valor - vendido), 2)
+    if pct >= 100: status = "batida"
+    elif pct >= esperado: status = "andamento"
+    else: status = "atencao"
+    necessario = 0.0 if falta == 0 else (round(falta / restantes, 2) if restantes > 0 else None)
+    return {**out, "status": status, "percentual": pct, "falta_total": falta, "necessario_por_dia": necessario,
+            "pendencia_sem_dias": falta > 0 and restantes == 0}
+
+@api.get("/dashboard/comercial")
+async def dashboard_comercial(ano: Optional[int] = None, mes: Optional[int] = None,
+                              representada_id: Optional[str] = None, rede: Optional[str] = None,
+                              current=Depends(get_active_user)):
+    """Endpoint único: 4 cards com comparativos + Visão Geral Comercial (meta do mês)."""
+    tid = tid_of(current)
+    hoje = hoje_br()
+    ano = ano or hoje.year; mes = mes or hoje.month
+    if not 1 <= mes <= 12: raise HTTPException(400, "Mês inválido")
+    reps = await db.representadas.find({"tenant_id": tid}, {"_id": 0, "id": 1, "nome_fantasia": 1, "razao_social": 1}).to_list(None)
+    nomes_rep = {r["id"]: r.get("nome_fantasia") or r.get("razao_social") or "" for r in reps}
+    # redes = "grupo econômico" do cliente; "Rede Sul" e "rede sul " são a mesma rede
+    contagem: Dict[str, Dict[str, int]] = {}
+    async for c in db.clientes.find({"tenant_id": tid, "grupo_economico": {"$nin": [None, ""]}}, {"_id": 0, "grupo_economico": 1}):
+        nome = " ".join((c.get("grupo_economico") or "").split())
+        if nome:
+            contagem.setdefault(nome.lower(), {}).setdefault(nome, 0)
+            contagem[nome.lower()][nome] += 1
+    redes = sorted((max(v.items(), key=lambda kv: kv[1])[0] for v in contagem.values()), key=str.lower)
+    ind = await _indicadores_comerciais(tid, ano, mes, representada_id, rede, hoje)
+    meta = await _resolver_meta(tid, ano, mes, representada_id, rede, nomes_rep)
+    vendido = ind["volume_vendas"]["mes"]
+    return {
+        "periodo": {"ano": ano, "mes": mes, "rotulo": f"{MESES_PT[mes].upper()} DE {ano}", "hoje": hoje.isoformat(),
+                    "mes_corrente": (ano, mes) == (hoje.year, hoje.month)},
+        "filtros": {"representada_id": representada_id, "rede": rede,
+                    "representadas": [{"id": r["id"], "nome": nomes_rep[r["id"]]} for r in reps], "redes": redes},
+        "cards": {k: ind[k] for k in ("volume_vendas", "faturamento", "comissoes_previstas", "em_atraso")},
+        "meta": {**meta, "vendido_mes": vendido,
+                 "vendido_hoje": ind["vendido_hoje"] if (ano, mes) == (hoje.year, hoje.month) else 0.0,
+                 **_situacao_meta(meta["valor"], vendido, ano, mes, hoje)},
+        "pode_editar_metas": _pode_gerir_metas(current),
+    }
+
+class MetaIn(BaseModel):
+    ano: int
+    mes: int
+    representada_id: Optional[str] = None
+    rede: Optional[str] = None
+    valor: Any
+
+@api.get("/metas")
+async def listar_metas(ano: Optional[int] = None, mes: Optional[int] = None, current=Depends(get_active_user)):
+    q: Dict[str, Any] = {"tenant_id": tid_of(current)}
+    if ano: q["ano"] = ano
+    if mes: q["mes"] = mes
+    return await db.metas.find(q, {"_id": 0}).sort([("ano", -1), ("mes", -1)]).to_list(1000)
+
+@api.put("/metas")
+async def salvar_meta(body: MetaIn, current=Depends(get_active_user)):
+    """Cria ou atualiza a meta da combinação ano/mês/representada/rede (nunca duplica)."""
+    if not _pode_gerir_metas(current):
+        raise HTTPException(403, "Apenas gestores e administradores podem definir metas.")
+    tid = tid_of(current)
+    if not 1 <= body.mes <= 12 or not 2000 <= body.ano <= 2100: raise HTTPException(400, "Ano ou mês inválido")
+    valor = _preco_br(body.valor) if not isinstance(body.valor, (int, float)) else round(float(body.valor), 2)
+    if not valor or valor <= 0: raise HTTPException(400, "Informe um valor de meta maior que zero")
+    rep = body.representada_id or None
+    if rep and not await db.representadas.find_one({"id": rep, "tenant_id": tid}, {"_id": 1}):
+        raise HTTPException(404, "Representada não encontrada")
+    rede = " ".join((body.rede or "").split()) or None
+    chave = {"tenant_id": tid, "ano": body.ano, "mes": body.mes, "representada_id": rep, "rede_chave": (rede or "").lower()}
+    agora = iso(now_utc())
+    existente = await db.metas.find_one(chave, {"_id": 0})
+    if existente:
+        await db.metas.update_one(chave, {"$set": {"valor": valor, "rede": rede, "updated_at": agora, "updated_by": current.get("email")}})
+        meta_id = existente["id"]
+    else:
+        meta_id = new_id()
+        await db.metas.insert_one({**chave, "id": meta_id, "rede": rede, "valor": valor, "created_at": agora,
+                                   "updated_at": agora, "created_by": current.get("email"), "updated_by": current.get("email")})
+    await _log_auditoria(current, "meta_salva", "metas", meta_id, before=existente, after={"valor": valor, **chave})
+    return await db.metas.find_one({"id": meta_id, "tenant_id": tid}, {"_id": 0})
+
+@api.delete("/metas/{meta_id}")
+async def excluir_meta(meta_id: str, current=Depends(get_active_user)):
+    if not _pode_gerir_metas(current):
+        raise HTTPException(403, "Apenas gestores e administradores podem excluir metas.")
+    tid = tid_of(current)
+    m = await db.metas.find_one({"id": meta_id, "tenant_id": tid}, {"_id": 0})
+    if not m: raise HTTPException(404, "Meta não encontrada")
+    await db.metas.delete_one({"id": meta_id, "tenant_id": tid})
+    await _log_auditoria(current, "meta_excluida", "metas", meta_id, before=m)
+    return {"ok": True}
+
 @api.get("/dashboard")
 async def dashboard(current=Depends(get_active_user)):
     pedidos, reps, comissoes, ap, ar, clientes, visitas, ops, faturamentos = await asyncio.gather(
@@ -2295,13 +2628,15 @@ async def dashboard(current=Depends(get_active_user)):
     )
 
     faturados = [p for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")]
-    now = now_utc(); mes = now.month; ano = now.year
+    now = now_utc(); hoje = hoje_br(); mes = hoje.month; ano = hoje.year
 
-    volume_vendas_mes = sum(p.get("total", 0) for p in faturados if _in_month(p.get("data_pedido"), ano, mes))
-    volume_vendas_ano = sum(p.get("total", 0) for p in faturados if _in_year(p.get("data_pedido"), ano))
-
-    valor_faturado_mes = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_month(f.get("data_faturamento"), ano, mes))
-    valor_faturado_ano = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_year(f.get("data_faturamento"), ano))
+    # ✅ FIX: cada card com a sua fonte (antes Volume usava só pedidos faturados e
+    # Comissões Previstas somava o saldo de todas as comissões, de qualquer data)
+    ind = await _indicadores_comerciais(tid_of(current), ano, mes, hoje=hoje)
+    volume_vendas_mes = ind["volume_vendas"]["mes"]
+    volume_vendas_ano = ind["volume_vendas"]["ano_vigente"]
+    valor_faturado_mes = ind["faturamento"]["mes"]
+    valor_faturado_ano = ind["faturamento"]["ano_vigente"]
 
     fat_por_rep = []
     for r in reps:
@@ -2324,13 +2659,8 @@ async def dashboard(current=Depends(get_active_user)):
 
     saldo_mes = valor_faturado_mes - despesas_mes
 
-    em_atraso_valor = 0.0; em_atraso_count = 0
-    for a in ap + ar:
-        if a.get("status") in ("aberto", "vencido"):
-            d = _parse_date(a.get("vencimento"))
-            if d and d < now:
-                val = a.get("saldo_pendente", a.get("valor", 0)) if "comissao_id" in a else a.get("valor", 0)
-                em_atraso_valor += val; em_atraso_count += 1
+    # ✅ FIX: Em Atraso = comissões vencidas e não recebidas (antes somava também Contas a Pagar)
+    em_atraso_valor = ind["em_atraso"]["total"]; em_atraso_count = ind["em_atraso"]["qtd"]
 
     projecao_valor = sum(p.get("total", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
     projecao_comissao = sum(p.get("comissao_valor", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
@@ -2342,11 +2672,14 @@ async def dashboard(current=Depends(get_active_user)):
     visitas_realizadas = sum(1 for v in visitas if v.get("status") == "realizada")
     propostas_neg = sum(1 for o in ops if o.get("estagio") in ("proposta", "negociacao"))
 
+    # ✅ FIX: meses de calendário (antes andava de 30 em 30 dias e podia repetir/pular mês)
     serie = []
     for i in range(5, -1, -1):
-        d = (now.replace(day=1) - timedelta(days=30 * i))
-        val = sum(f.get("valor_faturado", 0) for f in faturamentos if _in_month(f.get("data_faturamento"), d.year, d.month))
-        serie.append({"mes": f"{MESES_ABR[d.month-1]}/{d.strftime('%y')}", "valor": round(val, 2)})
+        a_, m_ = ano, mes
+        for _ in range(i): a_, m_ = _mes_anterior(a_, m_)
+        val = sum(_to_float(f.get("valor_faturado")) for f in faturamentos
+                  if (lambda d: d and d.year == a_ and d.month == m_)(_data_local(f.get("data_faturamento"))))
+        serie.append({"mes": f"{MESES_ABR[m_-1]}/{str(a_)[2:]}", "valor": round(val, 2)})
 
     prod_total: Dict[str, float] = {}
     for p in faturados:
@@ -2392,7 +2725,8 @@ async def dashboard(current=Depends(get_active_user)):
         "valor_faturado_mes": round(valor_faturado_mes, 2),
         "valor_faturado_ano": round(valor_faturado_ano, 2),
         "faturamento_por_representada": fat_por_rep,
-        "comissoes_previstas": round(com_abertas, 2),
+        "comissoes_previstas": ind["comissoes_previstas"]["mes"],          # ✅ do mês (data de referência da comissão)
+        "comissoes_a_receber": round(com_abertas, 2),                        # saldo em aberto (todas as datas)
         "comissoes_recebidas": round(com_recebidas, 2),
         "comissoes_abertas": round(com_abertas, 2),
         "contas_pagar_abertas": round(ap_abertas, 2),
@@ -2415,6 +2749,7 @@ async def dashboard(current=Depends(get_active_user)):
         "saude_financeira": saude,
         "saude_label": saude_label,
         "avisos": avisos,
+        "comparativos": {k: ind[k] for k in ("volume_vendas", "faturamento", "comissoes_previstas", "em_atraso")},
     }
 
 # ------------------------------------------------------------
@@ -3504,6 +3839,105 @@ async def stripe_webhook(request: Request):
     return {"status": "ok"}
 
 # ------------------------------------------------------------
+# ✅ Diagnóstico da cobrança e da configuração (superadmin)
+# ------------------------------------------------------------
+EVENTOS_WEBHOOK = ["checkout.session.completed", "checkout.session.async_payment_succeeded",
+                   "checkout.session.async_payment_failed", "customer.subscription.created",
+                   "customer.subscription.updated", "customer.subscription.deleted", "invoice.payment_failed"]
+
+@api.get("/admin/diagnostico")
+async def diagnostico(current=Depends(get_current_user)):
+    """Confere tudo que a cobrança precisa e diz exatamente o que falta."""
+    require_superadmin(current)
+    itens: List[dict] = []
+    def item(nome, ok, detalhe="", como=""):
+        itens.append({"item": nome, "ok": ok, "detalhe": detalhe, "como_resolver": "" if ok else como})
+
+    chave = STRIPE_SECRET_KEY
+    modo = None
+    if not chave:
+        item("Chave secreta do Stripe (STRIPE_SECRET_KEY)", False, "Variável vazia no servidor que está rodando.",
+             "Render → serviço → Environment → adicione STRIPE_SECRET_KEY com a chave sk_test_... (teste) ou sk_live_... "
+             "(produção), sem aspas nem espaços. Depois Save Changes e aguarde o novo deploy.")
+    elif not re.match(r"^(sk|rk)_(test|live)_", chave):
+        item("Chave secreta do Stripe (STRIPE_SECRET_KEY)", False, f"Formato inesperado (começa com '{chave[:8]}…').",
+             "Use a Secret key (sk_...). A chave pk_... é a publicável e não serve para o servidor.")
+    else:
+        modo = "teste" if "_test_" in chave else "produção"
+        item("Chave secreta do Stripe (STRIPE_SECRET_KEY)", True, f"Configurada — modo {modo}"
+             + (" (chave restrita rk_: precisa de permissões de escrita em Checkout, Customers e Customer portal)" if chave.startswith("rk_") else ""))
+
+    item("Segredo do webhook (STRIPE_WEBHOOK_SECRET)", bool(STRIPE_WEBHOOK_SECRET),
+         "Configurado" if STRIPE_WEBHOOK_SECRET else "Variável vazia.",
+         "Stripe → Webhooks → abra o destino → Segredo de assinatura → Revelar. Copie o whsec_... para STRIPE_WEBHOOK_SECRET no Render.")
+    item("Endereço do site (FRONTEND_URL)", bool(os.environ.get("FRONTEND_URL")), FRONTEND_URL,
+         "Adicione FRONTEND_URL = https://www.omnirepmax.com.br no Render (é para onde o cliente volta depois de pagar).")
+    item("E-mails (RESEND_API_KEY)", bool(RESEND_API_KEY), "Configurado" if RESEND_API_KEY else "Sem e-mails: recuperação de senha e avisos não saem.",
+         "Opcional para cobrar. Crie a conta no resend.com, valide o domínio e adicione RESEND_API_KEY.")
+    item("Agendamento diário (WEBHOOK_CRON_SECRET)", bool(os.environ.get("WEBHOOK_CRON_SECRET")), "",
+         "Opcional para cobrar. Adicione WEBHOOK_CRON_SECRET (um texto aleatório) e use no cron-job.org.")
+
+    if modo:
+        # preços
+        try:
+            precos = await asyncio.to_thread(lambda: stripe.Price.list(
+                lookup_keys=[p["lookup_key"] for p in PLANS], active=True, limit=10).data)
+            achados = {getattr(p, "lookup_key", None): p for p in precos}
+            for plano in PLANS:
+                p = achados.get(plano["lookup_key"])
+                if not p:
+                    item(f"Preço do plano {plano['name']}", False, f"Nenhum preço ativo com a chave de pesquisa '{plano['lookup_key']}' no modo {modo}.",
+                         f"Stripe (modo {modo}) → Catálogo de produtos → produto {plano['name']} → preço → Editar → "
+                         f"'Chave de pesquisa' = {plano['lookup_key']}. Produtos de teste e de produção são separados.")
+                    continue
+                problemas = []
+                if not getattr(p, "recurring", None): problemas.append("não é recorrente")
+                elif (p.recurring.get("interval") if isinstance(p.recurring, dict) else getattr(p.recurring, "interval", None)) != "month": problemas.append("não é mensal")
+                if (getattr(p, "currency", "") or "").lower() != "brl": problemas.append(f"moeda {getattr(p, 'currency', '?')} (deveria ser BRL)")
+                valor = (getattr(p, "unit_amount", 0) or 0) / 100
+                if abs(valor - plano["price_brl"]) > 0.01: problemas.append(f"valor R$ {valor:.2f} diferente do anunciado (R$ {plano['price_brl']})")
+                item(f"Preço do plano {plano['name']}", not problemas, f"R$ {valor:.2f}/mês" if not problemas else "; ".join(problemas),
+                     "Crie um novo preço Recorrente, Mensal, em BRL, com o valor certo, e mova a chave de pesquisa para ele.")
+        except stripe.error.AuthenticationError:
+            item("Conexão com o Stripe", False, "O Stripe recusou a chave (inválida ou revogada).",
+                 "Gere uma nova Secret key no Stripe e atualize STRIPE_SECRET_KEY no Render.")
+        except stripe.error.PermissionError:
+            item("Conexão com o Stripe", False, "A chave restrita não tem permissão para ler preços.",
+                 "Use a Secret key padrão (sk_...) ou dê permissão de leitura em Prices à chave restrita.")
+        except stripe.error.StripeError as e:
+            item("Conexão com o Stripe", False, str(e)[:200], "Tente de novo em alguns minutos.")
+
+        # webhook
+        try:
+            hooks = await asyncio.to_thread(lambda: stripe.WebhookEndpoint.list(limit=50).data)
+            alvo = [h for h in hooks if "/api/stripe/webhook" in (getattr(h, "url", "") or "")]
+            if not alvo:
+                item("Webhook no Stripe", False, f"Nenhum destino apontando para /api/stripe/webhook no modo {modo}.",
+                     "Stripe → Webhooks → Adicionar destino → Sua conta, payload Instantâneo, os 7 eventos, URL https://tioalvaro.onrender.com/api/stripe/webhook.")
+            else:
+                h = alvo[0]
+                evs = set(getattr(h, "enabled_events", []) or [])
+                faltam = [] if "*" in evs else [e for e in EVENTOS_WEBHOOK if e not in evs]
+                ativo = getattr(h, "status", "enabled") == "enabled"
+                item("Webhook no Stripe", ativo and not faltam,
+                     f"{getattr(h, 'url', '')}" + ("" if ativo else " — DESATIVADO") + (f" — faltam eventos: {', '.join(faltam)}" if faltam else ""),
+                     "Edite o destino no Stripe e marque os eventos que faltam (e ative-o, se estiver desativado).")
+        except stripe.error.StripeError:
+            item("Webhook no Stripe", None, "Não foi possível conferir com esta chave.", "Confira manualmente em Stripe → Webhooks.")
+
+        # portal
+        try:
+            confs = await asyncio.to_thread(lambda: stripe.billing_portal.Configuration.list(limit=5).data)
+            item("Portal do cliente (Gerenciar assinatura)", bool(confs), "Configurado" if confs else "Ainda não salvo.",
+                 "Stripe → Configurações → Faturamento → Portal do cliente → ative cancelar, atualizar pagamento e trocar de plano → Salvar.")
+        except stripe.error.StripeError:
+            item("Portal do cliente (Gerenciar assinatura)", None, "Não foi possível conferir com esta chave.", "Confira manualmente.")
+
+    essenciais = [i for i in itens if i["item"].startswith(("Chave secreta", "Segredo do webhook", "Preço do plano", "Webhook no Stripe", "Conexão"))]
+    pronto = bool(essenciais) and all(i["ok"] for i in essenciais) and bool(modo)
+    return {"pronto_para_cobrar": pronto, "modo_stripe": modo, "itens": itens}
+
+# ------------------------------------------------------------
 # ✅ Cron diário: avisos de fim de teste (acionar 1x/dia com WEBHOOK_CRON_SECRET)
 # ------------------------------------------------------------
 def _check_cron_secret(authorization: Optional[str]):
@@ -3765,6 +4199,12 @@ async def startup():
         try: await db[col].create_index("tenant_id")
         except Exception: pass
 
+    for col, campo in [("pedidos", "data_pedido"), ("faturamentos", "data_faturamento"),
+                       ("comissoes", "data_faturamento"), ("contas_receber", "vencimento")]:
+        try: await db[col].create_index([("tenant_id", 1), (campo, 1)])
+        except Exception: pass
+    try: await db.metas.create_index([("tenant_id", 1), ("ano", 1), ("mes", 1), ("representada_id", 1), ("rede_chave", 1)], unique=True)
+    except Exception: pass
     try: await db.stripe_events.create_index("id", unique=True)
     except Exception: pass
     try: await db.users.create_index("stripe_customer_id", sparse=True)

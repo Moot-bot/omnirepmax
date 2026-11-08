@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Check, Loader2, CreditCard, AlertTriangle, Clock, CheckCircle2 } from "lucide-react";
+import { Link } from "react-router-dom";
 import api from "../lib/api";
 import { PageHeader } from "../components/Common";
 import { Button } from "../components/ui/button";
@@ -116,7 +117,11 @@ export default function Plans() {
 
       {sub && !sub.pagamentos_configurados && (
         <div className="mb-6 text-sm text-slate-500 bg-slate-100 dark:bg-slate-800/50 rounded-xl p-4">
-          A assinatura online estará disponível em breve. Para assinar agora, fale com o suporte pelo WhatsApp (47) 99206-5908.
+          {sub.is_superadmin ? (
+            <>Os pagamentos não estão configurados no servidor. <Link to="/admin" className="font-semibold text-[#075BFF] underline">Abra Admin → Diagnóstico</Link> para ver o que falta.</>
+          ) : (
+            <>A assinatura online estará disponível em breve. Para assinar agora, fale com o suporte pelo WhatsApp (47) 99206-5908.</>
+          )}
         </div>
       )}
 
