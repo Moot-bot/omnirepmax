@@ -236,10 +236,10 @@ export default function AppShell() {
       <main className="flex-1 flex flex-col overflow-hidden bg-background transition-colors duration-300">
         
         {/* TOPBAR - ESQUERDA FIXA, DIREITA DINÂMICA */}
-        <header className="h-20 border-b border-border dark:border-[#1E3A8A]/40 bg-gradient-to-r from-[#060C1A] via-[#0A1838] via-40% to-background dark:to-[#060C1A] flex items-center justify-between px-4 sm:px-6 gap-4 z-30 relative shadow-lg transition-colors duration-300">
+        <header className="h-20 border-b border-slate-200 bg-white dark:border-[#1E3A8A]/40 dark:bg-[#060C1A] flex items-center justify-between px-4 sm:px-6 gap-4 z-30 relative shadow-sm dark:shadow-lg transition-colors duration-300">
           
           <div className="flex items-center gap-3 flex-1 relative z-10">
-            <button className="md:hidden text-slate-400" onClick={() => setIsMobileOpen(true)}>
+            <button className="md:hidden text-slate-600 dark:text-slate-400" onClick={() => setIsMobileOpen(true)}>
               <Menu className="w-6 h-6" />
             </button>
             
@@ -252,22 +252,22 @@ export default function AppShell() {
                   onChange={handleSearchChange}
                   onFocus={() => setShowDropdown(true)}
                   placeholder="Pesquisar clientes, CNPJ, pedidos..." 
-                  className="h-11 pl-11 bg-[#0A1838]/50 border-[#1E3A8A]/50 text-white placeholder:text-slate-500 focus:border-[#08D5F5] focus:bg-[#0A1838] focus:shadow-[0_0_15px_rgba(8,213,245,0.2)] transition-all rounded-full text-base"
+                  className="h-11 pl-11 bg-slate-100 border-slate-200 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-[#075BFF] dark:bg-[#0A1838]/50 dark:border-[#1E3A8A]/50 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-[#08D5F5] dark:focus:bg-[#0A1838] dark:focus:shadow-[0_0_15px_rgba(8,213,245,0.2)] transition-all rounded-full text-base"
                 />
               </div>
 
               {/* Dropdown de Busca */}
               {showDropdown && isCNPJ(searchQuery) && (
-                <div className="absolute top-full mt-2 w-full bg-[#060C1A] border border-[#1E3A8A]/50 rounded-xl shadow-2xl p-3 z-50">
+                <div className="absolute top-full mt-2 w-full bg-white border border-slate-200 dark:bg-[#060C1A] dark:border-[#1E3A8A]/50 rounded-xl shadow-2xl p-3 z-50">
                   <p className="text-xs font-semibold text-slate-500 mb-2">Ações para o CNPJ digitado:</p>
                   <div className="flex flex-col gap-1">
-                    <a href={`https://www.google.com/search?q=${searchQuery}+Receita+Federal`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-white/5 rounded-lg text-slate-300 transition-colors">
+                    <a href={`https://www.google.com/search?q=${searchQuery}+Receita+Federal`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg text-slate-700 dark:text-slate-300 transition-colors">
                       <ExternalLink className="w-4 h-4 text-[#08D5F5]" /> Consultar na Receita Federal
                     </a>
-                    <a href={`https://www.linkedin.com/search/results/companies/?keywords=${searchQuery}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-white/5 rounded-lg text-slate-300 transition-colors">
+                    <a href={`https://www.linkedin.com/search/results/companies/?keywords=${searchQuery}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg text-slate-700 dark:text-slate-300 transition-colors">
                       <ExternalLink className="w-4 h-4 text-[#075BFF]" /> Buscar no LinkedIn
                     </a>
-                    <button onClick={() => { navigate(`/clientes?cnpj=${searchQuery}`); setShowDropdown(false); }} className="flex items-center gap-2 text-sm p-2 hover:bg-white/5 rounded-lg text-[#08D5F5] font-medium text-left transition-colors">
+                    <button onClick={() => { navigate(`/clientes?cnpj=${searchQuery}`); setShowDropdown(false); }} className="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg text-[#075BFF] dark:text-[#08D5F5] font-medium text-left transition-colors">
                       <UserPlus className="w-4 h-4" /> Cadastrar Cliente com este CNPJ
                     </button>
                   </div>
@@ -275,7 +275,7 @@ export default function AppShell() {
               )}
 
               {showDropdown && !isCNPJ(searchQuery) && searchResults && (
-                <div className="absolute top-full mt-2 w-full bg-[#060C1A] border border-[#1E3A8A]/50 rounded-xl shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto">
+                <div className="absolute top-full mt-2 w-full bg-white border border-slate-200 dark:bg-[#060C1A] dark:border-[#1E3A8A]/50 rounded-xl shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto">
                   {isSearching && <div className="p-4 text-center text-sm text-slate-500">Buscando...</div>}
                   
                   {!isSearching && searchResults.clientes?.length === 0 && searchResults.produtos?.length === 0 && searchResults.pedidos?.length === 0 && (
@@ -283,13 +283,13 @@ export default function AppShell() {
                   )}
 
                   {searchResults.clientes?.length > 0 && (
-                    <div className="border-b border-white/5">
-                      <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase bg-white/5">Clientes</div>
+                    <div className="border-b border-slate-100 dark:border-white/5">
+                      <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase bg-slate-50 dark:bg-white/5">Clientes</div>
                       {searchResults.clientes.map(c => (
-                        <div key={c.id} onClick={() => navigateToResult(`/clientes`)} className="px-4 py-2 hover:bg-white/5 cursor-pointer flex items-center gap-3 transition-colors">
+                        <div key={c.id} onClick={() => navigateToResult(`/clientes`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer flex items-center gap-3 transition-colors">
                           <Users className="w-4 h-4 text-[#075BFF]" />
                           <div>
-                            <div className="text-sm font-semibold text-white">{c.nome_fantasia || c.razao_social}</div>
+                            <div className="text-sm font-semibold text-slate-900 dark:text-white">{c.nome_fantasia || c.razao_social}</div>
                             <div className="text-xs text-slate-500">{c.cnpj_cpf}</div>
                           </div>
                         </div>
@@ -298,13 +298,13 @@ export default function AppShell() {
                   )}
 
                   {searchResults.produtos?.length > 0 && (
-                    <div className="border-b border-white/5">
-                      <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase bg-white/5">Produtos</div>
+                    <div className="border-b border-slate-100 dark:border-white/5">
+                      <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase bg-slate-50 dark:bg-white/5">Produtos</div>
                       {searchResults.produtos.map(p => (
-                        <div key={p.id} onClick={() => navigateToResult(`/representadas`)} className="px-4 py-2 hover:bg-white/5 cursor-pointer flex items-center gap-3 transition-colors">
+                        <div key={p.id} onClick={() => navigateToResult(`/representadas`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer flex items-center gap-3 transition-colors">
                           <Package className="w-4 h-4 text-emerald-500" />
                           <div>
-                            <div className="text-sm font-semibold text-white">{p.nome}</div>
+                            <div className="text-sm font-semibold text-slate-900 dark:text-white">{p.nome}</div>
                             <div className="text-xs text-slate-500">{p.codigo || p.sku}</div>
                           </div>
                         </div>
@@ -314,11 +314,11 @@ export default function AppShell() {
 
                   {searchResults.pedidos?.length > 0 && (
                     <div>
-                      <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase bg-white/5">Pedidos</div>
+                      <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase bg-slate-50 dark:bg-white/5">Pedidos</div>
                       {searchResults.pedidos.map(p => (
-                        <div key={p.id} onClick={() => navigateToResult(`/pedidos`)} className="px-4 py-2 hover:bg-white/5 cursor-pointer flex items-center gap-3 transition-colors">
+                        <div key={p.id} onClick={() => navigateToResult(`/pedidos`)} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer flex items-center gap-3 transition-colors">
                           <ShoppingCart className="w-4 h-4 text-amber-500" />
-                          <div className="text-sm font-semibold text-white">{p.numero}</div>
+                          <div className="text-sm font-semibold text-slate-900 dark:text-white">{p.numero}</div>
                         </div>
                       ))}
                     </div>

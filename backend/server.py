@@ -3874,8 +3874,16 @@ async def diagnostico(current=Depends(get_current_user)):
              "Use a Secret key (sk_...). A chave pk_... é a publicável e não serve para o servidor.")
     else:
         modo = "teste" if "_test_" in chave else "produção"
-        item("Chave secreta do Stripe (STRIPE_SECRET_KEY)", True, f"Configurada — modo {modo}"
-             + (" (chave restrita rk_: precisa de permissões de escrita em Checkout, Customers e Customer portal)" if chave.startswith("rk_") else ""))
+        if len(chave) < 60:
+            item("Chave secreta do Stripe (STRIPE_SECRET_KEY)", False,
+                 f"Chave curta demais ({len(chave)} caracteres: {chave[:8]}…{chave[-4:]}). Parece cortada.",
+                 "No Stripe, clique em 'Revelar' na Chave secreta e copie o valor inteiro (passa de 100 caracteres). "
+                 "Não copie a versão abreviada que aparece na lista (sk_test_...abcd).")
+            modo = None
+        else:
+            item("Chave secreta do Stripe (STRIPE_SECRET_KEY)", True,
+                 f"Configurada — modo {modo} — {chave[:12]}…{chave[-4:]} ({len(chave)} caracteres)"
+                 + (" (chave restrita rk_: precisa de permissões de escrita em Checkout, Customers e Customer portal)" if chave.startswith("rk_") else ""))
 
     item("Segredo do webhook (STRIPE_WEBHOOK_SECRET)", bool(STRIPE_WEBHOOK_SECRET),
          "Configurado" if STRIPE_WEBHOOK_SECRET else "Variável vazia.",
@@ -3910,8 +3918,10 @@ async def diagnostico(current=Depends(get_current_user)):
                 item(f"Preço do plano {plano['name']}", not problemas, f"R$ {valor:.2f}/mês" if not problemas else "; ".join(problemas),
                      "Crie um novo preço Recorrente, Mensal, em BRL, com o valor certo, e mova a chave de pesquisa para ele.")
         except stripe.error.AuthenticationError:
-            item("Conexão com o Stripe", False, "O Stripe recusou a chave (inválida ou revogada).",
-                 "Gere uma nova Secret key no Stripe e atualize STRIPE_SECRET_KEY no Render.")
+            item("Conexão com o Stripe", False,
+                 f"O Stripe recusou a chave {chave[:12]}…{chave[-4:]} (não existe, foi revogada ou é de outra conta/área restrita).",
+                 "No Stripe, na MESMA área restrita onde estão os produtos: Chaves de API → Chave secreta → Revelar → copie tudo. "
+                 "Compare os 4 últimos caracteres com os mostrados aqui. Atualize STRIPE_SECRET_KEY no Render e use 'Save, rebuild and deploy'.")
         except stripe.error.PermissionError:
             item("Conexão com o Stripe", False, "A chave restrita não tem permissão para ler preços.",
                  "Use a Secret key padrão (sk_...) ou dê permissão de leitura em Prices à chave restrita.")
