@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { NavLink, useNavigate, Outlet } from "react-router-dom";
+import { NavLink, useNavigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import {
@@ -7,12 +7,14 @@ import {
   Building2, Users, Filter, Calendar,
   ShoppingCart, UploadCloud, Percent, TrendingUp, TrendingDown,
   FileText, Map, Settings, LogOut, Search, Menu, X, ExternalLink, UserPlus,
-  Sun, Moon, Bell, Package, ShieldAlert, Clock, Landmark
+  Sun, Moon, Bell, Package, ShieldAlert, Clock, Landmark, CreditCard, Lock
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import api from "../lib/api";
 import { toast } from "sonner";
+import { useAssinatura } from "../lib/assinatura";
+import { fmtDate } from "../lib/format";
 
 const MENU_SECTIONS = [
   {
@@ -55,6 +57,12 @@ const MENU_SECTIONS = [
       { label: "Relatórios", icon: FileText, path: "/relatorios" },
       { label: "Mapa Comercial", icon: Map, path: "/mapa" },
       { label: "Feedback", icon: MessageSquare, path: "/feedback" },
+    ]
+  },
+  {
+    title: "Conta",
+    items: [
+      { label: "Assinatura e Planos", icon: CreditCard, path: "/planos" },
       { label: "Configurações", icon: Settings, path: "/configuracoes" },
     ]
   }
@@ -64,6 +72,9 @@ export default function AppShell() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
+  const sub = useAssinatura();
+  const { pathname } = useLocation();
+  const travada = sub && !sub.is_superadmin && sub.acesso === "somente_leitura";
   
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -73,7 +84,7 @@ export default function AppShell() {
   const searchRef = useRef(null);
 
   const menuSections = [...MENU_SECTIONS];
-  if (user?.role === "admin") {
+  if (user?.is_superadmin) { // ✅ só o dono da plataforma
     menuSections.push({
       title: "Administração",
       items: [
@@ -108,7 +119,7 @@ export default function AppShell() {
     const delayDebounceFn = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const res = await api.get(`/search?q=${searchQuery}`);
+        const res = await api.get(`/search?q=${encodeURIComponent(searchQuery)}`);
         setSearchResults(res.data);
         setShowDropdown(true);
       } catch (error) {
@@ -149,7 +160,7 @@ export default function AppShell() {
         ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0 md:static"}
       `}>
         
-        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5 pointer-events-none mix-blend-overlay"></div>
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none"></div>
         <div className="absolute top-0 left-0 w-full h-[200px] bg-[#075BFF]/20 blur-[100px] pointer-events-none rounded-full" />
 
         <div className="h-20 flex items-center justify-between px-6 border-b border-[#1E3A8A]/40 relative z-10 bg-white/5 backdrop-blur-sm">
@@ -319,6 +330,32 @@ export default function AppShell() {
           {/* Ações do Topbar (Lado Direito) - DINÂMICO CONFORME O TEMA */}
           <div className="flex items-center gap-3 relative z-10 pl-4">
             
+            {/* ✅ Situação da assinatura (teste / travada / pagamento pendente) */}
+            {sub && !sub.is_superadmin && (
+              travada ? (
+                <button onClick={() => navigate("/planos")} title="Conta em modo consulta. Clique para assinar."
+                        className="flex items-center gap-2 h-10 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold shadow-md transition-colors">
+                  <Lock className="w-4 h-4" />
+                  <span className="hidden sm:inline">{sub.motivo === "trial_expirado" ? "Teste encerrado" : "Assinatura inativa"} · Assinar</span>
+                </button>
+              ) : sub.is_trial ? (
+                <button onClick={() => navigate("/planos")} title={`Teste grátis até ${fmtDate(sub.trial_ends_at)}`}
+                        className={`flex items-center gap-2 h-10 px-3 rounded-xl text-sm font-semibold shadow-md transition-colors ${
+                          sub.trial_days_left <= 3 ? "bg-amber-500 hover:bg-amber-600 text-white" : "bg-[#075BFF] hover:bg-blue-600 text-white"}`}>
+                  <Clock className="w-4 h-4" />
+                  <span className="sm:hidden">{sub.trial_days_left}d</span>
+                  <span className="hidden sm:inline">
+                    Teste grátis · {sub.trial_days_left <= 1 ? "último dia" : `${sub.trial_days_left} dias`}
+                  </span>
+                </button>
+              ) : sub.aviso === "pagamento_pendente" ? (
+                <button onClick={() => navigate("/planos")}
+                        className="flex items-center gap-2 h-10 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold shadow-md">
+                  <CreditCard className="w-4 h-4" /><span className="hidden sm:inline">Pagamento pendente</span>
+                </button>
+              ) : null
+            )}
+
             {/* Divisor Luminoso - Adaptável */}
             <div className="w-px h-8 bg-border dark:bg-gradient-to-b dark:from-transparent dark:via-[#1E3A8A] dark:to-transparent mx-2 hidden sm:block transition-colors"></div>
 
@@ -346,6 +383,25 @@ export default function AppShell() {
 
         {/* CONTENT AREA (Muda de cor com o tema) */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8" onClick={() => setShowDropdown(false)}>
+          {/* ✅ Conta travada: modo consulta */}
+          {travada && pathname !== "/planos" && (
+            <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 dark:bg-rose-500/10 dark:border-rose-500/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+              <Lock className="w-6 h-6 text-rose-600 shrink-0" />
+              <div className="flex-1 text-sm">
+                <p className="font-bold text-rose-800 dark:text-rose-200">
+                  {sub.motivo === "trial_expirado"
+                    ? `Seu teste grátis terminou${sub.trial_ends_at ? ` em ${fmtDate(sub.trial_ends_at)}` : ""}.`
+                    : "Sua assinatura está inativa."}
+                </p>
+                <p className="text-rose-700 dark:text-rose-300">
+                  A conta está em <b>modo consulta</b>: você vê e exporta seus dados, mas não consegue cadastrar nem editar. Nada foi apagado.
+                </p>
+              </div>
+              <Button onClick={() => navigate("/planos")} className="bg-rose-600 hover:bg-rose-700 text-white shrink-0">
+                <CreditCard className="w-4 h-4 mr-2" /> Escolher plano
+              </Button>
+            </div>
+          )}
           <Outlet /> 
         </div>
       </main>

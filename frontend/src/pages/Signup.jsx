@@ -21,8 +21,7 @@ export default function Signup() {
   });
   const [busy, setBusy] = useState(false);
 
-  if (loading) return null;
-  if (user) return <Navigate to="/dashboard" replace />;
+  if (!loading && user) return <Navigate to="/dashboard" replace />;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -31,7 +30,7 @@ export default function Signup() {
     try {
       const { data } = await api.post("/auth/signup", form);
       if (data.token) localStorage.setItem("omnirep_token", data.token);
-      toast.success("Conta criada! Bem-vindo ao OMNIREP MAX.");
+      toast.success("Conta criada! Enviamos um link de confirmação para o seu e-mail.");
       window.location.href = "/dashboard";
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Erro ao criar conta");
@@ -56,7 +55,7 @@ export default function Signup() {
           <Link to="/" className="flex items-center gap-2 text-sm font-medium text-slate-400 hover:text-white transition-colors w-fit">
             <ArrowLeft className="w-4 h-4" /> Voltar para o site
           </Link>
-          <img src="/logo.png" alt="OmniRepMax" className="h-20 sm:h-24 w-auto object-contain drop-shadow-[0_0_20px_rgba(8,213,245,0.4)]" />
+          <img src="/logo.png" alt="OmniRepMax" className="h-32 xl:h-40 w-auto max-w-full object-contain object-left drop-shadow-[0_0_20px_rgba(8,213,245,0.4)]" />
         </div>
 
         {/* Textos e Benefícios */}
@@ -111,7 +110,7 @@ export default function Signup() {
           
           {/* Logo no mobile */}
           <div className="lg:hidden mb-8 flex justify-center">
-            <img src="/logo.png" alt="OmniRepMax" className="h-16 w-auto object-contain" />
+            <img src="/logo.png" alt="OmniRepMax" className="h-24 sm:h-28 w-auto object-contain" />
           </div>
 
           <div className="mb-8">

@@ -80,7 +80,24 @@ ALLOWED_ORIGINS = sorted({
     if o.strip()
 })
 
-app = FastAPI(title="OMNIREPMAX API", version="2.4.0")
+app = FastAPI(
+    title="OMNIREPMAX API", version="2.5.0",
+    # ✅ Em produção não publica o mapa completo da API
+    docs_url=None if IS_PROD else "/docs",
+    redoc_url=None,
+    openapi_url=None if IS_PROD else "/openapi.json",
+)
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Cache-Control", "no-store")
+    if IS_PROD:
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
@@ -305,7 +322,8 @@ async def get_current_user(request: Request) -> dict:
     except pyjwt.ExpiredSignatureError: raise HTTPException(401, "Token expirado")
     except pyjwt.InvalidTokenError: raise HTTPException(401, "Token inválido")
 
-    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    # ✅ PERF: não carrega o logo (base64 de até 700 KB) em toda requisição
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0, "logo": 0})
     if not user: raise HTTPException(401, "Usuário não encontrado")
 
     # ✅ Sessões emitidas antes da última troca de senha deixam de valer
@@ -356,7 +374,7 @@ async def _conta_dona(user: dict) -> dict:
     """A assinatura pertence ao dono do tenant (hoje 1 usuário = 1 tenant)."""
     tid = user.get("tenant_id")
     if tid and tid != user.get("id"):
-        dono = await db.users.find_one({"id": tid}, {"_id": 0, "password_hash": 0})
+        dono = await db.users.find_one({"id": tid}, {"_id": 0, "password_hash": 0, "logo": 0})
         if dono:
             return dono
     return user
@@ -410,10 +428,15 @@ def require_feature(current: dict, feature: str, nome: str):
     if not _limites(current).get(feature):
         raise HTTPException(402, f"{nome} está disponível a partir do plano Profissional. Faça upgrade em Planos.")
 
-async def t_list(name: str, current: dict, filters: Optional[dict] = None, sort_key: str = "created_at", limit: int = 1000):
+# Campos grandes (base64) que só a tela de cadastro precisa
+CAMPOS_PESADOS = {"logo": 0, "imagem": 0, "arquivo_base64": 0}
+
+async def t_list(name: str, current: dict, filters: Optional[dict] = None, sort_key: str = "created_at",
+                 limit: int = 1000, leve: bool = False):
     q: Dict[str, Any] = {"tenant_id": tid_of(current)}
     if filters: q.update(filters)
-    cursor = db[name].find(q, {"_id": 0}).sort(sort_key, -1).limit(limit)
+    proj = {"_id": 0, **CAMPOS_PESADOS} if leve else {"_id": 0}
+    cursor = db[name].find(q, proj).sort(sort_key, -1).limit(limit)
     return [clean_doc(d) async for d in cursor]
 
 async def t_insert(name: str, current: dict, data: dict) -> dict:
@@ -809,6 +832,7 @@ async def login(body: LoginIn, response: Response, request: Request):
         raise HTTPException(401, "Credenciais inválidas")
     token = make_token(user)
     set_cookies(response, token)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"last_login_at": iso(now_utc())}})
     user = clean_doc(user); user.pop("password_hash", None)
     user["tenant_id"] = user.get("tenant_id") or user["id"]
     user["is_superadmin"] = is_superadmin(user)
@@ -816,7 +840,8 @@ async def login(body: LoginIn, response: Response, request: Request):
 
 @api.get("/auth/me")
 async def me(current=Depends(get_current_user)):
-    return current
+    extra = await db.users.find_one({"id": current["id"]}, {"_id": 0, "logo": 1})
+    return {**current, "logo": (extra or {}).get("logo")}
 
 @api.patch("/auth/me")
 async def update_me(body: UserProfileUpdate, current=Depends(get_current_user)):
@@ -1845,7 +1870,7 @@ def _in_year(s, y):
 @api.get("/dashboard")
 async def dashboard(current=Depends(get_active_user)):
     pedidos, reps, comissoes, ap, ar, clientes, visitas, ops, faturamentos = await asyncio.gather(
-        t_list("pedidos", current), t_list("representadas", current), t_list("comissoes", current),
+        t_list("pedidos", current), t_list("representadas", current, leve=True), t_list("comissoes", current),
         t_list("contas_pagar", current), t_list("contas_receber", current), t_list("clientes", current),
         t_list("visitas", current), t_list("oportunidades", current), t_list("faturamentos", current)
     )
@@ -1980,7 +2005,7 @@ async def dashboard(current=Depends(get_active_user)):
 async def insights_regras(current=Depends(get_active_user)):
     now = now_utc()
     clientes, pedidos, reps = await asyncio.gather(
-        t_list("clientes", current), t_list("pedidos", current), t_list("representadas", current)
+        t_list("clientes", current, leve=True), t_list("pedidos", current), t_list("representadas", current, leve=True)
     )
     insights = []
     for c in clientes:
@@ -2007,7 +2032,7 @@ async def insights_regras(current=Depends(get_active_user)):
 
 async def _build_ai_context(current: dict) -> str:
     clientes, pedidos, reps, comissoes, ap, ar = await asyncio.gather(
-        t_list("clientes", current), t_list("pedidos", current), t_list("representadas", current),
+        t_list("clientes", current, leve=True), t_list("pedidos", current), t_list("representadas", current, leve=True),
         t_list("comissoes", current), t_list("contas_pagar", current), t_list("contas_receber", current)
     )
     now = now_utc()
@@ -2123,9 +2148,9 @@ async def global_search(q: str = Query(..., min_length=1), current=Depends(get_a
     ql = q.lower()
     def m(d, keys): return any(d.get(k) and ql in str(d.get(k)).lower() for k in keys)
     return {
-        "clientes": [c for c in await t_list("clientes", current) if m(c, ["razao_social", "nome_fantasia", "cnpj_cpf", "cidade"])][:10],
-        "produtos": [p for p in await t_list("produtos", current) if m(p, ["nome", "codigo", "sku", "ean", "marca"])][:10],
-        "representadas": [r for r in await t_list("representadas", current) if m(r, ["razao_social", "nome_fantasia", "cnpj"])][:10],
+        "clientes": [c for c in await t_list("clientes", current, leve=True) if m(c, ["razao_social", "nome_fantasia", "cnpj_cpf", "cidade"])][:10],
+        "produtos": [p for p in await t_list("produtos", current, leve=True) if m(p, ["nome", "codigo", "sku", "ean", "marca"])][:10],
+        "representadas": [r for r in await t_list("representadas", current, leve=True) if m(r, ["razao_social", "nome_fantasia", "cnpj"])][:10],
         "pedidos": [p for p in await t_list("pedidos", current) if m(p, ["numero"])][:10],
     }
 
@@ -2208,8 +2233,8 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
     tid = tid_of(current)
     emit = _only_digits(parsed.get("emitente", {}).get("cnpj"))
     dest = _only_digits(parsed.get("destinatario", {}).get("cnpj"))
-    reps = await t_list("representadas", current)
-    clis = await t_list("clientes", current)
+    reps = await t_list("representadas", current, leve=True)
+    clis = await t_list("clientes", current, leve=True)
 
     rep = next((r for r in reps if r["id"] == representada_id), None) if representada_id else next((r for r in reps if _only_digits(r.get("cnpj")) == emit and emit), None)
     cli = next((c for c in clis if c["id"] == cliente_id), None) if cliente_id else next((c for c in clis if _only_digits(c.get("cnpj_cpf")) == dest and dest), None)
@@ -2355,9 +2380,9 @@ async def xml_historico(current=Depends(get_active_user)):
 @api.get("/relatorios/geral")
 async def relatorio_geral(current=Depends(get_active_user)):
     pedidos, reps, clientes, comissoes, ar, faturas, produtos, visitas = await asyncio.gather(
-        t_list("pedidos", current), t_list("representadas", current), t_list("clientes", current),
+        t_list("pedidos", current), t_list("representadas", current, leve=True), t_list("clientes", current, leve=True),
         t_list("comissoes", current), t_list("contas_receber", current), t_list("faturamentos", current),
-        t_list("produtos", current), t_list("visitas", current)
+        t_list("produtos", current, leve=True), t_list("visitas", current)
     )
 
     now = now_utc(); mes = now.month; ano = now.year
@@ -2938,48 +2963,141 @@ def fmt_data_br(d: datetime) -> str:
 # ✅ Superadmin: assinantes e cortesias (pilotos, parceiros, extensão de teste)
 # ------------------------------------------------------------
 class AssinanteUpdateIn(BaseModel):
+    # dados cadastrais
+    name: Optional[str] = None
+    empresa: Optional[str] = None
+    telefone: Optional[str] = None
+    # acesso
     dias_extras_trial: Optional[int] = None   # estende o teste a partir de hoje (ou do fim atual, se maior)
+    encerrar_teste: bool = False              # vence o teste agora (conta vai para modo consulta)
     cortesia_plano: Optional[str] = None      # "solo" | "pro" | "equipe" → acesso liberado sem cobrança
-    cortesia_ate: Optional[str] = None        # opcional: data em que a cortesia vira teste vencido
+    cortesia_ate: Optional[str] = None        # opcional: data em que a cortesia termina
     remover_cortesia: bool = False
+
+class ExcluirContaIn(BaseModel):
+    confirmacao_email: str
+
+def _tem_assinatura_stripe_ativa(u: dict) -> bool:
+    return bool(u.get("stripe_subscription_id")) and u.get("subscription_status") in {"active", "trialing", "past_due"}
+
+async def _contagem_por_tenant(colecao: str) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    async for d in db[colecao].aggregate([{"$group": {"_id": "$tenant_id", "n": {"$sum": 1}}}]):
+        if d.get("_id"): out[d["_id"]] = d["n"]
+    return out
 
 @api.get("/admin/assinantes")
 async def listar_assinantes(current=Depends(get_current_user)):
     require_superadmin(current)
+    pedidos, clientes = await asyncio.gather(_contagem_por_tenant("pedidos"), _contagem_por_tenant("clientes"))
     out = []
-    async for u in db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).limit(2000):
+    async for u in db.users.find({}, {"_id": 0, "password_hash": 0, "logo": 0}).sort("created_at", -1).limit(2000):
         sit = _situacao_assinatura(u, u)
+        tid = u.get("tenant_id") or u["id"]
         out.append({k: u.get(k) for k in ("id", "email", "name", "empresa", "telefone", "plan", "subscription_status",
-                                           "trial_ends_at", "current_period_end", "cancel_at_period_end",
-                                           "email_verified", "created_at")} | {"acesso": sit["acesso"], "plano_efetivo": sit["plano"]})
+                                           "trial_ends_at", "current_period_end", "cancel_at_period_end", "cortesia_ate",
+                                           "stripe_customer_id", "email_verified", "created_at", "last_login_at")} | {
+            "acesso": sit["acesso"], "plano_efetivo": sit["plano"], "motivo": sit.get("motivo"),
+            "dias_restantes": sit.get("dias_restantes"), "is_superadmin": is_superadmin(u),
+            "stripe_ativo": _tem_assinatura_stripe_ativa(u),
+            "uso": {"pedidos": pedidos.get(tid, 0), "clientes": clientes.get(tid, 0)},
+        })
     return out
 
 @api.patch("/admin/assinantes/{uid}")
 async def atualizar_assinante(uid: str, body: AssinanteUpdateIn, current=Depends(get_current_user)):
     require_superadmin(current)
-    u = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+    u = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0, "logo": 0})
     if not u: raise HTTPException(404, "Usuário não encontrado")
-    if u.get("stripe_subscription_id") and u.get("subscription_status") in {"active", "trialing", "past_due"}:
-        raise HTTPException(409, "Este cliente tem assinatura ativa no Stripe. Gerencie pelo painel do Stripe.")
     updates: Dict[str, Any] = {}
-    if body.remover_cortesia:
-        updates.update({"plan": "trial", "subscription_status": None, "trial_ends_at": iso(now_utc())})
+
+    # Dados cadastrais: sempre editáveis
+    for campo in ("name", "empresa", "telefone"):
+        v = getattr(body, campo)
+        if v is not None:
+            updates[campo] = v.strip()
+    if "name" in updates and not updates["name"]:
+        raise HTTPException(400, "O nome não pode ficar vazio")
+
+    # Acesso: bloqueado se houver cobrança ativa no Stripe (evita cobrar e liberar ao mesmo tempo)
+    mexe_acesso = body.remover_cortesia or body.encerrar_teste or body.dias_extras_trial or body.cortesia_plano
+    if mexe_acesso:
+        if is_superadmin(u):
+            raise HTTPException(400, "A conta de administrador da plataforma não tem teste nem plano.")
+        if _tem_assinatura_stripe_ativa(u):
+            raise HTTPException(409, "Este cliente tem assinatura ativa no Stripe. Altere o plano pelo painel do Stripe.")
+    if body.remover_cortesia or body.encerrar_teste:
+        updates.update({"plan": "trial", "subscription_status": None, "cortesia_ate": None,
+                        "trial_ends_at": iso(now_utc() - timedelta(seconds=1))})
     if body.dias_extras_trial:
-        base = max(now_utc(), _parse_date(u.get("trial_ends_at")) or now_utc())
-        updates.update({"plan": "trial", "subscription_status": None,
-                        "trial_ends_at": iso(base + timedelta(days=int(body.dias_extras_trial))),
+        dias = int(body.dias_extras_trial)
+        if not 1 <= dias <= 365: raise HTTPException(400, "Informe entre 1 e 365 dias")
+        base = max(now_utc(), _parse_date(u.get("trial_ends_at")) or now_utc()) if u.get("plan") in (None, "trial") else now_utc()
+        updates.update({"plan": "trial", "subscription_status": None, "cortesia_ate": None,
+                        "trial_ends_at": iso(base + timedelta(days=dias)),
                         "aviso_trial_acabando": None, "aviso_trial_expirado": None})
     if body.cortesia_plano:
         if body.cortesia_plano not in PLANOS_PAGOS: raise HTTPException(400, "Plano inválido")
+        if body.cortesia_ate and not _parse_date(body.cortesia_ate): raise HTTPException(400, "Data da cortesia inválida")
         updates.update({"plan": body.cortesia_plano, "subscription_status": "cortesia",
-                        "cortesia_ate": body.cortesia_ate})
+                        "cortesia_ate": iso(_parse_date(body.cortesia_ate)) if body.cortesia_ate else None})
     if not updates: raise HTTPException(400, "Nada para alterar")
+
     await db.users.update_one({"id": uid}, {"$set": updates})
     await _log_auditoria(current, "assinante_alterado_superadmin", "users", uid,
-                         before={k: u.get(k) for k in ("plan", "subscription_status", "trial_ends_at")}, after=updates)
-    novo = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+                         before={k: u.get(k) for k in ("name", "empresa", "telefone", "plan", "subscription_status", "trial_ends_at", "cortesia_ate")},
+                         after=updates)
+    novo = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0, "logo": 0})
     return {"ok": True, "situacao": _situacao_assinatura(novo, novo), "plan": novo.get("plan"),
             "subscription_status": novo.get("subscription_status"), "trial_ends_at": novo.get("trial_ends_at")}
+
+@api.post("/admin/assinantes/{uid}/excluir")
+async def excluir_conta(uid: str, body: ExcluirContaIn, current=Depends(get_current_user)):
+    """Exclui a conta e TODOS os dados da empresa (LGPD). Cancela a cobrança no Stripe antes."""
+    require_superadmin(current)
+    u = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0, "logo": 0})
+    if not u: raise HTTPException(404, "Usuário não encontrado")
+    if uid == current["id"] or is_superadmin(u):
+        raise HTTPException(400, "Não é possível excluir a conta de administrador da plataforma.")
+    if (body.confirmacao_email or "").strip().lower() != (u.get("email") or "").lower():
+        raise HTTPException(400, "O e-mail digitado não confere com o da conta.")
+
+    # 1) Para a cobrança primeiro. Se não conseguir, NÃO apaga (evita cobrar quem não tem mais conta).
+    stripe_cancelado = False
+    if _tem_assinatura_stripe_ativa(u):
+        if not STRIPE_SECRET_KEY:
+            raise HTTPException(409, "Esta conta tem assinatura ativa. Cancele no painel do Stripe antes de excluir.")
+        try:
+            await asyncio.to_thread(lambda: stripe.Subscription.cancel(u["stripe_subscription_id"]))
+            stripe_cancelado = True
+        except stripe.error.InvalidRequestError as e:
+            if "No such subscription" not in str(e):
+                raise HTTPException(502, f"Não foi possível cancelar a assinatura no Stripe: {getattr(e, 'user_message', None) or e}")
+        except stripe.error.StripeError as e:
+            raise HTTPException(502, f"Não foi possível cancelar a assinatura no Stripe: {getattr(e, 'user_message', None) or e}")
+
+    # 2) Apaga os dados da empresa
+    tid = u.get("tenant_id") or u["id"]
+    removidos: Dict[str, int] = {}
+    for col in RESET_COLLECTIONS + ["counters", "audit_log"]:
+        try:
+            r = await db[col].delete_many({"tenant_id": tid})
+            if r.deleted_count: removidos[col] = r.deleted_count
+        except Exception as e:
+            logger.error(f"Exclusão de conta {uid}: falha em {col}: {e}")
+    ids = [x["id"] async for x in db.users.find({"$or": [{"tenant_id": tid}, {"id": uid}]}, {"id": 1, "_id": 0})]
+    for col in ("password_resets", "email_verifications"):
+        await db[col].delete_many({"user_id": {"$in": ids}})
+    r = await db.leads.delete_many({"email": (u.get("email") or "").lower()})
+    if r.deleted_count: removidos["leads"] = r.deleted_count
+    r = await db.users.delete_many({"id": {"$in": ids}})
+    removidos["users"] = r.deleted_count
+
+    # 3) Registro mínimo (sem dados pessoais além do e-mail, para rastrear a solicitação)
+    await _log_auditoria(current, "conta_excluida_superadmin", "users", uid,
+                         extra={"email": u.get("email"), "tenant_id": tid, "removidos": removidos,
+                                "stripe_cancelado": stripe_cancelado})
+    return {"ok": True, "removidos": removidos, "stripe_cancelado": stripe_cancelado}
 
 # ------------------------------------------------------------
 # System Reset
