@@ -82,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.7.3",
+    title="OMNIREPMAX API", version="2.8.0",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -561,6 +561,10 @@ class SignupIn(BaseModel):
     telefone: Optional[str] = ""
     tamanho_operacao: Optional[str] = "solo"
     controle_atual: Optional[str] = "planilha"
+    aceite_termos: bool = False          # ✅ aceite dos Termos de Uso e da Política de Privacidade
+
+# Versão vigente dos Termos/Privacidade. Ao publicar nova versão, aumente aqui e em src/lib/textosLegais.js.
+TERMOS_VERSAO = "1.0"
 
 class UserProfileUpdate(BaseModel):
     name: Optional[str] = None
@@ -793,6 +797,8 @@ def set_cookies(response: Response, token: str):
 @api.post("/auth/signup")
 async def signup(body: SignupIn, response: Response, request: Request, background: BackgroundTasks):
     _rl_hit(f"signup:ip:{_client_ip(request)}", 5, 3600)
+    if not body.aceite_termos:
+        raise HTTPException(400, "Para criar a conta, aceite os Termos de Uso e a Política de Privacidade.")
     if len(body.password) < 8:
         raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
     email = body.email.lower()
@@ -810,6 +816,7 @@ async def signup(body: SignupIn, response: Response, request: Request, backgroun
         "plan": "trial",
         "trial_ends_at": iso(now_utc() + timedelta(days=7)),
         "email_verified": False,
+        "termos_aceitos": {"versao": TERMOS_VERSAO, "em": iso(now_utc()), "ip": _client_ip(request)},
         "password_hash": hash_pw(body.password),
         "created_at": iso(now_utc()),
     }
@@ -3703,8 +3710,12 @@ async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
     )
     if conta.get("stripe_customer_id"):
         kwargs["customer"] = conta["stripe_customer_id"]  # não duplica cliente no Stripe
+        kwargs["customer_update"] = {"name": "auto", "address": "auto"}   # guarda nome/endereço/CPF-CNPJ no cliente
     else:
         kwargs["customer_email"] = conta["email"]
+    # ✅ Dados exigidos para emitir a NFS-e: endereço de cobrança e CPF/CNPJ
+    kwargs["billing_address_collection"] = "required"
+    kwargs["tax_id_collection"] = {"enabled": True}
     if os.environ.get("STRIPE_AUTOMATIC_TAX") == "1":
         kwargs["automatic_tax"] = {"enabled": True}
 
@@ -3715,7 +3726,7 @@ async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
             # cliente criado no modo TESTE não existe no modo PRODUÇÃO (e vice-versa): recomeça pelo e-mail
             if "customer" in kwargs and "No such customer" in str(e):
                 await db.users.update_one({"id": conta["id"]}, {"$unset": {"stripe_customer_id": "", "stripe_subscription_id": ""}})
-                kwargs.pop("customer"); kwargs["customer_email"] = conta["email"]
+                kwargs.pop("customer"); kwargs.pop("customer_update", None); kwargs["customer_email"] = conta["email"]
                 session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
             else:
                 raise
@@ -3989,7 +4000,9 @@ async def diagnostico(current=Depends(get_current_user)):
     essenciais = [i for i in itens if i["item"].startswith(("Chave secreta", "Segredo do webhook", "Preço do plano", "Webhook no Stripe", "Conexão"))]
     pronto = bool(essenciais) and all(i["ok"] for i in essenciais) and bool(modo)
     pode_autoconfigurar = bool(modo) and any(i["item"].startswith(("Preço do plano", "Portal do cliente")) and i["ok"] is False for i in itens)
-    return {"pronto_para_cobrar": pronto, "modo_stripe": modo, "itens": itens, "pode_autoconfigurar": pode_autoconfigurar}
+    pode_criar_webhook = bool(modo) and any(i["item"] == "Webhook no Stripe" and i["ok"] is False for i in itens)
+    return {"pronto_para_cobrar": pronto, "modo_stripe": modo, "itens": itens, "pode_autoconfigurar": pode_autoconfigurar,
+            "pode_criar_webhook": pode_criar_webhook}
 
 def _sg(obj, chave, padrao=None):
     """Lê campo de objeto do Stripe (aceita objeto ou dicionário)."""
@@ -4077,6 +4090,43 @@ async def configurar_planos_stripe(current=Depends(get_current_user)):
         raise HTTPException(502, f"O Stripe recusou a configuração: {getattr(e, 'user_message', None) or str(e)[:200]}")
     await _log_auditoria(current, "stripe_planos_configurados", "stripe", "-", extra={"acoes": acoes})
     return {"ok": True, "acoes": acoes}
+
+def _url_webhook(request: Request) -> str:
+    base = (os.environ.get("PUBLIC_API_URL") or "").strip().rstrip("/")
+    if not base:
+        proto = request.headers.get("x-forwarded-proto", "https").split(",")[0].strip() or "https"
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "tioalvaro.onrender.com"
+        base = f"{proto}://{host}"
+    return f"{base}/api/stripe/webhook"
+
+class CriarWebhookIn(BaseModel):
+    recriar: bool = False   # apaga o destino existente com a mesma URL e cria outro (gera segredo novo)
+
+@api.post("/admin/stripe/criar-webhook")
+async def criar_webhook_stripe(body: CriarWebhookIn, request: Request, current=Depends(get_current_user)):
+    """Cria o webhook no Stripe pela API (alternativa à tela do Stripe). O segredo whsec_ só é
+    devolvido na criação: copie-o para STRIPE_WEBHOOK_SECRET no Render."""
+    require_superadmin(current)
+    _require_stripe()
+    url = _url_webhook(request)
+    try:
+        existentes = await asyncio.to_thread(lambda: stripe.WebhookEndpoint.list(limit=100).data)
+        mesmos = [h for h in existentes if _sg(h, "url") == url]
+        if mesmos and not body.recriar:
+            return {"ok": False, "ja_existe": True, "url": url,
+                    "mensagem": "Já existe um webhook para este endereço. O Stripe só mostra o segredo na criação: "
+                                "se você não tem o whsec_ dele, use 'Recriar' (o antigo é apagado e um novo é criado)."}
+        for h in mesmos:
+            await asyncio.to_thread(lambda hid=_sg(h, "id"): stripe.WebhookEndpoint.delete(hid))
+        novo = await asyncio.to_thread(lambda: stripe.WebhookEndpoint.create(
+            url=url, enabled_events=EVENTOS_WEBHOOK, description="OmniRepMax — assinaturas"))
+    except stripe.error.PermissionError:
+        raise HTTPException(403, "A chave do Stripe não tem permissão para criar webhooks. Use a Secret key (sk_...).")
+    except stripe.error.StripeError as e:
+        raise HTTPException(502, f"O Stripe recusou: {getattr(e, 'user_message', None) or str(e)[:200]}")
+    await _log_auditoria(current, "stripe_webhook_criado", "stripe", _sg(novo, "id") or "-", extra={"url": url, "recriado": bool(mesmos)})
+    return {"ok": True, "url": url, "segredo": _sg(novo, "secret"), "eventos": EVENTOS_WEBHOOK,
+            "modo": "produção" if "_live_" in STRIPE_SECRET_KEY else "teste"}
 
 # ------------------------------------------------------------
 # ✅ Cron diário: avisos de fim de teste (acionar 1x/dia com WEBHOOK_CRON_SECRET)

@@ -77,6 +77,17 @@ export default function Admin() {
 
   const [configurando, setConfigurando] = useState(false);
   const [acoesStripe, setAcoesStripe] = useState([]);
+  const [webhookNovo, setWebhookNovo] = useState(null);
+  const criarWebhook = async (recriar = false) => {
+    if (recriar && !window.confirm("Recriar o webhook? O atual será apagado no Stripe e um novo segredo será gerado (você terá que atualizar o Render).")) return;
+    setConfigurando(true);
+    try {
+      const r = await api.post("/admin/stripe/criar-webhook", { recriar });
+      if (r.data.ja_existe) { toast.info(r.data.mensagem, { duration: 9000 }); setWebhookNovo({ jaExiste: true, url: r.data.url }); }
+      else { setWebhookNovo(r.data); toast.success("Webhook criado no Stripe!"); }
+    } catch (e) { toast.error(e.response?.data?.detail || "Não foi possível criar o webhook."); }
+    finally { setConfigurando(false); }
+  };
   const configurarPlanos = async () => {
     if (!window.confirm("Configurar os 3 planos e o portal do cliente na sua conta Stripe? Preços existentes com o mesmo valor são aproveitados; o que faltar é criado.")) return;
     setConfigurando(true);
@@ -343,6 +354,34 @@ export default function Admin() {
               <Button onClick={configurarPlanos} disabled={configurando} className="bg-[#075BFF] hover:bg-blue-600 shrink-0">
                 {configurando && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Configurar agora
               </Button>
+            </div>
+          )}
+          {(diag?.pode_criar_webhook || webhookNovo) && (
+            <div className="rounded-2xl border border-[#075BFF]/30 bg-[#075BFF]/5 p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-sm">
+                  <p className="font-bold text-slate-900 dark:text-white">Criar webhook automaticamente</p>
+                  <p className="text-slate-600 dark:text-slate-300">Cria no Stripe o destino com os 7 eventos, sem usar a tela de webhooks do Stripe.</p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <Button onClick={() => criarWebhook(false)} disabled={configurando} className="bg-[#075BFF] hover:bg-blue-600">
+                    {configurando && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Criar webhook
+                  </Button>
+                  {webhookNovo?.jaExiste && <Button variant="outline" onClick={() => criarWebhook(true)} disabled={configurando}>Recriar</Button>}
+                </div>
+              </div>
+              {webhookNovo?.segredo && (
+                <div className="rounded-xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-500/40 p-3 text-sm space-y-2">
+                  <p className="font-semibold text-amber-700 dark:text-amber-300">Copie agora: o Stripe mostra este segredo uma única vez.</p>
+                  <div className="flex gap-2">
+                    <code className="flex-1 min-w-0 break-all bg-slate-100 dark:bg-slate-800 rounded px-2 py-1.5 text-xs">{webhookNovo.segredo}</code>
+                    <Button size="sm" variant="outline" onClick={() => { navigator.clipboard?.writeText(webhookNovo.segredo); toast.success("Copiado!"); }}>Copiar</Button>
+                  </div>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    No Render → Environment, cole em <b>STRIPE_WEBHOOK_SECRET</b> e use <b>Save, rebuild and deploy</b>. Depois clique em "Conferir de novo".
+                  </p>
+                </div>
+              )}
             </div>
           )}
           {acoesStripe.length > 0 && (
