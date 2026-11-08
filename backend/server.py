@@ -3709,7 +3709,16 @@ async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
         kwargs["automatic_tax"] = {"enabled": True}
 
     try:
-        session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
+        try:
+            session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
+        except stripe.error.InvalidRequestError as e:
+            # cliente criado no modo TESTE não existe no modo PRODUÇÃO (e vice-versa): recomeça pelo e-mail
+            if "customer" in kwargs and "No such customer" in str(e):
+                await db.users.update_one({"id": conta["id"]}, {"$unset": {"stripe_customer_id": "", "stripe_subscription_id": ""}})
+                kwargs.pop("customer"); kwargs["customer_email"] = conta["email"]
+                session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
+            else:
+                raise
     except stripe.error.StripeError as e:
         logger.error(f"Stripe Checkout falhou: {e}")
         raise HTTPException(400, getattr(e, "user_message", None) or "Não foi possível iniciar o pagamento.")
@@ -3771,6 +3780,12 @@ async def billing_portal(current=Depends(get_current_user)):
     try:
         sess = await asyncio.to_thread(lambda: stripe.billing_portal.Session.create(
             customer=cid, return_url=f"{FRONTEND_URL}/planos", locale="pt-BR"))
+    except stripe.error.InvalidRequestError as e:
+        if "No such customer" in str(e):
+            await db.users.update_one({"id": conta["id"]}, {"$unset": {"stripe_customer_id": "", "stripe_subscription_id": ""}})
+            raise HTTPException(400, "Sua assinatura anterior era de teste e não existe mais. Escolha um plano para assinar.")
+        logger.error(f"Stripe portal falhou: {e}")
+        raise HTTPException(400, "Não foi possível abrir o portal de assinatura. Fale com o suporte.")
     except stripe.error.StripeError as e:
         logger.error(f"Stripe portal falhou: {e}")
         raise HTTPException(400, "Não foi possível abrir o portal de assinatura. Fale com o suporte.")
