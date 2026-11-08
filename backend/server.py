@@ -15,6 +15,12 @@ import jwt as pyjwt
 import asyncio
 import csv
 import io
+import time
+import html
+import secrets
+import hashlib
+import urllib.request
+from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Any, Dict
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, Header, BackgroundTasks
@@ -22,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
+from pymongo.errors import DocumentTooLarge, DuplicateKeyError
 from pydantic import BaseModel, Field, EmailStr
 import stripe
 
@@ -32,12 +39,32 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-JWT_SECRET = os.environ.get('JWT_SECRET', 'change-me')
+APP_ENV = os.environ.get('APP_ENV', 'prod')
+IS_PROD = APP_ENV == 'prod'
+
+# ✅ SEGURANÇA: sem segredo padrão em produção. Se faltar, o servidor NÃO sobe.
+JWT_SECRET = os.environ.get('JWT_SECRET', '')
+if not JWT_SECRET or JWT_SECRET == 'change-me':
+    if IS_PROD:
+        raise RuntimeError(
+            "JWT_SECRET não definido. Gere um com: python -c \"import secrets; print(secrets.token_urlsafe(48))\" "
+            "e configure no Render antes de subir."
+        )
+    JWT_SECRET = 'dev-only-insecure-secret-nao-use-em-producao'
 JWT_ALGO = 'HS256'
 MAX_LOGO = 700_000
 
-APP_ENV = os.environ.get('APP_ENV', 'prod')
-IS_PROD = APP_ENV == 'prod'
+# ✅ Superadmin = dono da plataforma (vê leads, feedbacks e backups de TODOS os tenants).
+# Diferente do "admin" de cada empresa cliente, que só enxerga o próprio tenant.
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip().lower()
+SUPERADMIN_EMAILS = {e.strip().lower() for e in os.environ.get('SUPERADMIN_EMAILS', '').split(',') if e.strip()}
+if ADMIN_EMAIL:
+    SUPERADMIN_EMAILS.add(ADMIN_EMAIL)
+
+# ✅ E-mail transacional (Resend)
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://www.omnirepmax.com.br').rstrip('/')
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+EMAIL_FROM = os.environ.get('EMAIL_FROM', 'OmniRepMax <nao-responda@omnirepmax.com.br>')
 
 # ✅ CORS: domínios de produção SEMPRE liberados; a env ALLOWED_ORIGINS soma (não substitui).
 # rstrip("/") evita erro clássico de "https://site.com.br/" na variável de ambiente.
@@ -53,12 +80,16 @@ ALLOWED_ORIGINS = sorted({
     if o.strip()
 })
 
-app = FastAPI(title="OMNIREPMAX API", version="2.2.1")
+app = FastAPI(title="OMNIREPMAX API", version="2.4.0")
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("omnirepmax")
 logger.info(f"CORS liberado para: {ALLOWED_ORIGINS}")
+if IS_PROD and not RESEND_API_KEY:
+    logger.warning("RESEND_API_KEY não definido: e-mails de senha e verificação NÃO serão enviados.")
+if IS_PROD and not SUPERADMIN_EMAILS:
+    logger.warning("Nenhum superadmin configurado (ADMIN_EMAIL/SUPERADMIN_EMAILS): painel de leads ficará inacessível.")
 
 @app.get("/health")
 async def health_root():
@@ -102,6 +133,7 @@ def make_token(user: dict) -> str:
         "sub": user["id"], "email": user["email"],
         "role": user.get("role", "representante"),
         "tenant_id": user.get("tenant_id", user["id"]),
+        "iat": now_utc(),
         "exp": now_utc() + timedelta(days=7), "type": "access"
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
@@ -112,6 +144,115 @@ def clean_doc(doc: dict) -> dict:
 
 def tid_of(current: dict) -> str:
     return current.get("tenant_id") or current["id"]
+
+# ------------------------------------------------------------
+# ✅ Superadmin (dono da plataforma)
+# ------------------------------------------------------------
+def is_superadmin(user: dict) -> bool:
+    return (user.get("email") or "").lower() in SUPERADMIN_EMAILS
+
+def require_superadmin(current: dict):
+    if not is_superadmin(current):
+        raise HTTPException(403, "Acesso restrito à administração da plataforma.")
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+# ------------------------------------------------------------
+# ✅ Rate limit em memória (1 instância no Render). Com várias instâncias, trocar por Redis.
+# ------------------------------------------------------------
+_RL_BUCKETS: Dict[str, deque] = defaultdict(deque)
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "desconhecido"
+
+def _rl_prune(q: deque, window: int, now: float):
+    while q and now - q[0] > window:
+        q.popleft()
+
+def _rl_check(key: str, limit: int, window: int):
+    """Levanta 429 se `key` já atingiu `limit` eventos na janela (segundos). Não registra."""
+    now = time.monotonic()
+    q = _RL_BUCKETS[key]
+    _rl_prune(q, window, now)
+    if len(q) >= limit:
+        retry = int(window - (now - q[0])) + 1
+        raise HTTPException(429, f"Muitas tentativas. Tente novamente em {retry}s.", headers={"Retry-After": str(retry)})
+
+def _rl_add(key: str):
+    _RL_BUCKETS[key].append(time.monotonic())
+    if len(_RL_BUCKETS) > 20_000:  # evita crescer sem limite
+        for k in [k for k, q in _RL_BUCKETS.items() if not q][:10_000]:
+            _RL_BUCKETS.pop(k, None)
+
+def _rl_hit(key: str, limit: int, window: int):
+    _rl_check(key, limit, window)
+    _rl_add(key)
+
+# ------------------------------------------------------------
+# ✅ E-mail transacional via Resend (stdlib, sem dependência nova)
+# ------------------------------------------------------------
+def _send_email_sync(to: str, subject: str, html_body: str) -> bool:
+    if not RESEND_API_KEY:
+        logger.error(f"E-mail NÃO enviado para {to} (RESEND_API_KEY ausente): {subject}")
+        return False
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps({"from": EMAIL_FROM, "to": [to], "subject": subject, "html": html_body}).encode(),
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "omnirepmax-api/2.3",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            ok = 200 <= r.status < 300
+            if not ok:
+                logger.error(f"Resend respondeu {r.status} para {to}")
+            return ok
+    except Exception as e:
+        logger.error(f"Falha ao enviar e-mail para {to}: {e}")
+        return False
+
+async def send_email(to: str, subject: str, html_body: str) -> bool:
+    return await asyncio.to_thread(_send_email_sync, to, subject, html_body)
+
+def _email_layout(titulo: str, paragrafos: List[str], cta_label: str, cta_url: str, rodape: str = "") -> str:
+    corpo = "".join(f'<p style="margin:0 0 16px;color:#334155;font-size:15px;line-height:1.6">{p}</p>' for p in paragrafos)
+    return f"""<!doctype html><html><body style="margin:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px"><tr><td align="center">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:12px;padding:32px">
+<tr><td>
+<div style="font-size:20px;font-weight:bold;color:#0f172a;margin-bottom:4px">OMNIREP<span style="color:#075BFF">MAX</span></div>
+<h1 style="font-size:20px;color:#0f172a;margin:24px 0 16px">{html.escape(titulo)}</h1>
+{corpo}
+<p style="margin:24px 0"><a href="{html.escape(cta_url, quote=True)}" style="background:#075BFF;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;display:inline-block">{html.escape(cta_label)}</a></p>
+<p style="margin:0;color:#64748b;font-size:12px;line-height:1.5">Se o botão não funcionar, copie este link no navegador:<br><span style="word-break:break-all">{html.escape(cta_url)}</span></p>
+{f'<p style="margin:16px 0 0;color:#64748b;font-size:12px">{rodape}</p>' if rodape else ''}
+</td></tr></table></td></tr></table></body></html>"""
+
+async def _enviar_verificacao(user: dict) -> None:
+    token = secrets.token_urlsafe(32)
+    await db.email_verifications.update_many({"user_id": user["id"], "used": False}, {"$set": {"used": True}})
+    await db.email_verifications.insert_one({
+        "token_hash": _hash_token(token), "user_id": user["id"],
+        "expires_at": iso(now_utc() + timedelta(hours=48)), "used": False,
+        "created_at": iso(now_utc()),
+    })
+    link = f"{FRONTEND_URL}/verificar-email?token={token}"
+    nome = html.escape(user.get("name") or "")
+    await send_email(user["email"], "Confirme seu e-mail no OmniRepMax", _email_layout(
+        "Confirme seu e-mail",
+        [f"Olá{', ' + nome if nome else ''}! Seu teste grátis de 7 dias no OmniRepMax já começou.",
+         "Confirme seu e-mail para garantir que você vai receber avisos de senha e de cobrança."],
+        "Confirmar e-mail", link,
+        "O link vale por 48 horas. Se você não criou esta conta, ignore este e-mail.",
+    ))
 
 def _parse_date(s):
     if not s: return None
@@ -166,8 +307,108 @@ async def get_current_user(request: Request) -> dict:
 
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user: raise HTTPException(401, "Usuário não encontrado")
+
+    # ✅ Sessões emitidas antes da última troca de senha deixam de valer
+    pwd_changed = _parse_date(user.get("password_changed_at"))
+    iat = payload.get("iat")
+    if pwd_changed and iat is not None and int(iat) < int(pwd_changed.timestamp()):
+        raise HTTPException(401, "Sessão expirada. Faça login novamente.")
+
     user["tenant_id"] = user.get("tenant_id") or user["id"]
+    user["is_superadmin"] = is_superadmin(user)
     return user
+
+# ------------------------------------------------------------
+# ✅ ASSINATURA: planos, limites e controle de acesso
+# ------------------------------------------------------------
+# Preços precisam ser IGUAIS aos cadastrados no Stripe (lookup_key de cada preço mensal).
+PLANS = [
+    {"id": "solo", "name": "Solo", "lookup_key": "omnirepmax_solo_monthly", "price_brl": 39,
+     "descricao": "Para quem está começando.",
+     "features": ["Até 2 representadas", "Clientes e produtos ilimitados", "Funil Kanban e agenda",
+                  "Pedidos, faturamento e comissões", "Contas a pagar e a receber", "Suporte por e-mail"]},
+    {"id": "pro", "name": "Profissional", "lookup_key": "omnirepmax_pro_monthly", "price_brl": 69,
+     "featured": True, "descricao": "Para representações em crescimento.",
+     "features": ["Tudo do Solo", "Representadas ilimitadas", "MAX AI — assistente com IA",
+                  "Importação de XML da NF-e", "Suporte prioritário"]},
+    {"id": "equipe", "name": "Equipe", "lookup_key": "omnirepmax_equipe_monthly", "price_brl": 99,
+     "descricao": "Para operações maiores.",
+     "features": ["Tudo do Profissional", "Onboarding assistido", "Suporte por WhatsApp",
+                  "Múltiplos usuários e perfis (em breve)"]},
+]
+PLANOS_PAGOS = {p["id"] for p in PLANS}
+# Status do Stripe que liberam uso. past_due = cartão recusado, Stripe ainda está tentando cobrar.
+# "cortesia" = liberado manualmente pelo superadmin (pilotos, parceiros).
+STATUS_OK = {"active", "trialing", "past_due", "cortesia"}
+
+# None = ilimitado
+PLAN_LIMITS = {
+    "trial":  {"representadas": None, "max_ai": True,  "xml": True},   # teste = experimenta tudo
+    "solo":   {"representadas": 2,    "max_ai": False, "xml": False},
+    "pro":    {"representadas": None, "max_ai": True,  "xml": True},
+    "equipe": {"representadas": None, "max_ai": True,  "xml": True},
+}
+
+def _plano_por_lookup(lookup_key: Optional[str]) -> Optional[str]:
+    return next((p["id"] for p in PLANS if p["lookup_key"] == lookup_key), None)
+
+async def _conta_dona(user: dict) -> dict:
+    """A assinatura pertence ao dono do tenant (hoje 1 usuário = 1 tenant)."""
+    tid = user.get("tenant_id")
+    if tid and tid != user.get("id"):
+        dono = await db.users.find_one({"id": tid}, {"_id": 0, "password_hash": 0})
+        if dono:
+            return dono
+    return user
+
+def _situacao_assinatura(conta: dict, user: Optional[dict] = None) -> dict:
+    if user is not None and is_superadmin(user):
+        return {"acesso": "ativo", "plano": "pro", "status": "superadmin"}
+    now = now_utc()
+    plan = conta.get("plan") or "trial"
+    status = conta.get("subscription_status")
+    if status == "cortesia":
+        ate = _parse_date(conta.get("cortesia_ate"))
+        if ate and ate < now:
+            return {"acesso": "somente_leitura", "plano": plan, "status": status, "motivo": "assinatura_inativa"}
+    if plan in PLANOS_PAGOS and status in STATUS_OK:
+        return {"acesso": "ativo", "plano": plan, "status": status,
+                "aviso": "pagamento_pendente" if status == "past_due" else None}
+    if plan == "trial":
+        te = _parse_date(conta.get("trial_ends_at"))
+        if te is None:  # conta antiga sem data de trial: 7 dias a partir do cadastro
+            criado = _parse_date(conta.get("created_at")) or now
+            te = criado + timedelta(days=7)
+        if te > now:
+            dias = int((te - now).total_seconds() // 86400) + 1
+            return {"acesso": "ativo", "plano": "trial", "status": "trial", "dias_restantes": dias}
+        return {"acesso": "somente_leitura", "plano": "trial", "status": "trial", "motivo": "trial_expirado"}
+    return {"acesso": "somente_leitura", "plano": plan, "status": status, "motivo": "assinatura_inativa"}
+
+MSG_BLOQUEIO = {
+    "trial_expirado": "Seu período de teste terminou. Você ainda pode consultar e exportar seus dados; "
+                      "para voltar a cadastrar e editar, escolha um plano em Planos.",
+    "assinatura_inativa": "Sua assinatura está inativa. Você ainda pode consultar e exportar seus dados; "
+                          "para voltar a cadastrar e editar, reative em Planos.",
+}
+
+async def get_active_user(request: Request, current=Depends(get_current_user)) -> dict:
+    """Auth + assinatura. Sem assinatura ativa a conta fica SOMENTE LEITURA:
+    GET continua liberado (consultar/exportar dados), escrita retorna 402."""
+    conta = await _conta_dona(current)
+    sit = _situacao_assinatura(conta, current)
+    current["assinatura"] = sit
+    if sit["acesso"] != "ativo" and request.method not in ("GET", "HEAD", "OPTIONS"):
+        raise HTTPException(402, MSG_BLOQUEIO.get(sit.get("motivo"), MSG_BLOQUEIO["assinatura_inativa"]))
+    return current
+
+def _limites(current: dict) -> dict:
+    plano = (current.get("assinatura") or {}).get("plano") or "trial"
+    return PLAN_LIMITS.get(plano, PLAN_LIMITS["solo"])
+
+def require_feature(current: dict, feature: str, nome: str):
+    if not _limites(current).get(feature):
+        raise HTTPException(402, f"{nome} está disponível a partir do plano Profissional. Faça upgrade em Planos.")
 
 async def t_list(name: str, current: dict, filters: Optional[dict] = None, sort_key: str = "created_at", limit: int = 1000):
     q: Dict[str, Any] = {"tenant_id": tid_of(current)}
@@ -515,7 +756,8 @@ def set_cookies(response: Response, token: str):
     )
 
 @api.post("/auth/signup")
-async def signup(body: SignupIn, response: Response):
+async def signup(body: SignupIn, response: Response, request: Request, background: BackgroundTasks):
+    _rl_hit(f"signup:ip:{_client_ip(request)}", 5, 3600)
     if len(body.password) < 8:
         raise HTTPException(400, "Senha deve ter pelo menos 8 caracteres")
     email = body.email.lower()
@@ -529,13 +771,15 @@ async def signup(body: SignupIn, response: Response):
         "name": body.name,
         "empresa": body.empresa or "",
         "telefone": body.telefone or "",
-        "role": "admin",
+        "role": "admin",  # admin do PRÓPRIO tenant (não é superadmin)
         "plan": "trial",
         "trial_ends_at": iso(now_utc() + timedelta(days=7)),
+        "email_verified": False,
         "password_hash": hash_pw(body.password),
         "created_at": iso(now_utc()),
     }
     await db.users.insert_one(user)
+    background.add_task(_enviar_verificacao, {k: user[k] for k in ("id", "email", "name")})
 
     await db.leads.insert_one({
         "name": body.name,
@@ -553,15 +797,21 @@ async def signup(body: SignupIn, response: Response):
     return {"user": {k: v for k, v in user.items() if k not in ("password_hash", "_id")}, "token": token}
 
 @api.post("/auth/login")
-async def login(body: LoginIn, response: Response):
+async def login(body: LoginIn, response: Response, request: Request):
     email = body.email.lower()
+    ip = _client_ip(request)
+    # ✅ Limites: 20 tentativas/5 min por IP; 5 FALHAS/15 min por e-mail
+    _rl_hit(f"login:ip:{ip}", 20, 300)
+    _rl_check(f"login:fail:{email}", 5, 900)
     user = await db.users.find_one({"email": email})
     if not user or not verify_pw(body.password, user["password_hash"]):
+        _rl_add(f"login:fail:{email}")
         raise HTTPException(401, "Credenciais inválidas")
     token = make_token(user)
     set_cookies(response, token)
     user = clean_doc(user); user.pop("password_hash", None)
     user["tenant_id"] = user.get("tenant_id") or user["id"]
+    user["is_superadmin"] = is_superadmin(user)
     return {"user": user, "token": token}
 
 @api.get("/auth/me")
@@ -591,56 +841,104 @@ async def logout(response: Response):
     return {"ok": True}
 
 @api.post("/auth/forgot-password")
-async def forgot(body: dict):
-    email = (body.get("email") or "").lower()
-    user = await db.users.find_one({"email": email})
+async def forgot(body: dict, request: Request, background: BackgroundTasks):
+    msg = {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
+    _rl_hit(f"forgot:ip:{_client_ip(request)}", 5, 3600)
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        return msg
+    _rl_hit(f"forgot:email:{email}", 3, 3600)
+    user = await db.users.find_one({"email": email}, {"_id": 0, "id": 1, "email": 1, "name": 1})
     if not user:
-        return {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
-    token = new_id()
+        return msg
+
+    # ✅ token forte, guardado só como hash; tokens anteriores são invalidados
+    token = secrets.token_urlsafe(32)
+    await db.password_resets.update_many({"user_id": user["id"], "used": False}, {"$set": {"used": True}})
     await db.password_resets.insert_one({
-        "token": token, "user_id": user["id"],
-        "expires_at": iso(now_utc() + timedelta(hours=1)), "used": False
+        "token_hash": _hash_token(token), "user_id": user["id"],
+        "expires_at": iso(now_utc() + timedelta(hours=1)), "used": False,
+        "created_at": iso(now_utc()),
     })
+    link = f"{FRONTEND_URL}/reset-password?token={token}"
+    background.add_task(send_email, user["email"], "Redefinição de senha — OmniRepMax", _email_layout(
+        "Redefinir sua senha",
+        ["Recebemos um pedido para redefinir a senha da sua conta no OmniRepMax.",
+         "Clique no botão abaixo para criar uma nova senha."],
+        "Criar nova senha", link,
+        "O link vale por 1 hora. Se você não pediu a troca, ignore este e-mail — sua senha continua a mesma.",
+    ))
     if not IS_PROD:
-        return {"ok": True, "token": token, "message": "DEV: use este token para testar."}
-    return {"ok": True, "message": "Se o e-mail existir, instruções foram enviadas."}
+        return {**msg, "token": token, "dev_link": link}
+    return msg
 
 @api.post("/auth/reset-password")
-async def reset_pw(body: dict):
+async def reset_pw(body: dict, request: Request):
+    _rl_hit(f"reset:ip:{_client_ip(request)}", 10, 3600)
     token = body.get("token"); new_password = body.get("password")
     if not token or not new_password or len(new_password) < 8:
         raise HTTPException(400, "Senha inválida")
-    rec = await db.password_resets.find_one({"token": token, "used": False})
+    rec = await db.password_resets.find_one({"token_hash": _hash_token(token), "used": False})
     if not rec: raise HTTPException(400, "Token inválido")
     exp = _parse_date(rec.get("expires_at"))
     if not exp or exp < now_utc(): raise HTTPException(400, "Token expirado")
-    await db.users.update_one({"id": rec["user_id"]}, {"$set": {"password_hash": hash_pw(new_password)}})
-    await db.password_resets.update_one({"token": token}, {"$set": {"used": True}})
+    await db.users.update_one({"id": rec["user_id"]}, {"$set": {
+        "password_hash": hash_pw(new_password),
+        "password_changed_at": iso(now_utc()),  # derruba sessões antigas
+    }})
+    await db.password_resets.update_one({"_id": rec["_id"]}, {"$set": {"used": True}})
     return {"ok": True}
+
+# ✅ NOVO: verificação de e-mail
+@api.post("/auth/verify-email")
+async def verify_email(body: dict, request: Request):
+    _rl_hit(f"verify:ip:{_client_ip(request)}", 20, 3600)
+    token = (body.get("token") or "").strip()
+    if not token: raise HTTPException(400, "Token inválido")
+    rec = await db.email_verifications.find_one({"token_hash": _hash_token(token), "used": False})
+    if not rec: raise HTTPException(400, "Link inválido ou já utilizado")
+    exp = _parse_date(rec.get("expires_at"))
+    if not exp or exp < now_utc(): raise HTTPException(400, "Link expirado. Peça um novo no sistema.")
+    await db.users.update_one({"id": rec["user_id"]}, {"$set": {"email_verified": True, "email_verified_at": iso(now_utc())}})
+    await db.email_verifications.update_one({"_id": rec["_id"]}, {"$set": {"used": True}})
+    return {"ok": True}
+
+@api.post("/auth/resend-verification")
+async def resend_verification(background: BackgroundTasks, current=Depends(get_current_user)):
+    if current.get("email_verified"):
+        return {"ok": True, "message": "E-mail já confirmado."}
+    _rl_hit(f"resendverif:{current['id']}", 3, 3600)
+    background.add_task(_enviar_verificacao, {k: current.get(k) for k in ("id", "email", "name")})
+    return {"ok": True, "message": "Enviamos um novo link de confirmação."}
 
 # ------------------------------------------------------------
 # Representadas & Documentos
 # ------------------------------------------------------------
 @api.get("/representadas")
-async def get_representadas(current=Depends(get_current_user)):
+async def get_representadas(current=Depends(get_active_user)):
     return await t_list("representadas", current)
 
 @api.post("/representadas")
-async def create_representada(body: RepresentadaIn, current=Depends(get_current_user)):
+async def create_representada(body: RepresentadaIn, current=Depends(get_active_user)):
+    lim = _limites(current)["representadas"]
+    if lim is not None:
+        n = await db.representadas.count_documents({"tenant_id": tid_of(current)})
+        if n >= lim:
+            raise HTTPException(402, f"Seu plano permite até {lim} representadas. Faça upgrade para o Profissional em Planos.")
     data = body.model_dump()
     if data.get("logo") and len(data["logo"]) > MAX_LOGO:
         raise HTTPException(413, "Logo muito grande.")
     return await t_insert("representadas", current, data)
 
 @api.put("/representadas/{rid}")
-async def update_representada(rid: str, body: RepresentadaIn, current=Depends(get_current_user)):
+async def update_representada(rid: str, body: RepresentadaIn, current=Depends(get_active_user)):
     data = body.model_dump()
     if data.get("logo") and len(data["logo"]) > MAX_LOGO:
         raise HTTPException(413, "Logo muito grande.")
     return await t_update("representadas", current, rid, data)
 
 @api.delete("/representadas/{rid}")
-async def del_representada(rid: str, current=Depends(get_current_user)):
+async def del_representada(rid: str, current=Depends(get_active_user)):
     tid = tid_of(current)
     has_pedidos = await db.pedidos.count_documents({"representada_id": rid, "tenant_id": tid})
     if has_pedidos > 0:
@@ -648,7 +946,7 @@ async def del_representada(rid: str, current=Depends(get_current_user)):
     return await t_delete("representadas", current, rid)
 
 @api.post("/representadas/{rid}/documentos")
-async def upload_documento(rid: str, body: DocumentoIn, current=Depends(get_current_user)):
+async def upload_documento(rid: str, body: DocumentoIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     rep = await db.representadas.find_one({"id": rid, "tenant_id": tid})
     if not rep: raise HTTPException(404, "Representada não encontrada")
@@ -663,7 +961,7 @@ async def upload_documento(rid: str, body: DocumentoIn, current=Depends(get_curr
     return {"ok": True, "id": doc["id"]}
 
 @api.get("/representadas/{rid}/documentos")
-async def get_documentos(rid: str, current=Depends(get_current_user)):
+async def get_documentos(rid: str, current=Depends(get_active_user)):
     docs = await db.documentos.find(
         {"tenant_id": tid_of(current), "representada_id": rid},
         {"arquivo_base64": 0, "_id": 0}
@@ -671,13 +969,13 @@ async def get_documentos(rid: str, current=Depends(get_current_user)):
     return docs
 
 @api.get("/documentos/{doc_id}/download")
-async def download_documento(doc_id: str, current=Depends(get_current_user)):
+async def download_documento(doc_id: str, current=Depends(get_active_user)):
     doc = await db.documentos.find_one({"id": doc_id, "tenant_id": tid_of(current)})
     if not doc: raise HTTPException(404, "Documento não encontrado")
     return {"nome": doc["nome"], "arquivo_base64": doc["arquivo_base64"]}
 
 @api.delete("/documentos/{doc_id}")
-async def del_documento(doc_id: str, current=Depends(get_current_user)):
+async def del_documento(doc_id: str, current=Depends(get_active_user)):
     res = await db.documentos.delete_one({"id": doc_id, "tenant_id": tid_of(current)})
     if res.deleted_count == 0: raise HTTPException(404, "Documento não encontrado")
     return {"ok": True}
@@ -686,7 +984,7 @@ async def del_documento(doc_id: str, current=Depends(get_current_user)):
 # Histórico de vigência das regras de comissão
 # ------------------------------------------------------------
 @api.get("/representadas/{rid}/regras-comissao")
-async def listar_regras_comissao(rid: str, current=Depends(get_current_user)):
+async def listar_regras_comissao(rid: str, current=Depends(get_active_user)):
     tid = tid_of(current)
     rep = await db.representadas.find_one({"id": rid, "tenant_id": tid})
     if not rep:
@@ -698,7 +996,7 @@ async def listar_regras_comissao(rid: str, current=Depends(get_current_user)):
     return regras
 
 @api.post("/representadas/{rid}/regras-comissao")
-async def criar_regra_comissao(rid: str, body: RegraComissaoIn, current=Depends(get_current_user)):
+async def criar_regra_comissao(rid: str, body: RegraComissaoIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     rep = await db.representadas.find_one({"id": rid, "tenant_id": tid})
     if not rep:
@@ -757,22 +1055,22 @@ async def criar_regra_comissao(rid: str, body: RegraComissaoIn, current=Depends(
 # Clientes
 # ------------------------------------------------------------
 @api.get("/clientes")
-async def get_clientes(status: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_current_user)):
+async def get_clientes(status: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_active_user)):
     f: Dict[str, Any] = {}
     if status: f["status"] = status
     if representada_id: f["representadas"] = representada_id
     return await t_list("clientes", current, f)
 
 @api.post("/clientes")
-async def create_cliente(body: ClienteIn, current=Depends(get_current_user)):
+async def create_cliente(body: ClienteIn, current=Depends(get_active_user)):
     return await t_insert("clientes", current, body.model_dump())
 
 @api.put("/clientes/{cid}")
-async def update_cliente(cid: str, body: ClienteIn, current=Depends(get_current_user)):
+async def update_cliente(cid: str, body: ClienteIn, current=Depends(get_active_user)):
     return await t_update("clientes", current, cid, body.model_dump())
 
 @api.delete("/clientes/{cid}")
-async def del_cliente(cid: str, current=Depends(get_current_user)):
+async def del_cliente(cid: str, current=Depends(get_active_user)):
     tid = tid_of(current)
     has_pedidos = await db.pedidos.count_documents({"cliente_id": cid, "tenant_id": tid})
     if has_pedidos > 0:
@@ -783,26 +1081,26 @@ async def del_cliente(cid: str, current=Depends(get_current_user)):
 # Produtos
 # ------------------------------------------------------------
 @api.get("/produtos")
-async def get_produtos(representada_id: Optional[str] = None, categoria: Optional[str] = None, current=Depends(get_current_user)):
+async def get_produtos(representada_id: Optional[str] = None, categoria: Optional[str] = None, current=Depends(get_active_user)):
     f: Dict[str, Any] = {}
     if representada_id: f["representada_id"] = representada_id
     if categoria: f["categoria"] = categoria
     return await t_list("produtos", current, f)
 
 @api.post("/produtos")
-async def create_produto(body: ProdutoIn, current=Depends(get_current_user)):
+async def create_produto(body: ProdutoIn, current=Depends(get_active_user)):
     return await t_insert("produtos", current, body.model_dump())
 
 @api.put("/produtos/{pid}")
-async def update_produto(pid: str, body: ProdutoIn, current=Depends(get_current_user)):
+async def update_produto(pid: str, body: ProdutoIn, current=Depends(get_active_user)):
     return await t_update("produtos", current, pid, body.model_dump())
 
 @api.delete("/produtos/{pid}")
-async def del_produto(pid: str, current=Depends(get_current_user)):
+async def del_produto(pid: str, current=Depends(get_active_user)):
     return await t_delete("produtos", current, pid)
 
 @api.post("/produtos/import-txt")
-async def import_txt(body: TXTImportIn, current=Depends(get_current_user)):
+async def import_txt(body: TXTImportIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     criados = 0
     for p in body.produtos:
@@ -930,7 +1228,7 @@ async def _regerar_parcelas_pedido(current: dict, ped: dict) -> dict:
     return resultado
 
 @api.get("/pedidos")
-async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_current_user)):
+async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_active_user)):
     f: Dict[str, Any] = {}
     if status: f["status"] = status
     if cliente_id: f["cliente_id"] = cliente_id
@@ -958,7 +1256,7 @@ async def pedidos_aguardando_faturamento(
     representada_id: Optional[str] = None,
     cliente_id: Optional[str] = None,
     dias_min: int = 0,
-    current=Depends(get_current_user),
+    current=Depends(get_active_user),
 ):
     """
     Pedidos com saldo a faturar. Retorna dias_aguardando desde a criação.
@@ -1001,7 +1299,7 @@ async def pedidos_aguardando_faturamento(
     return result
 
 @api.post("/pedidos")
-async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
+async def create_pedido(body: PedidoIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     data = body.model_dump()
     rep = await db.representadas.find_one({"id": data["representada_id"], "tenant_id": tid}, {"_id": 0})
@@ -1016,7 +1314,7 @@ async def create_pedido(body: PedidoIn, current=Depends(get_current_user)):
     return await t_insert("pedidos", current, data)
 
 @api.put("/pedidos/{pid}")
-async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_current_user)):
+async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     existing = await db.pedidos.find_one({"id": pid, "tenant_id": tid}, {"_id": 0})
     if not existing: raise HTTPException(404, "Pedido não encontrado")
@@ -1058,7 +1356,7 @@ class ParcelasUpdateIn(BaseModel):
     parcelas: List[dict]
 
 @api.patch("/pedidos/{pid}/parcelas")
-async def atualizar_parcelas_pedido(pid: str, body: ParcelasUpdateIn, current=Depends(get_current_user)):
+async def atualizar_parcelas_pedido(pid: str, body: ParcelasUpdateIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     existing = await db.pedidos.find_one({"id": pid, "tenant_id": tid}, {"_id": 0})
     if not existing: raise HTTPException(404, "Pedido não encontrado")
@@ -1093,7 +1391,7 @@ async def atualizar_parcelas_pedido(pid: str, body: ParcelasUpdateIn, current=De
     return atualizado
 
 @api.patch("/pedidos/{pid}/status")
-async def status_pedido(pid: str, body: dict, current=Depends(get_current_user)):
+async def status_pedido(pid: str, body: dict, current=Depends(get_active_user)):
     novo = body.get("status")
     if not novo: raise HTTPException(400, "status obrigatório")
     updates = {"status": novo}
@@ -1101,7 +1399,7 @@ async def status_pedido(pid: str, body: dict, current=Depends(get_current_user))
     return await t_update("pedidos", current, pid, updates)
 
 @api.post("/pedidos/{pid}/faturamento")
-async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(get_current_user)):
+async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not ped: raise HTTPException(404, "Pedido não encontrado")
@@ -1189,7 +1487,7 @@ async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(g
     return {"ok": True, "status": novo_status, "valor_liquido": valor_liquido}
 
 @api.post("/pedidos/{pid}/liquidez")
-async def confirmar_liquidez(pid: str, current=Depends(get_current_user)):
+async def confirmar_liquidez(pid: str, current=Depends(get_active_user)):
     tid = tid_of(current)
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not ped: raise HTTPException(404, "Pedido não encontrado")
@@ -1215,7 +1513,7 @@ async def confirmar_liquidez(pid: str, current=Depends(get_current_user)):
     return {"ok": True, "message": "Comissão liberada."}
 
 @api.delete("/pedidos/{pid}")
-async def del_pedido(pid: str, current=Depends(get_current_user)):
+async def del_pedido(pid: str, current=Depends(get_active_user)):
     tid = tid_of(current)
     paga = await db.comissoes.find_one({"tenant_id": tid, "pedido_id": pid, "status": "recebida"})
     if paga: raise HTTPException(400, "Pedido possui comissão já recebida. Estorne antes de excluir.")
@@ -1225,7 +1523,7 @@ async def del_pedido(pid: str, current=Depends(get_current_user)):
     return await t_delete("pedidos", current, pid)
 
 @api.post("/pedidos/{pid}/cancelar")
-async def cancelar_pedido(pid: str, current=Depends(get_current_user)):
+async def cancelar_pedido(pid: str, current=Depends(get_active_user)):
     tid = tid_of(current)
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not ped:
@@ -1259,46 +1557,46 @@ async def cancelar_pedido(pid: str, current=Depends(get_current_user)):
 # Oportunidades / Visitas
 # ------------------------------------------------------------
 @api.get("/oportunidades")
-async def get_ops(current=Depends(get_current_user)):
+async def get_ops(current=Depends(get_active_user)):
     return await t_list("oportunidades", current)
 
 @api.post("/oportunidades")
-async def create_op(body: OportunidadeIn, current=Depends(get_current_user)):
+async def create_op(body: OportunidadeIn, current=Depends(get_active_user)):
     return await t_insert("oportunidades", current, body.model_dump())
 
 @api.put("/oportunidades/{oid}")
-async def update_op(oid: str, body: OportunidadeIn, current=Depends(get_current_user)):
+async def update_op(oid: str, body: OportunidadeIn, current=Depends(get_active_user)):
     return await t_update("oportunidades", current, oid, body.model_dump())
 
 @api.patch("/oportunidades/{oid}/estagio")
-async def move_op(oid: str, body: dict, current=Depends(get_current_user)):
+async def move_op(oid: str, body: dict, current=Depends(get_active_user)):
     return await t_update("oportunidades", current, oid, {"estagio": body.get("estagio")})
 
 @api.delete("/oportunidades/{oid}")
-async def del_op(oid: str, current=Depends(get_current_user)):
+async def del_op(oid: str, current=Depends(get_active_user)):
     return await t_delete("oportunidades", current, oid)
 
 @api.get("/visitas")
-async def get_visitas(current=Depends(get_current_user)):
+async def get_visitas(current=Depends(get_active_user)):
     return await t_list("visitas", current, sort_key="data")
 
 @api.post("/visitas")
-async def create_visita(body: VisitaIn, current=Depends(get_current_user)):
+async def create_visita(body: VisitaIn, current=Depends(get_active_user)):
     return await t_insert("visitas", current, body.model_dump())
 
 @api.put("/visitas/{vid}")
-async def update_visita(vid: str, body: VisitaIn, current=Depends(get_current_user)):
+async def update_visita(vid: str, body: VisitaIn, current=Depends(get_active_user)):
     return await t_update("visitas", current, vid, body.model_dump())
 
 @api.delete("/visitas/{vid}")
-async def del_visita(vid: str, current=Depends(get_current_user)):
+async def del_visita(vid: str, current=Depends(get_active_user)):
     return await t_delete("visitas", current, vid)
 
 # ------------------------------------------------------------
 # Comissões / Contas a Receber
 # ------------------------------------------------------------
 @api.get("/comissoes")
-async def get_comissoes(status: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_current_user)):
+async def get_comissoes(status: Optional[str] = None, representada_id: Optional[str] = None, current=Depends(get_active_user)):
     f: Dict[str, Any] = {}
     if status: f["status"] = status
     if representada_id: f["representada_id"] = representada_id
@@ -1306,7 +1604,7 @@ async def get_comissoes(status: Optional[str] = None, representada_id: Optional[
 
 # ✅ NOVO: auditoria em alterações de comissão (before/after)
 @api.patch("/comissoes/{cid}")
-async def update_comissao(cid: str, body: ComissaoUpdate, current=Depends(get_current_user)):
+async def update_comissao(cid: str, body: ComissaoUpdate, current=Depends(get_active_user)):
     tid = tid_of(current)
     before = await db.comissoes.find_one({"id": cid, "tenant_id": tid}, {"_id": 0})
     if not before:
@@ -1327,7 +1625,7 @@ async def update_comissao(cid: str, body: ComissaoUpdate, current=Depends(get_cu
     return result
 
 @api.delete("/comissoes/{cid}")
-async def del_comissao(cid: str, current=Depends(get_current_user)):
+async def del_comissao(cid: str, current=Depends(get_active_user)):
     doc = await db.comissoes.find_one({"id": cid, "tenant_id": tid_of(current)})
     if not doc: raise HTTPException(404, "Comissão não encontrada")
     if doc.get("status") == "recebida" or doc.get("valor_recebido", 0) > 0:
@@ -1335,23 +1633,23 @@ async def del_comissao(cid: str, current=Depends(get_current_user)):
     return await t_delete("comissoes", current, cid)
 
 @api.get("/contas-receber")
-async def get_ar(current=Depends(get_current_user)):
+async def get_ar(current=Depends(get_active_user)):
     return await t_list("contas_receber", current, sort_key="vencimento")
 
 @api.post("/contas-receber")
-async def create_ar(body: ARIn, current=Depends(get_current_user)):
+async def create_ar(body: ARIn, current=Depends(get_active_user)):
     return await t_insert("contas_receber", current, body.model_dump())
 
 @api.put("/contas-receber/{rid}")
-async def update_ar(rid: str, body: ARIn, current=Depends(get_current_user)):
+async def update_ar(rid: str, body: ARIn, current=Depends(get_active_user)):
     return await t_update("contas_receber", current, rid, body.model_dump())
 
 @api.delete("/contas-receber/{rid}")
-async def del_ar(rid: str, current=Depends(get_current_user)):
+async def del_ar(rid: str, current=Depends(get_active_user)):
     return await t_delete("contas_receber", current, rid)
 
 @api.post("/contas-receber/{rid}/receber")
-async def receber_comissao(rid: str, body: dict, current=Depends(get_current_user)):
+async def receber_comissao(rid: str, body: dict, current=Depends(get_active_user)):
     tid = tid_of(current)
     ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid})
     if not ar: raise HTTPException(404, "Conta não encontrada")
@@ -1405,7 +1703,7 @@ async def list_recebiveis_industria(
     representada_id: Optional[str] = None,
     cliente_id: Optional[str] = None,
     status: Optional[str] = None,
-    current=Depends(get_current_user),
+    current=Depends(get_active_user),
 ):
     f: Dict[str, Any] = {}
     if representada_id: f["representada_id"] = representada_id
@@ -1414,7 +1712,7 @@ async def list_recebiveis_industria(
     return await t_list("recebiveis_industria", current, f, sort_key="vencimento")
 
 @api.post("/recebiveis-industria")
-async def create_recebivel_industria(body: RecebivelIndustriaIn, current=Depends(get_current_user)):
+async def create_recebivel_industria(body: RecebivelIndustriaIn, current=Depends(get_active_user)):
     tid = tid_of(current)
     rep = await db.representadas.find_one({"id": body.representada_id, "tenant_id": tid})
     if not rep: raise HTTPException(404, "Representada não encontrada")
@@ -1438,7 +1736,7 @@ async def create_recebivel_industria(body: RecebivelIndustriaIn, current=Depends
     return doc
 
 @api.post("/recebiveis-industria/{rid}/receber")
-async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_current_user)):
+async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_active_user)):
     tid = tid_of(current)
     rec = await db.recebiveis_industria.find_one({"id": rid, "tenant_id": tid})
     if not rec: raise HTTPException(404, "Recebível não encontrado")
@@ -1505,7 +1803,7 @@ async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_
     }
 
 @api.delete("/recebiveis-industria/{rid}")
-async def del_recebivel_industria(rid: str, current=Depends(get_current_user)):
+async def del_recebivel_industria(rid: str, current=Depends(get_active_user)):
     rec = await db.recebiveis_industria.find_one({"id": rid, "tenant_id": tid_of(current)}, {"_id": 0})
     if not rec: raise HTTPException(404, "Recebível não encontrado")
     if _to_float(rec.get("valor_recebido")) > 0:
@@ -1520,19 +1818,19 @@ async def del_recebivel_industria(rid: str, current=Depends(get_current_user)):
 # Contas a Pagar
 # ------------------------------------------------------------
 @api.get("/contas-pagar")
-async def get_ap(current=Depends(get_current_user)):
+async def get_ap(current=Depends(get_active_user)):
     return await t_list("contas_pagar", current, sort_key="vencimento")
 
 @api.post("/contas-pagar")
-async def create_ap(body: APIn, current=Depends(get_current_user)):
+async def create_ap(body: APIn, current=Depends(get_active_user)):
     return await t_insert("contas_pagar", current, body.model_dump())
 
 @api.put("/contas-pagar/{pid}")
-async def update_ap(pid: str, body: APIn, current=Depends(get_current_user)):
+async def update_ap(pid: str, body: APIn, current=Depends(get_active_user)):
     return await t_update("contas_pagar", current, pid, body.model_dump())
 
 @api.delete("/contas-pagar/{pid}")
-async def del_ap(pid: str, current=Depends(get_current_user)):
+async def del_ap(pid: str, current=Depends(get_active_user)):
     return await t_delete("contas_pagar", current, pid)
 
 # ------------------------------------------------------------
@@ -1545,7 +1843,7 @@ def _in_year(s, y):
     d = _parse_date(s); return bool(d and d.year == y)
 
 @api.get("/dashboard")
-async def dashboard(current=Depends(get_current_user)):
+async def dashboard(current=Depends(get_active_user)):
     pedidos, reps, comissoes, ap, ar, clientes, visitas, ops, faturamentos = await asyncio.gather(
         t_list("pedidos", current), t_list("representadas", current), t_list("comissoes", current),
         t_list("contas_pagar", current), t_list("contas_receber", current), t_list("clientes", current),
@@ -1679,7 +1977,7 @@ async def dashboard(current=Depends(get_current_user)):
 # Insights & IA
 # ------------------------------------------------------------
 @api.get("/insights/regras")
-async def insights_regras(current=Depends(get_current_user)):
+async def insights_regras(current=Depends(get_active_user)):
     now = now_utc()
     clientes, pedidos, reps = await asyncio.gather(
         t_list("clientes", current), t_list("pedidos", current), t_list("representadas", current)
@@ -1762,8 +2060,12 @@ async def _build_ai_context(current: dict) -> str:
     }
     return json.dumps(ctx, ensure_ascii=False, default=str)
 
+AI_LIMIT_POR_HORA = int(os.environ.get("AI_LIMIT_POR_HORA", "60"))
+
 @api.post("/max-ai/chat")
-async def max_ai(body: ChatIn, current=Depends(get_current_user)):
+async def max_ai(body: ChatIn, current=Depends(get_active_user)):
+    require_feature(current, "max_ai", "O MAX AI")
+    _rl_hit(f"ai:{tid_of(current)}", AI_LIMIT_POR_HORA, 3600)
     try: from groq import Groq
     except ImportError: return {"reply": "Módulo 'groq' não instalado.", "error": True}
     key = os.environ.get("GROQ_API_KEY")
@@ -1789,7 +2091,9 @@ async def max_ai(body: ChatIn, current=Depends(get_current_user)):
         return {"reply": f"Erro na Groq: {e}", "error": True}
 
 @api.post("/insights/ai")
-async def insights_ai(current=Depends(get_current_user)):
+async def insights_ai(current=Depends(get_active_user)):
+    require_feature(current, "max_ai", "Os insights com IA")
+    _rl_hit(f"ai:{tid_of(current)}", AI_LIMIT_POR_HORA, 3600)
     try: from groq import Groq
     except ImportError: return {"insights": [], "erro": "Módulo 'groq' não instalado."}
     key = os.environ.get("GROQ_API_KEY")
@@ -1813,7 +2117,7 @@ async def insights_ai(current=Depends(get_current_user)):
 # Busca global / XML
 # ------------------------------------------------------------
 @api.get("/search")
-async def global_search(q: str = Query(..., min_length=1), current=Depends(get_current_user)):
+async def global_search(q: str = Query(..., min_length=1), current=Depends(get_active_user)):
     q = q.strip()
     if not q: raise HTTPException(400, "Query vazia")
     ql = q.lower()
@@ -2021,7 +2325,8 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
     return res
 
 @api.post("/xml/import")
-async def import_xml(body: XMLImportIn, current=Depends(get_current_user)):
+async def import_xml(body: XMLImportIn, current=Depends(get_active_user)):
+    require_feature(current, "xml", "A importação de XML")
     if not body.xml_content or "<" not in body.xml_content:
         raise HTTPException(400, "Conteúdo XML inválido")
     parsed = _parse_nfe(body.xml_content)
@@ -2041,14 +2346,14 @@ async def import_xml(body: XMLImportIn, current=Depends(get_current_user)):
     return {**parsed, **match_info}
 
 @api.get("/xml/historico")
-async def xml_historico(current=Depends(get_current_user)):
+async def xml_historico(current=Depends(get_active_user)):
     return await t_list("xml_files", current)
 
 # ------------------------------------------------------------
 # Relatórios Avançados
 # ------------------------------------------------------------
 @api.get("/relatorios/geral")
-async def relatorio_geral(current=Depends(get_current_user)):
+async def relatorio_geral(current=Depends(get_active_user)):
     pedidos, reps, clientes, comissoes, ar, faturas, produtos, visitas = await asyncio.gather(
         t_list("pedidos", current), t_list("representadas", current), t_list("clientes", current),
         t_list("comissoes", current), t_list("contas_receber", current), t_list("faturamentos", current),
@@ -2167,21 +2472,18 @@ async def create_feedback(body: FeedBackIn, current=Depends(get_current_user)):
 
 @api.get("/admin/feedbacks")
 async def list_feedbacks(current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores podem ver os feedbacks.")
+    require_superadmin(current)
     feedbacks = await db.feedbacks.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     return feedbacks
 
 @api.get("/leads")
 async def get_leads(current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores")
+    require_superadmin(current)
     return await db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 @api.get("/leads/export")
 async def export_leads_csv(current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(403, "Apenas administradores")
+    require_superadmin(current)
     leads = await db.leads.find({}, {"_id": 0}).to_list(1000)
     output = io.StringIO()
     writer = csv.writer(output, delimiter=';')
@@ -2200,7 +2502,7 @@ async def export_leads_csv(current=Depends(get_current_user)):
 # Recálculo de comissões antigas — ✅ NOVO: usa vigência histórica
 # ------------------------------------------------------------
 @api.post("/admin/recalcular-comissoes")
-async def recalcular_comissoes(current=Depends(get_current_user)):
+async def recalcular_comissoes(current=Depends(get_active_user)):
     """
     Recalcula comissões históricas usando a regra VIGENTE NA DATA DO FATURAMENTO
     de cada comissão (não a regra atual da representada).
@@ -2307,7 +2609,14 @@ async def _run_backup(run_id: str):
             for u in docs: u.pop("password_hash", None)
         snapshot["collections"][name] = docs; total += len(docs)
     snapshot["total_documents"] = total
-    await db.backups.insert_one(snapshot)
+    try:
+        await db.backups.insert_one(snapshot)
+    except DocumentTooLarge:
+        logger.error(
+            f"Backup {run_id} excedeu 16 MB ({total} documentos) e NÃO foi salvo. "
+            "Use os backups nativos do MongoDB Atlas."
+        )
+        return
     old = db.backups.find({}, {"id": 1, "created_at": 1}).sort("created_at", -1).skip(14)
     to_del = [d["id"] async for d in old if d.get("id")]
     if to_del: await db.backups.delete_many({"id": {"$in": to_del}})
@@ -2331,91 +2640,122 @@ async def _run_backup_wrapper(run_id: str):
 
 @api.get("/backups")
 async def list_backups(current=Depends(get_current_user)):
-    if current.get("role") != "admin": raise HTTPException(403, "Apenas administradores")
+    require_superadmin(current)
     return await db.backups.find({}, {"_id": 0, "collections": 0}).sort("created_at", -1).to_list(50)
 
 @api.post("/backups/run")
 async def run_backup_now(background: BackgroundTasks, current=Depends(get_current_user)):
-    if current.get("role") != "admin": raise HTTPException(403, "Apenas administradores")
+    require_superadmin(current)
     run_id = new_id()
     background.add_task(_run_backup_wrapper, run_id)
     return {"status": "accepted", "run_id": run_id}
 
-stripe.api_key = os.environ.get("STRIPE_SECRET_KEY") or "sk_test_emergent"
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+stripe.api_key = STRIPE_SECRET_KEY or None
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if IS_PROD and STRIPE_SECRET_KEY and not STRIPE_WEBHOOK_SECRET:
+    logger.warning("STRIPE_WEBHOOK_SECRET ausente: pagamentos não vão atualizar as assinaturas.")
 
-PLANS = [
-    {"id": "solo", "name": "Solo", "lookup_key": "omnirepmax_solo_monthly", "price_brl": 69,
-     "features": ["Até 2 representadas", "Clientes e produtos ilimitados", "Funil Kanban",
-                  "Pedidos e comissões", "1 usuário", "Suporte por e-mail"]},
-    {"id": "pro", "name": "Profissional", "lookup_key": "omnirepmax_pro_monthly", "price_brl": 99,
-     "featured": True,
-     "features": ["Representadas ilimitadas", "MAX AI ilimitado", "Importação XML NF-e",
-                  "Contas a pagar/receber", "Até 5 usuários", "Backup diário automático", "Suporte prioritário"]},
-    {"id": "equipe", "name": "Equipe", "lookup_key": "omnirepmax_equipe_monthly", "price_brl": 129,
-     "features": ["Tudo do Profissional", "Usuários ilimitados", "Perfis Admin/Supervisor/Financeiro",
-                  "Relatórios exportáveis", "API para integração", "Onboarding assistido", "Suporte por WhatsApp"]},
-]
+def _require_stripe():
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(503, "Pagamentos ainda não configurados.")
+
+def _origem_segura(origin_url: Optional[str]) -> str:
+    """Evita redirecionar o checkout para domínio de terceiros."""
+    o = (origin_url or "").strip().rstrip("/")
+    return o if o in ALLOWED_ORIGINS else FRONTEND_URL
+
+def _ts_para_iso(ts) -> Optional[str]:
+    try: return iso(datetime.fromtimestamp(int(ts), tz=timezone.utc)) if ts else None
+    except Exception: return None
 
 @api.get("/plans")
 async def get_plans(): return {"plans": PLANS, "trial_days": 7}
 
 @api.get("/subscriptions/me")
 async def my_subscription(current=Depends(get_current_user)):
-    user = await db.users.find_one({"id": current["id"]}, {"_id": 0, "password_hash": 0})
-    now = now_utc()
-    trial_ends = user.get("trial_ends_at")
-    plan = user.get("plan", "trial")
-    trial_days_left = None
-    is_trial = plan == "trial" and bool(trial_ends)
-    if trial_ends and is_trial:
-        te = _parse_date(trial_ends)
-        trial_days_left = max(0, (te - now).days) if te else 0
-    return {"plan": plan, "subscription_status": user.get("subscription_status"),
-            "trial_ends_at": trial_ends, "trial_days_left": trial_days_left,
-            "is_trial": is_trial, "stripe_customer_id": user.get("stripe_customer_id"),
-            "stripe_subscription_id": user.get("stripe_subscription_id")}
+    conta = await _conta_dona(current)
+    sit = _situacao_assinatura(conta, current)
+    n_rep = await db.representadas.count_documents({"tenant_id": tid_of(current)})
+    plan = conta.get("plan") or "trial"
+    return {
+        "plan": plan,
+        "plano_efetivo": sit["plano"],
+        "subscription_status": conta.get("subscription_status"),
+        "trial_ends_at": conta.get("trial_ends_at"),
+        "trial_days_left": sit.get("dias_restantes"),
+        "is_trial": plan == "trial",
+        "acesso": sit["acesso"],
+        "motivo": sit.get("motivo"),
+        "aviso": sit.get("aviso"),
+        "cancel_at_period_end": bool(conta.get("cancel_at_period_end")),
+        "current_period_end": conta.get("current_period_end"),
+        "limites": PLAN_LIMITS.get(sit["plano"], PLAN_LIMITS["solo"]),
+        "uso": {"representadas": n_rep},
+        "tem_assinatura_stripe": bool(conta.get("stripe_customer_id")),
+        "pagamentos_configurados": bool(STRIPE_SECRET_KEY),
+        "is_superadmin": is_superadmin(current),
+    }
 
-class CheckoutIn(BaseModel): lookup_key: str; origin_url: str
-
-_TAX_MODE_CACHE: Dict[str, Optional[str]] = {"mode": None}
-def _tax_mode() -> str:
-    if _TAX_MODE_CACHE["mode"]: return _TAX_MODE_CACHE["mode"]
-    try: country = (stripe.Account.retrieve().get("country") or "").upper()
-    except Exception: country = ""
-    smp = {"AU","AT","BE","BG","CA","HR","CY","CZ","DK","EE","FI","FR","DE","GI","GR","HK","HU","IE","IT","JP","LV","LI","LT","LU","MT","NL","NO","PL","PT","RO","SG","SK","SI","ES","SE","CH","GB","US"}
-    mode = "full" if country in smp else "calc_only"
-    _TAX_MODE_CACHE["mode"] = mode
-    return mode
+class CheckoutIn(BaseModel): lookup_key: str; origin_url: Optional[str] = None
 
 @api.post("/payments/checkout")
 async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
-    prices = stripe.Price.list(lookup_keys=[req.lookup_key], active=True, limit=1).data
-    if not prices: raise HTTPException(400, f"Plano não encontrado: {req.lookup_key}")
-    price = prices[0]
-    plan_id = req.lookup_key.replace("omnirepmax_", "").replace("_monthly", "")
-    kwargs = dict(
-        line_items=[{"price": price.id, "quantity": 1}],
-        mode="subscription" if price.recurring else "payment",
-        success_url=f"{req.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{req.origin_url}/planos",
-        metadata={"user_id": current["id"], "tenant_id": tid_of(current),
-                  "lookup_key": req.lookup_key, "plan_id": plan_id},
-        customer_email=current["email"], allow_promotion_codes=True
-    )
-    mode = _tax_mode()
+    _require_stripe()
+    plano = next((p for p in PLANS if p["lookup_key"] == req.lookup_key), None)
+    if not plano: raise HTTPException(400, "Plano inválido.")
+    conta = await _conta_dona(current)
+    if (conta.get("plan") in PLANOS_PAGOS and conta.get("subscription_status") in STATUS_OK
+            and conta.get("stripe_subscription_id")):
+        raise HTTPException(409, "Você já tem uma assinatura ativa. Use 'Gerenciar assinatura' para trocar de plano.")
+
     try:
-        if mode == "full": session = stripe.checkout.Session.create(**kwargs, managed_payments={"enabled": True})
-        else: session = stripe.checkout.Session.create(**kwargs, automatic_tax={"enabled": True}, billing_address_collection="required")
-    except stripe.error.InvalidRequestError as e:
-        msg = (getattr(e, "user_message", "") or "").lower()
-        if "managed payments" in msg or "ineligible" in msg or "tax" in msg:
-            session = stripe.checkout.Session.create(**kwargs)
-        else: raise HTTPException(400, str(e))
+        prices = await asyncio.to_thread(
+            lambda: stripe.Price.list(lookup_keys=[req.lookup_key], active=True, limit=1).data)
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe Price.list falhou: {e}")
+        raise HTTPException(502, "Não foi possível falar com o provedor de pagamento. Tente novamente.")
+    if not prices or not getattr(prices[0], "recurring", None):
+        logger.error(f"Preço mensal não encontrado no Stripe para lookup_key={req.lookup_key}")
+        raise HTTPException(400, "Plano indisponível no momento. Fale com o suporte.")
+    price = prices[0]
+    origin = _origem_segura(req.origin_url)
+    meta = {"user_id": conta["id"], "tenant_id": tid_of(current), "plan_id": plano["id"], "lookup_key": req.lookup_key}
+
+    sub_data: Dict[str, Any] = {"metadata": meta}
+    # Ainda no teste? A 1ª cobrança só acontece quando o teste acabar (Stripe exige >48h no futuro).
+    te = _parse_date(conta.get("trial_ends_at")) if (conta.get("plan") or "trial") == "trial" else None
+    if te and te - now_utc() > timedelta(hours=49):
+        sub_data["trial_end"] = int(te.timestamp())
+
+    kwargs: Dict[str, Any] = dict(
+        mode="subscription",
+        line_items=[{"price": price.id, "quantity": 1}],
+        success_url=f"{origin}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{origin}/planos",
+        metadata=meta,
+        subscription_data=sub_data,
+        client_reference_id=conta["id"],
+        allow_promotion_codes=True,
+        locale="pt-BR",
+    )
+    if conta.get("stripe_customer_id"):
+        kwargs["customer"] = conta["stripe_customer_id"]  # não duplica cliente no Stripe
+    else:
+        kwargs["customer_email"] = conta["email"]
+    if os.environ.get("STRIPE_AUTOMATIC_TAX") == "1":
+        kwargs["automatic_tax"] = {"enabled": True}
+
+    try:
+        session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe Checkout falhou: {e}")
+        raise HTTPException(400, getattr(e, "user_message", None) or "Não foi possível iniciar o pagamento.")
+
     await db.payment_transactions.insert_one({
-        "session_id": session.id, "user_id": current["id"], "tenant_id": tid_of(current),
-        "lookup_key": req.lookup_key, "plan_id": plan_id,
-        "amount": (price.unit_amount or 0), "currency": price.currency,
+        "session_id": session.id, "user_id": conta["id"], "tenant_id": tid_of(current),
+        "lookup_key": req.lookup_key, "plan_id": plano["id"],
+        "amount": getattr(price, "unit_amount", 0) or 0, "currency": getattr(price, "currency", "brl"),
         "status": "initiated", "payment_status": "pending",
         "created_at": iso(now_utc()), "updated_at": iso(now_utc())
     })
@@ -2423,56 +2763,223 @@ async def create_checkout(req: CheckoutIn, current=Depends(get_current_user)):
 
 async def _mark_session_paid(session_id: str, obj: dict):
     tx = await db.payment_transactions.find_one({"session_id": session_id})
-    if not tx or tx.get("payment_status") == "paid": return
-    await db.payment_transactions.update_one(
-        {"session_id": session_id, "payment_status": {"$ne": "paid"}},
-        {"$set": {"status": "completed", "payment_status": "paid",
-                  "stripe_subscription_id": obj.get("subscription"),
-                  "stripe_payment_intent_id": obj.get("payment_intent"),
-                  "stripe_customer_id": obj.get("customer"),
-                  "updated_at": iso(now_utc())}}
-    )
-    user_id = tx.get("user_id") or (obj.get("metadata") or {}).get("user_id")
-    plan_id = tx.get("plan_id") or (obj.get("metadata") or {}).get("plan_id")
-    if plan_id not in {"solo", "pro", "equipe"}: plan_id = "pro"
-    if user_id:
-        await db.users.update_one({"id": user_id}, {"$set": {
-            "plan": plan_id, "subscription_status": "active",
-            "stripe_customer_id": obj.get("customer"),
-            "stripe_subscription_id": obj.get("subscription"),
-            "subscription_updated_at": iso(now_utc())
-        }})
+    meta = obj.get("metadata") or {}
+    user_id = (tx or {}).get("user_id") or meta.get("user_id") or obj.get("client_reference_id")
+    plan_id = (tx or {}).get("plan_id") or meta.get("plan_id")
+    if tx and tx.get("payment_status") != "paid":
+        await db.payment_transactions.update_one(
+            {"session_id": session_id, "payment_status": {"$ne": "paid"}},
+            {"$set": {"status": "completed", "payment_status": "paid",
+                      "stripe_subscription_id": obj.get("subscription"),
+                      "stripe_customer_id": obj.get("customer"),
+                      "updated_at": iso(now_utc())}}
+        )
+    if not user_id: return
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "subscription_status": 1})
+    if not user: return
+    updates = {"stripe_customer_id": obj.get("customer"), "subscription_updated_at": iso(now_utc())}
+    if obj.get("subscription"): updates["stripe_subscription_id"] = obj.get("subscription")
+    if plan_id in PLANOS_PAGOS: updates["plan"] = plan_id
+    if user.get("subscription_status") not in STATUS_OK:
+        updates["subscription_status"] = "active"  # o evento customer.subscription.* refina (trialing etc.)
+    await db.users.update_one({"id": user_id}, {"$set": updates})
 
 @api.get("/payments/status/{session_id}")
 async def payment_status(session_id: str, current=Depends(get_current_user)):
-    tx = await db.payment_transactions.find_one({"session_id": session_id, "user_id": current["id"]}, {"_id": 0})
+    tx = await db.payment_transactions.find_one({"session_id": session_id, "tenant_id": tid_of(current)}, {"_id": 0})
     if not tx: raise HTTPException(404, "Sessão não encontrada")
-    if tx.get("payment_status") != "paid":
+    if tx.get("payment_status") != "paid" and STRIPE_SECRET_KEY:
         try:
-            s = stripe.checkout.Session.retrieve(session_id)
-            if s.payment_status == "paid" or s.status == "complete":
-                await _mark_session_paid(session_id, {"subscription": s.subscription, "payment_intent": s.payment_intent, "customer": s.customer, "metadata": s.metadata or {}})
-                tx = await db.payment_transactions.find_one({"session_id": session_id, "user_id": current["id"]}, {"_id": 0})
+            s = await asyncio.to_thread(lambda: stripe.checkout.Session.retrieve(session_id))
+            if s.status == "complete":
+                await _mark_session_paid(session_id, {"subscription": s.subscription, "customer": s.customer,
+                                                      "metadata": dict(s.metadata or {})})
+                tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
         except stripe.error.StripeError: pass
     return {"session_id": tx["session_id"], "status": tx["status"],
             "payment_status": tx["payment_status"], "plan_id": tx.get("plan_id")}
+
+# ✅ Portal do cliente Stripe: trocar cartão, mudar de plano, ver faturas, cancelar
+@api.post("/billing/portal")
+async def billing_portal(current=Depends(get_current_user)):
+    _require_stripe()
+    conta = await _conta_dona(current)
+    cid = conta.get("stripe_customer_id")
+    if not cid: raise HTTPException(400, "Você ainda não tem uma assinatura. Escolha um plano para assinar.")
+    try:
+        sess = await asyncio.to_thread(lambda: stripe.billing_portal.Session.create(
+            customer=cid, return_url=f"{FRONTEND_URL}/planos", locale="pt-BR"))
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe portal falhou: {e}")
+        raise HTTPException(400, "Não foi possível abrir o portal de assinatura. Fale com o suporte.")
+    return {"url": sess.url}
+
+async def _sincronizar_assinatura(sub: dict, event_ts: Optional[int] = None):
+    """Aplica no usuário o estado da assinatura vindo do Stripe (created/updated/deleted)."""
+    meta = sub.get("metadata") or {}
+    q = {"id": meta["user_id"]} if meta.get("user_id") else ({"stripe_customer_id": sub.get("customer")} if sub.get("customer") else None)
+    if not q: return
+    user = await db.users.find_one(q, {"_id": 0, "id": 1, "stripe_event_ts": 1})
+    if not user:
+        logger.warning(f"Assinatura {sub.get('id')} sem usuário correspondente ({q})")
+        return
+    # Stripe pode entregar eventos fora de ordem: ignora evento mais antigo que o último aplicado
+    if event_ts and user.get("stripe_event_ts") and int(event_ts) < int(user["stripe_event_ts"]):
+        return
+    items = ((sub.get("items") or {}).get("data")) or []
+    item = items[0] if items else {}
+    plano = _plano_por_lookup((item.get("price") or {}).get("lookup_key")) or meta.get("plan_id")
+    updates = {
+        "subscription_status": sub.get("status"),
+        "stripe_subscription_id": sub.get("id"),
+        "stripe_customer_id": sub.get("customer"),
+        "cancel_at_period_end": bool(sub.get("cancel_at_period_end")),
+        # versões novas da API do Stripe movem current_period_end para o item
+        "current_period_end": _ts_para_iso(sub.get("current_period_end") or item.get("current_period_end")),
+        "subscription_updated_at": iso(now_utc()),
+    }
+    if event_ts: updates["stripe_event_ts"] = int(event_ts)
+    if plano in PLANOS_PAGOS: updates["plan"] = plano
+    await db.users.update_one({"id": user["id"]}, {"$set": updates})
+
+async def _pagamento_falhou(invoice: dict):
+    cid = invoice.get("customer")
+    if not cid: return
+    user = await db.users.find_one({"stripe_customer_id": cid}, {"_id": 0, "id": 1, "email": 1, "name": 1})
+    if not user: return
+    valor = (invoice.get("amount_due") or 0) / 100
+    await send_email(user["email"], "Não conseguimos cobrar sua assinatura — OmniRepMax", _email_layout(
+        "Problema no pagamento da assinatura",
+        [f"Tentamos cobrar R$ {valor:,.2f} da sua assinatura do OmniRepMax, mas o pagamento não foi aprovado."
+         .replace(",", "X").replace(".", ",").replace("X", "."),
+         "Seu acesso continua liberado por enquanto. Atualize a forma de pagamento para evitar a suspensão."],
+        "Atualizar pagamento", f"{FRONTEND_URL}/planos",
+        "Vamos tentar cobrar novamente nos próximos dias.",
+    ))
 
 @api.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     if not STRIPE_WEBHOOK_SECRET: raise HTTPException(500, "STRIPE_WEBHOOK_SECRET não configurado")
     payload = await request.body()
     sig = request.headers.get("stripe-signature", "")
-    try: event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
-    except stripe.error.SignatureVerificationError: raise HTTPException(400, "Assinatura inválida")
-    obj, t = event["data"]["object"], event["type"]
-    if t == "checkout.session.completed": await _mark_session_paid(obj["id"], obj)
-    elif t == "checkout.session.async_payment_succeeded":
-        await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"payment_status": "paid", "updated_at": iso(now_utc())}})
-    elif t == "checkout.session.async_payment_failed":
-        await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"status": "failed", "payment_status": "failed", "updated_at": iso(now_utc())}})
-    elif t == "customer.subscription.deleted":
-        await db.users.update_one({"stripe_subscription_id": obj.get("id")}, {"$set": {"subscription_status": "canceled", "plan": "canceled"}})
+    try:
+        stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)  # só valida a assinatura
+    except (ValueError, stripe.error.SignatureVerificationError):
+        raise HTTPException(400, "Assinatura inválida")
+    event = json.loads(payload)  # dicts puros (independe da versão da lib)
+    eid, t, ts = event.get("id"), event.get("type"), event.get("created")
+    obj = (event.get("data") or {}).get("object") or {}
+
+    # Idempotência: o Stripe reenvia eventos; cada um é processado uma vez só
+    try:
+        await db.stripe_events.insert_one({"id": eid, "type": t, "created_at": iso(now_utc())})
+    except DuplicateKeyError:
+        return {"status": "duplicate"}
+
+    try:
+        if t == "checkout.session.completed":
+            await _mark_session_paid(obj["id"], obj)
+        elif t == "checkout.session.async_payment_succeeded":
+            await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"payment_status": "paid", "updated_at": iso(now_utc())}})
+            await _mark_session_paid(obj["id"], obj)
+        elif t == "checkout.session.async_payment_failed":
+            await db.payment_transactions.update_one({"session_id": obj["id"]}, {"$set": {"status": "failed", "payment_status": "failed", "updated_at": iso(now_utc())}})
+        elif t in ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"):
+            await _sincronizar_assinatura(obj, ts)
+        elif t == "invoice.payment_failed":
+            await _pagamento_falhou(obj)
+    except Exception:
+        logger.exception(f"Falha processando evento Stripe {eid} ({t})")
+        await db.stripe_events.delete_one({"id": eid})  # libera para o reenvio do Stripe
+        raise HTTPException(500, "Erro ao processar evento")
     return {"status": "ok"}
+
+# ------------------------------------------------------------
+# ✅ Cron diário: avisos de fim de teste (acionar 1x/dia com WEBHOOK_CRON_SECRET)
+# ------------------------------------------------------------
+def _check_cron_secret(authorization: Optional[str]):
+    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
+    if not secret or not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(authorization[7:], secret):
+        raise HTTPException(401, "Unauthorized")
+
+@api.post("/cron/diario")
+async def cron_diario(authorization: Optional[str] = Header(None)):
+    _check_cron_secret(authorization)
+    now = now_utc()
+    enviados = {"trial_acabando": 0, "trial_expirado": 0}
+    async for u in db.users.find({"plan": "trial"}, {"_id": 0, "id": 1, "email": 1, "name": 1, "trial_ends_at": 1,
+                                                    "aviso_trial_acabando": 1, "aviso_trial_expirado": 1}):
+        te = _parse_date(u.get("trial_ends_at"))
+        if not te or is_superadmin(u): continue
+        restante = te - now
+        nome = html.escape(u.get("name") or "")
+        if timedelta(0) < restante <= timedelta(days=2) and not u.get("aviso_trial_acabando"):
+            await send_email(u["email"], "Seu teste do OmniRepMax termina em breve", _email_layout(
+                "Seu teste está acabando",
+                [f"Olá{', ' + nome if nome else ''}! Seu teste grátis termina em {fmt_data_br(te)}.",
+                 "Assine agora para não perder o acesso — a primeira cobrança só acontece quando o teste acabar."],
+                "Escolher meu plano", f"{FRONTEND_URL}/planos"))
+            await db.users.update_one({"id": u["id"]}, {"$set": {"aviso_trial_acabando": iso(now)}})
+            enviados["trial_acabando"] += 1
+        elif timedelta(days=-3) < restante <= timedelta(0) and not u.get("aviso_trial_expirado"):
+            await send_email(u["email"], "Seu teste do OmniRepMax terminou", _email_layout(
+                "Seu teste terminou",
+                [f"Olá{', ' + nome if nome else ''}! Seu período de teste acabou e sua conta ficou em modo consulta.",
+                 "Seus dados continuam guardados. Assine um plano para voltar a lançar pedidos e comissões."],
+                "Assinar agora", f"{FRONTEND_URL}/planos"))
+            await db.users.update_one({"id": u["id"]}, {"$set": {"aviso_trial_expirado": iso(now)}})
+            enviados["trial_expirado"] += 1
+    return {"ok": True, "enviados": enviados}
+
+def fmt_data_br(d: datetime) -> str:
+    return d.astimezone(timezone(timedelta(hours=-3))).strftime("%d/%m/%Y")
+
+# ------------------------------------------------------------
+# ✅ Superadmin: assinantes e cortesias (pilotos, parceiros, extensão de teste)
+# ------------------------------------------------------------
+class AssinanteUpdateIn(BaseModel):
+    dias_extras_trial: Optional[int] = None   # estende o teste a partir de hoje (ou do fim atual, se maior)
+    cortesia_plano: Optional[str] = None      # "solo" | "pro" | "equipe" → acesso liberado sem cobrança
+    cortesia_ate: Optional[str] = None        # opcional: data em que a cortesia vira teste vencido
+    remover_cortesia: bool = False
+
+@api.get("/admin/assinantes")
+async def listar_assinantes(current=Depends(get_current_user)):
+    require_superadmin(current)
+    out = []
+    async for u in db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).limit(2000):
+        sit = _situacao_assinatura(u, u)
+        out.append({k: u.get(k) for k in ("id", "email", "name", "empresa", "telefone", "plan", "subscription_status",
+                                           "trial_ends_at", "current_period_end", "cancel_at_period_end",
+                                           "email_verified", "created_at")} | {"acesso": sit["acesso"], "plano_efetivo": sit["plano"]})
+    return out
+
+@api.patch("/admin/assinantes/{uid}")
+async def atualizar_assinante(uid: str, body: AssinanteUpdateIn, current=Depends(get_current_user)):
+    require_superadmin(current)
+    u = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+    if not u: raise HTTPException(404, "Usuário não encontrado")
+    if u.get("stripe_subscription_id") and u.get("subscription_status") in {"active", "trialing", "past_due"}:
+        raise HTTPException(409, "Este cliente tem assinatura ativa no Stripe. Gerencie pelo painel do Stripe.")
+    updates: Dict[str, Any] = {}
+    if body.remover_cortesia:
+        updates.update({"plan": "trial", "subscription_status": None, "trial_ends_at": iso(now_utc())})
+    if body.dias_extras_trial:
+        base = max(now_utc(), _parse_date(u.get("trial_ends_at")) or now_utc())
+        updates.update({"plan": "trial", "subscription_status": None,
+                        "trial_ends_at": iso(base + timedelta(days=int(body.dias_extras_trial))),
+                        "aviso_trial_acabando": None, "aviso_trial_expirado": None})
+    if body.cortesia_plano:
+        if body.cortesia_plano not in PLANOS_PAGOS: raise HTTPException(400, "Plano inválido")
+        updates.update({"plan": body.cortesia_plano, "subscription_status": "cortesia",
+                        "cortesia_ate": body.cortesia_ate})
+    if not updates: raise HTTPException(400, "Nada para alterar")
+    await db.users.update_one({"id": uid}, {"$set": updates})
+    await _log_auditoria(current, "assinante_alterado_superadmin", "users", uid,
+                         before={k: u.get(k) for k in ("plan", "subscription_status", "trial_ends_at")}, after=updates)
+    novo = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+    return {"ok": True, "situacao": _situacao_assinatura(novo, novo), "plan": novo.get("plan"),
+            "subscription_status": novo.get("subscription_status"), "trial_ends_at": novo.get("trial_ends_at")}
 
 # ------------------------------------------------------------
 # System Reset
@@ -2556,38 +3063,63 @@ async def startup():
         try: await db[col].create_index("tenant_id")
         except Exception: pass
 
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
-    existing = await db.users.find_one({"email": admin_email})
-    if existing is None:
-        uid = new_id()
-        await db.users.insert_one({
-            "id": uid, "tenant_id": uid, "email": admin_email,
-            "password_hash": hash_pw(admin_password), "name": "Álvaro",
-            "role": "admin", "plan": "pro", "created_at": iso(now_utc())
-        })
+    try: await db.stripe_events.create_index("id", unique=True)
+    except Exception: pass
+    try: await db.users.create_index("stripe_customer_id", sparse=True)
+    except Exception: pass
+    for col, campo in [("password_resets", "token_hash"), ("email_verifications", "token_hash")]:
+        try: await db[col].create_index(campo)
+        except Exception: pass
+
+    # ✅ Conta do dono: só com ADMIN_EMAIL + ADMIN_PASSWORD definidos.
+    # A senha NÃO é sobrescrita a cada deploy (só com ADMIN_FORCE_PASSWORD_RESET=1).
+    admin_email = ADMIN_EMAIL
+    admin_password = os.environ.get("ADMIN_PASSWORD", "")
+    if not IS_PROD and not (admin_email and admin_password):
+        admin_email, admin_password = "admin@example.com", "admin123"  # conveniência só em dev
+        SUPERADMIN_EMAILS.add(admin_email)
+
+    admin_tid = None
+    if admin_email and admin_password:
+        if IS_PROD and len(admin_password) < 12:
+            logger.warning("ADMIN_PASSWORD tem menos de 12 caracteres. Use uma senha mais forte.")
         existing = await db.users.find_one({"email": admin_email})
-    else:
-        patch = {}
-        if not verify_pw(admin_password, existing["password_hash"]):
-            patch["password_hash"] = hash_pw(admin_password)
-        if not existing.get("tenant_id"): patch["tenant_id"] = existing["id"]
-        if existing.get("plan") != "pro": patch["plan"] = "pro"
-        if existing.get("subscription_status") != "active": patch["subscription_status"] = "active"
-        if existing.get("trial_ends_at"): patch["trial_ends_at"] = None
-        if patch: await db.users.update_one({"email": admin_email}, {"$set": patch})
-    admin_tid = (existing.get("tenant_id") or existing["id"])
+        if existing is None:
+            uid = new_id()
+            await db.users.insert_one({
+                "id": uid, "tenant_id": uid, "email": admin_email,
+                "password_hash": hash_pw(admin_password), "name": "Álvaro",
+                "role": "admin", "plan": "pro", "subscription_status": "active",
+                "email_verified": True, "created_at": iso(now_utc())
+            })
+            existing = await db.users.find_one({"email": admin_email})
+        else:
+            patch = {}
+            if os.environ.get("ADMIN_FORCE_PASSWORD_RESET") == "1" and not verify_pw(admin_password, existing["password_hash"]):
+                patch["password_hash"] = hash_pw(admin_password)
+                patch["password_changed_at"] = iso(now_utc())
+            if not existing.get("tenant_id"): patch["tenant_id"] = existing["id"]
+            if existing.get("plan") != "pro": patch["plan"] = "pro"
+            if existing.get("subscription_status") != "active": patch["subscription_status"] = "active"
+            if existing.get("trial_ends_at"): patch["trial_ends_at"] = None
+            if patch: await db.users.update_one({"email": admin_email}, {"$set": patch})
+        admin_tid = (existing.get("tenant_id") or existing["id"])
+    elif IS_PROD:
+        logger.warning("ADMIN_EMAIL/ADMIN_PASSWORD não definidos: conta do dono não será criada/atualizada.")
 
-    try:
-        from seed import seed_demo
-        await seed_demo(db)
-    except ImportError: pass
+    # ✅ Dados de demonstração nunca entram em produção (salvo SEED_DEMO=1)
+    if not IS_PROD or os.environ.get("SEED_DEMO") == "1":
+        try:
+            from seed import seed_demo
+            await seed_demo(db)
+        except ImportError: pass
 
-    for col in ["representadas", "clientes", "produtos", "pedidos",
-                "oportunidades", "visitas", "comissoes", "contas_receber",
-                "contas_pagar", "xml_files", "documentos", "faturamentos",
-                "regras_comissao", "recebiveis_industria"]:
-        await db[col].update_many({"tenant_id": {"$exists": False}}, {"$set": {"tenant_id": admin_tid}})
+    if admin_tid:
+        for col in ["representadas", "clientes", "produtos", "pedidos",
+                    "oportunidades", "visitas", "comissoes", "contas_receber",
+                    "contas_pagar", "xml_files", "documentos", "faturamentos",
+                    "regras_comissao", "recebiveis_industria"]:
+            await db[col].update_many({"tenant_id": {"$exists": False}}, {"$set": {"tenant_id": admin_tid}})
 
 @app.on_event("shutdown")
 async def shutdown():

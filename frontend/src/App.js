@@ -1,13 +1,16 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
-import { Toaster } from "sonner"; // <-- IMPORTANTE: Importa o Toaster
+import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import AppShell from "./components/AppShell";
+import AvisoAssinatura from "./components/AvisoAssinatura"; // ✅ NOVO
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import VerificarEmail from "./pages/VerificarEmail"; // ✅ NOVO
 import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import MaxAI from "./pages/MaxAI";
@@ -29,14 +32,24 @@ import Mapa from "./pages/Mapa";
 import Configuracoes from "./pages/Configuracoes";
 import Relatorios from "./pages/Relatorios";
 import Feedback from "./pages/Feedback";
-import ResetPassword from "./pages/ResetPassword";
 import Admin from "./pages/Admin";
-
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="p-12 text-slate-500">Carregando...</div>;
   if (!user) return <Navigate to="/login" replace />;
+  return (
+    <>
+      {children}
+      <AvisoAssinatura />
+    </>
+  );
+}
+
+// ✅ NOVO: /admin só para o dono da plataforma (superadmin)
+function SomenteSuperadmin({ children }) {
+  const { user } = useAuth();
+  if (!user?.is_superadmin) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
@@ -51,10 +64,11 @@ export default function App() {
             <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/verificar-email" element={<VerificarEmail />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
-            
+
             <Route element={<Protected><AppShell /></Protected>}>
-              <Route path="/admin" element={<Admin />} />
+              <Route path="/admin" element={<SomenteSuperadmin><Admin /></SomenteSuperadmin>} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/max-ai" element={<MaxAI />} />
               <Route path="/planos" element={<Plans />} />
@@ -62,9 +76,9 @@ export default function App() {
               <Route path="/clientes" element={<Clientes />} />
               <Route path="/funil" element={<Kanban />} />
               <Route path="/pedidos" element={<Pedidos />} />
-              <Route path="/pedidos/aguardando-faturamento" element={<AguardandoFaturamento />} />  {/* ✅ NOVO */}
+              <Route path="/pedidos/aguardando-faturamento" element={<AguardandoFaturamento />} />
               <Route path="/comissoes" element={<Comissoes />} />
-              <Route path="/recebiveis-industria" element={<RecebiveisIndustria />} />              {/* ✅ NOVO */}
+              <Route path="/recebiveis-industria" element={<RecebiveisIndustria />} />
               <Route path="/contas-receber" element={<ContasReceber />} />
               <Route path="/contas-pagar" element={<ContasPagar />} />
               <Route path="/agenda" element={<Agenda />} />
@@ -75,11 +89,10 @@ export default function App() {
               <Route path="/configuracoes" element={<Configuracoes />} />
               <Route path="/feedback" element={<Feedback />} />
             </Route>
-            
+
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
-        {/* ✅ FIX: Adiciona o componente que desenha os toasts na tela */}
         <Toaster position="top-right" richColors />
       </AuthProvider>
     </ThemeProvider>

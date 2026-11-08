@@ -1,85 +1,168 @@
 import React, { useEffect, useState } from "react";
+import { Check, Loader2, CreditCard, AlertTriangle, Clock, CheckCircle2 } from "lucide-react";
 import api from "../lib/api";
 import { PageHeader } from "../components/Common";
 import { Button } from "../components/ui/button";
-import { Check, Zap, ArrowRight, Loader2 } from "lucide-react";
+import { fmtDate } from "../lib/format";
 import { toast } from "sonner";
-import { useAuth } from "../context/AuthContext";
+
+const NOME_STATUS = {
+  active: "Ativa", trialing: "Ativa (em teste)", past_due: "Pagamento pendente",
+  canceled: "Cancelada", unpaid: "Não paga", incomplete: "Pagamento incompleto",
+  incomplete_expired: "Pagamento expirado", cortesia: "Cortesia", superadmin: "Administrador",
+};
 
 export default function Plans() {
-  const { user } = useAuth();
   const [plans, setPlans] = useState([]);
   const [sub, setSub] = useState(null);
-  const [loadingId, setLoadingId] = useState(null);
+  const [carregando, setCarregando] = useState(true);
+  const [ocupado, setOcupado] = useState(null); // lookup_key ou "portal"
 
   useEffect(() => {
-    api.get("/plans").then((r) => setPlans(r.data.plans));
-    api.get("/subscriptions/me").then((r) => setSub(r.data));
+    Promise.all([api.get("/plans"), api.get("/subscriptions/me")])
+      .then(([p, s]) => { setPlans(p.data.plans || []); setSub(s.data); })
+      .catch(() => toast.error("Erro ao carregar os planos."))
+      .finally(() => setCarregando(false));
   }, []);
 
-  const subscribe = async (plan) => {
-    setLoadingId(plan.id);
+  const assinaturaAtiva = sub && !sub.is_trial && sub.acesso === "ativo" && sub.tem_assinatura_stripe
+    && ["active", "trialing", "past_due"].includes(sub.subscription_status);
+
+  const assinar = async (plano) => {
+    setOcupado(plano.lookup_key);
     try {
-      const { data } = await api.post("/payments/checkout", { lookup_key: plan.lookup_key, origin_url: window.location.origin });
-      window.location.href = data.checkout_url;
+      const r = await api.post("/payments/checkout", { lookup_key: plano.lookup_key, origin_url: window.location.origin });
+      window.location.href = r.data.checkout_url;
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Erro ao iniciar checkout");
-      setLoadingId(null);
+      toast.error(e.response?.data?.detail || "Não foi possível iniciar o pagamento.");
+      setOcupado(null);
     }
   };
 
-  const current = sub?.plan;
+  const abrirPortal = async () => {
+    setOcupado("portal");
+    try {
+      const r = await api.post("/billing/portal");
+      window.location.href = r.data.url;
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Não foi possível abrir o portal.");
+      setOcupado(null);
+    }
+  };
+
+  if (carregando) {
+    return <div className="p-12 flex items-center gap-2 text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> Carregando planos…</div>;
+  }
+
+  const planoAtual = sub?.is_trial ? null : sub?.plan;
+
   return (
-    <div>
-      <PageHeader title="Planos e Assinatura" subtitle="Escolha o plano ideal para sua operação comercial" />
-      {sub && (
-        <div className="mb-6 p-5 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 relative overflow-hidden"
-             style={{ backgroundImage: "linear-gradient(135deg, #061329 0%, #0A1F46 55%, #075BFF 100%)" }}>
-          <div className="relative">
-            <div className="text-xs uppercase tracking-wider text-[#22D3EE] font-semibold">Plano atual</div>
-            <div className="font-display text-2xl font-extrabold mt-1 capitalize">{current}</div>
-            {sub.is_trial && typeof sub.trial_days_left === "number" && (
-              <div className="text-sm mt-2 text-slate-300">
-                {sub.trial_days_left > 0 ? <>⏱️ Trial expira em <strong className="text-white">{sub.trial_days_left} dia{sub.trial_days_left !== 1 ? "s" : ""}</strong>. Garanta seu acesso contínuo escolhendo um plano.</> : <>⚠️ Seu trial expirou. Escolha um plano para continuar usando o OMNIREP MAX.</>}
-              </div>
-            )}
-            {sub.subscription_status === "active" && <div className="text-sm mt-2 text-emerald-300">✓ Assinatura ativa</div>}
+    <div className="pb-10">
+      <PageHeader title="Planos e assinatura" subtitle="Escolha o plano ideal para sua representação" />
+
+      {/* Situação atual */}
+      {sub && !sub.is_superadmin && (
+        <div className={`mb-8 rounded-2xl border p-5 flex flex-col sm:flex-row sm:items-center gap-4 justify-between ${
+          sub.acesso === "somente_leitura"
+            ? "bg-rose-50 border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/30"
+            : sub.aviso === "pagamento_pendente"
+              ? "bg-amber-50 border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/30"
+              : "bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800"}`}>
+          <div className="flex gap-3">
+            {sub.acesso === "somente_leitura" ? <AlertTriangle className="w-6 h-6 text-rose-600 shrink-0" />
+              : sub.is_trial ? <Clock className="w-6 h-6 text-[#075BFF] shrink-0" />
+              : <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />}
+            <div className="text-sm">
+              {sub.acesso === "somente_leitura" ? (
+                <>
+                  <p className="font-bold text-slate-900 dark:text-white">
+                    {sub.motivo === "trial_expirado" ? "Seu teste grátis terminou" : "Sua assinatura está inativa"}
+                  </p>
+                  <p className="text-slate-600 dark:text-slate-300">Sua conta está em modo consulta. Seus dados continuam guardados; escolha um plano para voltar a cadastrar e editar.</p>
+                </>
+              ) : sub.is_trial ? (
+                <>
+                  <p className="font-bold text-slate-900 dark:text-white">
+                    Teste grátis — {sub.trial_days_left} {sub.trial_days_left === 1 ? "dia restante" : "dias restantes"}
+                  </p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    Você está usando todos os recursos do Profissional. Assinando agora, a primeira cobrança só acontece em {fmtDate(sub.trial_ends_at)}.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="font-bold text-slate-900 dark:text-white">
+                    Plano {plans.find(p => p.id === sub.plan)?.name || sub.plan} · {NOME_STATUS[sub.subscription_status] || sub.subscription_status}
+                  </p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {sub.aviso === "pagamento_pendente"
+                      ? "Não conseguimos cobrar sua forma de pagamento. Atualize para evitar a suspensão."
+                      : sub.cancel_at_period_end && sub.current_period_end
+                        ? `Cancelamento agendado: acesso até ${fmtDate(sub.current_period_end)}.`
+                        : sub.current_period_end ? `Próxima renovação em ${fmtDate(sub.current_period_end)}.` : ""}
+                  </p>
+                </>
+              )}
+            </div>
           </div>
-          {sub.is_trial && <div className="text-xs text-slate-400">Sem compromisso. Cancele quando quiser.</div>}
+          {sub.tem_assinatura_stripe && sub.pagamentos_configurados && (
+            <Button onClick={abrirPortal} disabled={ocupado === "portal"} variant="outline" className="shrink-0">
+              {ocupado === "portal" ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CreditCard className="w-4 h-4 mr-2" />}
+              Gerenciar assinatura
+            </Button>
+          )}
         </div>
       )}
-      <div className="grid md:grid-cols-3 gap-5">
-        {plans.map((p) => {
-          const featured = p.featured;
-          const isCurrent = current === p.id;
+
+      {sub && !sub.pagamentos_configurados && (
+        <div className="mb-6 text-sm text-slate-500 bg-slate-100 dark:bg-slate-800/50 rounded-xl p-4">
+          A assinatura online estará disponível em breve. Para assinar agora, fale com o suporte pelo WhatsApp (47) 99206-5908.
+        </div>
+      )}
+
+      {/* Planos */}
+      <div className="grid md:grid-cols-3 gap-6 max-w-6xl">
+        {plans.map(p => {
+          const atual = planoAtual === p.id && sub?.acesso === "ativo";
           return (
-            <div key={p.id} data-testid={`plan-card-${p.id}`} className={`relative p-6 rounded-2xl border transition-all ${featured ? "border-[#075BFF] bg-gradient-to-br from-white to-[#EFF6FF] shadow-xl scale-[1.02]" : "border-slate-200 bg-white shadow-sm hover:shadow-md"} dark:bg-slate-900 dark:border-slate-800`}>
-              {featured && <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-brand-cta text-white text-xs font-bold shadow-md shadow-[#075BFF]/30">Mais escolhido</div>}
-              {isCurrent && <div className="absolute top-3 right-3 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">Atual</div>}
-              <div className="font-display text-2xl font-extrabold text-slate-900 dark:text-white">{p.name}</div>
-              <div className="mt-5 flex items-baseline gap-1">
-                <span className="text-sm text-slate-500">R$</span>
-                <span className="font-display text-5xl font-extrabold tracking-tight">{p.price_brl}</span>
-                <span className="text-sm text-slate-500">/mês</span>
+            <div key={p.id} className={`relative rounded-2xl border p-6 flex flex-col ${
+              p.featured ? "border-2 border-[#075BFF] bg-gradient-to-b from-[#075BFF]/5 to-white dark:from-[#075BFF]/15 dark:to-slate-900 shadow-lg"
+                         : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"}`}>
+              {p.featured && (
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#075BFF] text-white text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full">Mais popular</span>
+              )}
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">{p.name}</h3>
+              {p.descricao && <p className="text-sm text-slate-500 mt-1">{p.descricao}</p>}
+              <div className="my-5 flex items-baseline gap-1">
+                <span className="text-4xl font-extrabold text-slate-900 dark:text-white">R$ {p.price_brl}</span>
+                <span className="text-slate-500">/mês</span>
               </div>
-              <Button data-testid={`btn-subscribe-${p.id}`} disabled={loadingId === p.id || isCurrent} onClick={() => subscribe(p)} className={`w-full mt-5 h-11 border-0 ${featured ? "bg-brand-cta hover:brightness-110 text-white shadow-md shadow-[#075BFF]/20" : "bg-[#0A1F46] hover:bg-[#0A1F46]/90 text-white"}`}>
-                {loadingId === p.id ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" />Carregando...</> : isCurrent ? "Plano atual" : <>Assinar <ArrowRight className="w-4 h-4 ml-1" /></>}
-              </Button>
-              <ul className="mt-6 space-y-2.5">
-                {p.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
-                    <Check className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />{f}
-                  </li>
+              <ul className="space-y-2.5 mb-6 flex-1 text-sm text-slate-700 dark:text-slate-300">
+                {p.features.map(f => (
+                  <li key={f} className="flex gap-2"><Check className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" /> {f}</li>
                 ))}
               </ul>
+              {atual ? (
+                <Button disabled variant="outline" className="w-full">Plano atual</Button>
+              ) : assinaturaAtiva ? (
+                <Button onClick={abrirPortal} disabled={!!ocupado} variant="outline" className="w-full">
+                  {ocupado === "portal" && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Trocar para este plano
+                </Button>
+              ) : (
+                <Button onClick={() => assinar(p)} disabled={!!ocupado || !sub?.pagamentos_configurados}
+                        className={`w-full ${p.featured ? "bg-[#075BFF] hover:bg-blue-600" : ""}`}>
+                  {ocupado === p.lookup_key && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {sub?.is_trial && sub?.acesso === "ativo" ? "Assinar (cobra no fim do teste)" : "Assinar"}
+                </Button>
+              )}
             </div>
           );
         })}
       </div>
-      <div className="mt-6 p-4 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 flex items-start gap-2">
-        <Zap className="w-4 h-4 text-[#075BFF] shrink-0 mt-0.5" />
-        <div><strong>Pagamento seguro via Stripe.</strong> Modo de teste ativo — use o cartão <span className="font-mono">4242 4242 4242 4242</span>, validade futura, qualquer CVC. Em produção, aceita Pix, boleto e cartão.</div>
-      </div>
+
+      <p className="text-xs text-slate-500 mt-6 max-w-3xl">
+        Pagamento processado com segurança pelo Stripe. Cancele quando quiser em "Gerenciar assinatura" — o acesso continua até o fim do período já pago.
+      </p>
     </div>
   );
 }

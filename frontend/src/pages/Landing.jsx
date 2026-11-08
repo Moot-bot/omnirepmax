@@ -405,7 +405,7 @@ export default function Landing() {
             <div className="hidden md:block absolute top-[4.5rem] left-[16.66%] right-[16.66%] h-0.5 bg-gradient-to-r from-transparent via-[#075BFF]/30 dark:via-[#075BFF]/50 to-transparent -z-10"></div>
 
             {[
-              { icon: Users, title: "1. Crie sua conta", desc: "Cadastre-se em menos de 1 minuto. Teste todos os recursos por 7 dias sem pagar nada." },
+              { icon: Users, title: "1. Crie sua conta", desc: "Cadastre-se em menos de 1 minuto. Teste todos os recursos por 7 dias, sem cartão de crédito." },
               { icon: LayoutDashboard, title: "2. Configure sua operação", desc: "Cadastre suas fábricas, importe seus produtos e clientes de forma super rápida." },
               { icon: TrendingUp, title: "3. Fature e receba", desc: "Lance pedidos, controle faturamentos e acompanhe suas comissões caindo em tempo real." }
             ].map((step, i) => (
@@ -441,8 +441,9 @@ export default function Landing() {
               <ul className="space-y-4 mb-8 flex-1 text-sm text-slate-700 dark:text-slate-300">
                 <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Até 2 representadas</li>
                 <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Clientes e produtos ilimitados</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Funil Kanban</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Pedidos e comissões</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Funil Kanban e agenda</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Pedidos, faturamento e comissões</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Contas a pagar e a receber</li>
               </ul>
               <Link to="/signup" className="w-full bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-800 dark:text-white text-center py-3 rounded-xl transition-colors border border-slate-200 dark:border-white/10 font-semibold">Começar Teste</Link>
             </div>
@@ -457,11 +458,11 @@ export default function Landing() {
                 <span className="text-slate-600 dark:text-slate-300">/mês</span>
               </div>
               <ul className="space-y-4 mb-8 flex-1 text-sm text-slate-700 dark:text-slate-200">
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> Tudo do Solo</li>
                 <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> Representadas ilimitadas</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> MAX AI ilimitado</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> Importação XML NF-e</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> Contas a pagar/receber</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> Até 5 usuários</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> MAX AI — assistente com IA</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> Importação de XML da NF-e</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-[#075BFF] dark:text-cyan-400 shrink-0" /> Suporte prioritário</li>
               </ul>
               <Link to="/signup" className="w-full bg-[#075BFF] hover:bg-blue-600 text-white font-bold text-center py-3 rounded-xl transition-all shadow-md dark:shadow-[0_0_20px_rgba(7,91,255,0.6)] hover:scale-105">Começar Teste</Link>
             </div>
@@ -476,10 +477,9 @@ export default function Landing() {
               </div>
               <ul className="space-y-4 mb-8 flex-1 text-sm text-slate-700 dark:text-slate-300">
                 <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Tudo do Profissional</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Usuários ilimitados</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Perfis Admin/Financeiro</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Relatórios exportáveis</li>
-                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Suporte WhatsApp</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Onboarding assistido</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Suporte por WhatsApp</li>
+                <li className="flex gap-3 items-center"><Check className="w-5 h-5 text-emerald-500 shrink-0" /> Múltiplos usuários e perfis (em breve)</li>
               </ul>
               <Link to="/signup" className="w-full bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-800 dark:text-white text-center py-3 rounded-xl transition-colors border border-slate-200 dark:border-white/10 font-semibold">Começar Teste</Link>
             </div>
