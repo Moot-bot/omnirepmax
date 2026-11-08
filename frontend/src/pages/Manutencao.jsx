@@ -50,6 +50,7 @@ export default function Manutencao() {
   const qtd = r ? (
     r.lancamentos_criados.length + r.comissoes_liberadas_por_liquidez.length + r.recebiveis_recalculados +
     r.pedidos_status_corrigido.length + r.pedidos_nf_preenchida +
+    (r.comissoes_sincronizadas || []).length + (r.parcelas_orfas_canceladas || 0) +
     Object.values(r.numeros_em_texto).reduce((a, b) => a + b, 0) +
     Object.values(r.acentos_corrigidos).reduce((a, b) => a + b.registros, 0)
   ) : 0;
@@ -70,6 +71,7 @@ export default function Manutencao() {
         <ul className="list-disc pl-5 space-y-1">
           <li>comissões que não geraram lançamento em <b>Contas a Receber</b> (só o valor da comissão, nunca o do pedido);</li>
           <li>recebíveis da indústria com saldo ou status desatualizado, e comissões que já deveriam ter sido liberadas;</li>
+          <li>comissões com saldo ou status diferente do que está em <b>Contas a Receber</b> (ex.: marcada como recebida sem baixa);</li>
           <li>pedidos faturados sem status ou número de NF atualizados;</li>
           <li>valores gravados como texto e nomes com acentos quebrados.</li>
         </ul>
@@ -95,6 +97,10 @@ export default function Manutencao() {
           <Bloco titulo="Lançamentos criados em Contas a Receber" itens={r.lancamentos_criados.map(l =>
             `Pedido ${l.pedido || "?"}${l.nf ? ` · NF ${l.nf}` : ""}: comissão de ${fmtBRL(l.valor_comissao)}${l.status === "aguardando_liquidez" ? " (aguardando liquidez)" : ""}`)} />
           <Bloco titulo="Comissões liberadas (a fábrica já recebeu)" itens={r.comissoes_liberadas_por_liquidez.map(p => `Pedido ${p}`)} />
+          <Bloco titulo="Comissões ajustadas a Contas a Receber" itens={[
+            ...(r.comissoes_sincronizadas || []).map(m => `Pedido ${m.pedido || "?"}: saldo ${fmtBRL(m.saldo_antes)} → ${fmtBRL(m.saldo_depois)}${m.status_antes !== m.status_depois ? ` · ${m.status_antes} → ${m.status_depois}` : ""}`),
+            ...(r.parcelas_orfas_canceladas ? [`${r.parcelas_orfas_canceladas} parcela(s) de comissão que já não existe cancelada(s)`] : []),
+          ]} />
           <Bloco titulo="Recebíveis da Indústria" itens={r.recebiveis_recalculados ? [`${r.recebiveis_recalculados} recebível(is) com saldo/status recalculado`] : []} />
           <Bloco titulo="Pedidos" itens={[
             ...(r.pedidos_status_corrigido.length ? [`Status corrigido: ${r.pedidos_status_corrigido.join(", ")}`] : []),

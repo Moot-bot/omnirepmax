@@ -82,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.8.0",
+    title="OMNIREPMAX API", version="2.8.1",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -1415,6 +1415,81 @@ def _status_lancamento(comissao: dict) -> str:
     """Contas a Receber: comissão que ainda espera a fábrica receber fica separada do 'aberto'."""
     return "aguardando_liquidez" if comissao.get("status") == "aguardando_liquidez" else "aberto"
 
+def _saldo_ar(a: dict) -> float:
+    if a.get("status") in ("cancelado", "recebido"): return 0.0
+    return round(max(0.0, _to_float(a.get("valor")) - _to_float(a.get("valor_recebido"))), 2)
+
+def _comissoes_a_receber(comissoes: List[dict], ar: List[dict]) -> float:
+    """Fonte única do 'Comissão a receber': os lançamentos de comissão em Contas a Receber que estão em aberto.
+    Comissões antigas sem lançamento entram pelo próprio saldo (até o reparo criar os lançamentos)."""
+    com_com_ar = {a.get("comissao_id") for a in ar if a.get("comissao_id")}
+    ids_validos = {c.get("id") for c in comissoes}
+    total = sum(_saldo_ar(a) for a in ar
+                if a.get("comissao_id") in ids_validos and a.get("status") == "aberto")
+    total += sum(_to_float(c.get("saldo_pendente")) for c in comissoes
+                 if c.get("id") not in com_com_ar and c.get("status") not in ("recebida", "aguardando_liquidez", "cancelada"))
+    return round(total, 2)
+
+async def _sincronizar_comissao(tid: str, cid: str, usuario: str = "", origem: str = "sincronizacao",
+                                aplicar: bool = True, mudancas: Optional[list] = None) -> Optional[dict]:
+    """Recalcula valor recebido, saldo e status da comissão a partir dos seus lançamentos em Contas a Receber,
+    para a tela de Comissões e a de Contas a Receber mostrarem sempre o mesmo valor."""
+    com = await db.comissoes.find_one({"id": cid, "tenant_id": tid}, {"_id": 0})
+    if not com or com.get("status") == "cancelada": return com
+    ars = await db.contas_receber.find({"tenant_id": tid, "comissao_id": cid, "status": {"$ne": "cancelado"}},
+                                       {"_id": 0}).to_list(500)
+    if not ars: return com
+    recebido = round(sum(_to_float(a.get("valor_recebido")) for a in ars), 2)
+    saldo = round(sum(_saldo_ar(a) for a in ars), 2)
+    st = com.get("status")
+    if recebido > 0 and saldo <= 0.01: novo_st = "recebida"
+    elif recebido > 0: novo_st = "parcialmente_recebida"
+    elif st in ("recebida", "parcialmente_recebida"):
+        novo_st = "aguardando_liquidez" if all(a.get("status") == "aguardando_liquidez" for a in ars) else "pendente"
+    else: novo_st = st
+    upd: Dict[str, Any] = {}
+    if abs(_to_float(com.get("valor_recebido")) - recebido) > 0.009: upd["valor_recebido"] = recebido
+    if abs(_to_float(com.get("saldo_pendente"), -1) - saldo) > 0.009: upd["saldo_pendente"] = saldo
+    if novo_st != st:
+        upd["status"] = novo_st
+        upd["historico_status"] = list(com.get("historico_status") or []) + [{
+            "de": st, "para": novo_st, "data": iso(now_utc()), "observacao": "Ajustado pelos lançamentos em Contas a Receber",
+            "origem": origem, "usuario": usuario, "registrado_em": iso(now_utc())}]
+    if upd and mudancas is not None:
+        mudancas.append({"pedido": com.get("pedido_numero"), "saldo_antes": round(_to_float(com.get("saldo_pendente")), 2),
+                         "saldo_depois": saldo, "status_antes": STATUS_COMISSAO.get(st, st),
+                         "status_depois": STATUS_COMISSAO.get(novo_st, novo_st)})
+    if upd and aplicar:
+        upd["updated_at"] = iso(now_utc())
+        await db.comissoes.update_one({"id": cid, "tenant_id": tid}, {"$set": upd})
+        com = {**com, **upd}
+    return com
+
+async def _baixar_ar(current: dict, ar: dict, valor: float, data: str) -> float:
+    """Registra recebimento num lançamento de Contas a Receber (e na comissão ligada a ele). Devolve o novo saldo."""
+    tid = tid_of(current)
+    saldo_atual = _to_float(ar.get("saldo_pendente"), _to_float(ar.get("valor")) - _to_float(ar.get("valor_recebido")))
+    novo_saldo = saldo_atual - valor
+    historico = list(ar.get("historico_recebimentos") or [])
+    historico.append({"data": data, "valor": valor, "saldo_restante": round(max(0, novo_saldo), 2)})
+    await db.contas_receber.update_one({"id": ar["id"], "tenant_id": tid}, {"$set": {
+        "valor_recebido": round(_to_float(ar.get("valor_recebido")) + valor, 2),
+        "saldo_pendente": round(max(0, novo_saldo), 2),
+        "status": "recebido" if novo_saldo <= 0.01 else "aberto",
+        "data_recebimento": data if novo_saldo <= 0.01 else ar.get("data_recebimento", ""),
+        "historico_recebimentos": historico,
+        "updated_at": iso(now_utc())}})
+    if ar.get("comissao_id"):
+        com = await db.comissoes.find_one({"id": ar["comissao_id"], "tenant_id": tid}, {"_id": 0})
+        if com:
+            c_hist = list(com.get("historico_recebimentos") or [])
+            c_saldo = _to_float(com.get("saldo_pendente"), _to_float(com.get("valor_liquido"))) - valor
+            c_hist.append({"data": data, "valor": valor, "saldo_restante": round(max(0, c_saldo), 2)})
+            await db.comissoes.update_one({"id": com["id"], "tenant_id": tid},
+                                          {"$set": {"historico_recebimentos": c_hist, "data_pagamento": data}})
+            await _sincronizar_comissao(tid, com["id"], current.get("email", ""), origem="baixa")
+    return novo_saldo
+
 async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parcelas_override: Optional[List[dict]] = None):
     """Distribui o valor LÍQUIDO da comissão entre as parcelas em Contas a Receber.
     Usa `parcelas_override` quando informado (não vazio); senão, as parcelas do pedido.
@@ -2035,7 +2110,28 @@ async def update_comissao(cid: str, body: ComissaoUpdate, current=Depends(get_ac
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
         return before
-    result = await t_update("comissoes", current, cid, updates)
+    # ✅ "Marcar como recebida" (ou informar valor recebido) vira baixa nos lançamentos de Contas a Receber,
+    #    para a comissão e o Contas a Receber não ficarem com saldos diferentes.
+    ars_abertos = await db.contas_receber.find({"tenant_id": tid, "comissao_id": cid, "status": "aberto"},
+                                               {"_id": 0}).sort("vencimento", 1).to_list(500)
+    alvo_receb = None
+    if updates.get("valor_recebido") is not None:
+        alvo_receb = _to_float(updates["valor_recebido"])
+    elif updates.get("status") == "recebida":
+        alvo_receb = _to_float(before.get("valor_liquido"))
+    if ars_abertos and alvo_receb is not None:
+        if before.get("status") == "aguardando_liquidez":
+            raise HTTPException(400, "Esta comissão ainda aguarda a indústria receber do cliente. Libere a comissão antes.")
+        falta = round(alvo_receb - _to_float(before.get("valor_recebido")), 2)
+        data = updates.get("data_pagamento") or iso(now_utc())
+        for ar in ars_abertos:
+            if falta <= 0.009: break
+            parte = min(falta, _saldo_ar(ar))
+            if parte > 0:
+                await _baixar_ar(current, ar, parte, data); falta = round(falta - parte, 2)
+        updates.pop("valor_recebido", None); updates.pop("status", None)
+    result = await t_update("comissoes", current, cid, updates) if updates else before
+    result = await _sincronizar_comissao(tid, cid, current.get("email", ""), origem="edicao_comissao") or result
     await _log_auditoria(
         current,
         action="comissao_alterada",
@@ -2053,6 +2149,9 @@ async def del_comissao(cid: str, current=Depends(get_active_user)):
     if not doc: raise HTTPException(404, "Comissão não encontrada")
     if doc.get("status") == "recebida" or doc.get("valor_recebido", 0) > 0:
         raise HTTPException(400, "Comissões já recebidas não podem ser excluídas.")
+    if await db.contas_receber.count_documents({"tenant_id": tid_of(current), "comissao_id": cid, "valor_recebido": {"$gt": 0}}):
+        raise HTTPException(400, "Esta comissão já tem recebimento em Contas a Receber. Estorne a baixa antes de excluir.")
+    await db.contas_receber.delete_many({"tenant_id": tid_of(current), "comissao_id": cid})   # ✅ não deixa parcela órfã
     return await t_delete("comissoes", current, cid)
 
 @api.get("/contas-receber")
@@ -2065,62 +2164,55 @@ async def create_ar(body: ARIn, current=Depends(get_active_user)):
 
 @api.put("/contas-receber/{rid}")
 async def update_ar(rid: str, body: ARIn, current=Depends(get_active_user)):
-    return await t_update("contas_receber", current, rid, body.model_dump())
+    tid = tid_of(current)
+    ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid}, {"_id": 0})
+    if not ar: raise HTTPException(404, "Conta não encontrada")
+    dados = body.model_dump()
+    recebido = _to_float(ar.get("valor_recebido"))
+    if ar.get("comissao_id"):
+        dados.pop("status", None)   # status de lançamento de comissão muda só por baixa/liberação/cancelamento
+        if body.status == "recebido" and ar.get("status") == "aberto":
+            # marcar como recebido pela edição = baixa do saldo restante (fica no histórico)
+            restante = round(max(0.0, _to_float(dados["valor"]) - recebido), 2)
+            await t_update("contas_receber", current, rid, {k: v for k, v in dados.items() if k != "valor"} | {"valor": dados["valor"]})
+            if restante > 0:
+                ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid}, {"_id": 0})
+                await _baixar_ar(current, ar, restante, dados.get("data_recebimento") or iso(now_utc()))
+            return await db.contas_receber.find_one({"id": rid, "tenant_id": tid}, {"_id": 0})
+    if dados.get("status") == "recebido" and recebido < _to_float(dados["valor"]) - 0.01:
+        recebido = _to_float(dados["valor"])
+        dados["valor_recebido"] = recebido
+    saldo = round(max(0.0, _to_float(dados["valor"]) - recebido), 2)
+    dados["saldo_pendente"] = 0.0 if dados.get("status") in ("cancelado", "recebido") else saldo
+    if ar.get("comissao_id") and ar.get("status") == "aberto" and saldo <= 0.01 and recebido > 0:
+        dados["status"] = "recebido"
+    res = await t_update("contas_receber", current, rid, dados)
+    if ar.get("comissao_id"):
+        await _sincronizar_comissao(tid, ar["comissao_id"], current.get("email", ""), origem="edicao_conta_receber")
+    return res
 
 @api.delete("/contas-receber/{rid}")
 async def del_ar(rid: str, current=Depends(get_active_user)):
+    tid = tid_of(current)
+    ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid}, {"_id": 0})
+    if not ar: raise HTTPException(404, "Não encontrado")
+    if ar.get("comissao_id") and await db.comissoes.find_one({"id": ar["comissao_id"], "tenant_id": tid}, {"_id": 1}):
+        raise HTTPException(400, "Este lançamento é parcela de uma comissão. Para tirá-lo, cancele ou exclua a comissão "
+                                 "em Comissões — assim os dois lados continuam batendo.")
     return await t_delete("contas_receber", current, rid)
 
 @api.post("/contas-receber/{rid}/receber")
 async def receber_comissao(rid: str, body: dict, current=Depends(get_active_user)):
     tid = tid_of(current)
-    ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid})
+    ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid}, {"_id": 0})
     if not ar: raise HTTPException(404, "Conta não encontrada")
-
     valor_recebido = _to_float(body.get("valor"))
     data_recebimento = body.get("data") or iso(now_utc())
     if valor_recebido <= 0: raise HTTPException(400, "Valor deve ser maior que zero")
     if ar.get("status") == "cancelado": raise HTTPException(400, "Lançamento cancelado não pode receber baixa.")
-
-    saldo_atual = _to_float(ar.get("saldo_pendente"), _to_float(ar.get("valor")))
-    novo_saldo = saldo_atual - valor_recebido
-    novo_total_recebido = _to_float(ar.get("valor_recebido")) + valor_recebido
-    novo_status = "recebido" if novo_saldo <= 0.01 else "aberto"
-
-    historico = ar.get("historico_recebimentos", [])
-    historico.append({"data": data_recebimento, "valor": valor_recebido, "saldo_restante": round(max(0, novo_saldo), 2)})
-
-    await db.contas_receber.update_one({"id": rid}, {"$set": {
-        "valor_recebido": round(novo_total_recebido, 2),
-        "saldo_pendente": round(max(0, novo_saldo), 2),
-        "status": novo_status,
-        "historico_recebimentos": historico,
-        "updated_at": iso(now_utc())
-    }})
-
-    if ar.get("comissao_id"):
-        com = await db.comissoes.find_one({"id": ar["comissao_id"], "tenant_id": tid})
-        if com:
-            c_saldo = _to_float(com.get("saldo_pendente"), _to_float(com.get("valor_liquido")))
-            c_novo_saldo = c_saldo - valor_recebido
-            c_novo_receb = _to_float(com.get("valor_recebido")) + valor_recebido
-            c_status = "recebida" if c_novo_saldo <= 0.01 else "parcialmente_recebida"
-            c_hist = com.get("historico_recebimentos", [])
-            c_hist.append({"data": data_recebimento, "valor": valor_recebido, "saldo_restante": round(max(0, c_novo_saldo), 2)})
-            h_status = list(com.get("historico_status") or [])
-            if c_status != com.get("status"):
-                h_status.append({"de": com.get("status"), "para": c_status, "data": data_recebimento,
-                                 "observacao": f"Baixa de R$ {valor_recebido:.2f} em Contas a Receber", "origem": "baixa",
-                                 "usuario": current.get("email"), "registrado_em": iso(now_utc())})
-            await db.comissoes.update_one({"id": com["id"]}, {"$set": {
-                "valor_recebido": round(c_novo_receb, 2),
-                "saldo_pendente": round(max(0, c_novo_saldo), 2),
-                "status": c_status,
-                "historico_recebimentos": c_hist,
-                "historico_status": h_status,
-                "updated_at": iso(now_utc())
-            }})
-
+    if ar.get("status") == "aguardando_liquidez":
+        raise HTTPException(400, "Esta comissão ainda aguarda a indústria receber do cliente. Libere a comissão antes de dar baixa.")
+    novo_saldo = await _baixar_ar(current, ar, valor_recebido, data_recebimento)
     return {"ok": True, "novo_saldo": novo_saldo}
 
 # ------------------------------------------------------------
@@ -2665,7 +2757,7 @@ async def dashboard(current=Depends(get_active_user)):
         })
 
     com_recebidas = sum(c.get("valor_recebido", 0) for c in comissoes)
-    com_abertas = sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") not in ("recebida", "aguardando_liquidez"))
+    com_abertas = _comissoes_a_receber(comissoes, ar)   # ✅ mesma conta do Contas a Receber
 
     ap_abertas = sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto")
     ar_abertas = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
@@ -2843,7 +2935,7 @@ async def _build_ai_context(current: dict) -> str:
             "pedidos_faturados": sum(1 for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")),
             "pedidos_em_aberto": sum(1 for p in pedidos if p.get("status") in ("rascunho", "enviado", "aprovado")),
             "volume_vendas_total": round(sum(p.get("total", 0) for p in pedidos if p.get("status") in ("faturado", "faturado_parcial")), 2),
-            "comissoes_a_receber": round(sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") not in ("recebida", "aguardando_liquidez")), 2),
+            "comissoes_a_receber": _comissoes_a_receber(comissoes, ar),
             "comissoes_recebidas": round(sum(c.get("valor_recebido", 0) for c in comissoes), 2),
             "contas_a_pagar_aberto": round(sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto"), 2),
             "contas_a_receber_aberto": round(ar_aberto, 2),
@@ -3173,7 +3265,7 @@ async def relatorio_geral(current=Depends(get_active_user)):
 
     com_prevista = sum(c.get("valor_liquido", 0) for c in comissoes)
     com_recebida = sum(c.get("valor_recebido", 0) for c in comissoes)
-    com_a_receber = sum(c.get("saldo_pendente", 0) for c in comissoes if c.get("status") != "recebida")
+    com_a_receber = _comissoes_a_receber(comissoes, ar)
 
     valor_pedido = sum(p.get("total", 0) for p in pedidos)
     valor_faturado = sum(f.get("valor_faturado", 0) for f in faturas)
@@ -3529,6 +3621,27 @@ async def reparar_integracao(aplicar: bool = False, corrigir_acentos: bool = Tru
                                            "valor_comissao": valor, "status": _status_lancamento(com)})
         if aplicar:
             await gerar_parcelas_comissao(current, ped, com)
+
+    # 6) comissão × Contas a Receber: saldo dos lançamentos, parcelas órfãs e saldo/status da comissão
+    rel["comissoes_sincronizadas"] = []; rel["parcelas_orfas_canceladas"] = 0
+    ids_com = {c["id"] async for c in db.comissoes.find({"tenant_id": tid}, {"_id": 0, "id": 1})}
+    async for a in db.contas_receber.find({"tenant_id": tid, "comissao_id": {"$nin": [None, ""]}}, {"_id": 0}):
+        if a["comissao_id"] not in ids_com:
+            if a.get("status") != "cancelado" and _to_float(a.get("valor_recebido")) <= 0:
+                rel["parcelas_orfas_canceladas"] += 1
+                if aplicar: await db.contas_receber.update_one({"id": a["id"], "tenant_id": tid},
+                                                               {"$set": {"status": "cancelado", "saldo_pendente": 0.0}})
+            continue
+        if a.get("status") in ("cancelado",): continue
+        saldo = round(max(0.0, _to_float(a.get("valor")) - _to_float(a.get("valor_recebido"))), 2)
+        st = a.get("status")
+        if st == "aberto" and saldo <= 0.01 and _to_float(a.get("valor_recebido")) > 0: st = "recebido"
+        if st == "recebido": saldo = 0.0
+        if aplicar and (abs(_to_float(a.get("saldo_pendente"), -1) - saldo) > 0.009 or st != a.get("status")):
+            await db.contas_receber.update_one({"id": a["id"], "tenant_id": tid}, {"$set": {"saldo_pendente": saldo, "status": st}})
+    async for com in db.comissoes.find({"tenant_id": tid, "status": {"$ne": "cancelada"}}, {"_id": 0, "id": 1}):
+        await _sincronizar_comissao(tid, com["id"], current.get("email", ""), origem="reparo",
+                                    aplicar=aplicar, mudancas=rel["comissoes_sincronizadas"])
 
     if aplicar:
         await _log_auditoria(current, "reparo_integracao", "manutencao", backup_id or "-", extra={

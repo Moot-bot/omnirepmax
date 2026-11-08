@@ -17,7 +17,8 @@ export default function Signup() {
     empresa: "", 
     telefone: "",
     tamanho_operacao: "solo",
-    controle_atual: "planilha"
+    controle_atual: "planilha",
+    aceite_termos: false
   });
   const [busy, setBusy] = useState(false);
 
@@ -26,6 +27,7 @@ export default function Signup() {
   const submit = async (e) => {
     e.preventDefault();
     if (form.password.length < 8) return toast.error("A senha precisa ter ao menos 8 caracteres");
+    if (!form.aceite_termos) return toast.error("Para criar a conta, aceite os Termos de Uso e a Política de Privacidade.");
     setBusy(true);
     try {
       const { data } = await api.post("/auth/signup", form);
@@ -194,8 +196,25 @@ export default function Signup() {
               </div>
             </div>
 
+            {/* ✅ Aceite obrigatório dos termos — caixa desenhada (aparece igual em qualquer tema/navegador) */}
+            <div className={`flex items-start gap-3 rounded-xl border p-3 text-sm transition-colors ${form.aceite_termos ? "border-[#075BFF]/40 bg-[#075BFF]/5" : "border-border bg-background"}`}>
+              <button
+                type="button" role="checkbox" aria-checked={form.aceite_termos} aria-label="Aceito os Termos de Uso e a Política de Privacidade"
+                onClick={() => setForm({ ...form, aceite_termos: !form.aceite_termos })}
+                className={`mt-0.5 w-5 h-5 shrink-0 rounded-md border-2 flex items-center justify-center transition-colors focus:outline-none focus:ring-2 focus:ring-[#075BFF]/40 ${form.aceite_termos ? "bg-[#075BFF] border-[#075BFF]" : "bg-white dark:bg-slate-900 border-slate-400 dark:border-slate-500"}`}
+              >
+                {form.aceite_termos && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
+              </button>
+              <span className="text-muted-foreground leading-snug">
+                <span className="cursor-pointer select-none" onClick={() => setForm({ ...form, aceite_termos: !form.aceite_termos })}>Li e aceito os </span>
+                <Link to="/termos" target="_blank" className="font-semibold text-[#075BFF] hover:underline">Termos de Uso</Link>
+                <span className="cursor-pointer select-none" onClick={() => setForm({ ...form, aceite_termos: !form.aceite_termos })}> e a </span>
+                <Link to="/privacidade" target="_blank" className="font-semibold text-[#075BFF] hover:underline">Política de Privacidade</Link>.
+              </span>
+            </div>
+
             <button 
-              type="submit" disabled={busy} 
+              type="submit" disabled={busy || !form.aceite_termos} 
               className="w-full h-12 mt-2 bg-[#075BFF] hover:bg-blue-600 text-white font-bold text-lg rounded-xl shadow-lg shadow-[#075BFF]/30 transition-all active:scale-[0.98] disabled:opacity-50"
             >
               {busy ? "Criando conta..." : "Criar minha conta"}
