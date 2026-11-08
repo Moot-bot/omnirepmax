@@ -33,6 +33,7 @@ import Configuracoes from "./pages/Configuracoes";
 import Relatorios from "./pages/Relatorios";
 import Feedback from "./pages/Feedback";
 import Admin from "./pages/Admin";
+import Manutencao from "./pages/Manutencao"; // ✅ NOVO
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -88,6 +89,7 @@ export default function App() {
               <Route path="/relatorios" element={<Relatorios />} />
               <Route path="/configuracoes" element={<Configuracoes />} />
               <Route path="/feedback" element={<Feedback />} />
+              <Route path="/manutencao" element={<Manutencao />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

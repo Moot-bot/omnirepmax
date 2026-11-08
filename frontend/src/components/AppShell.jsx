@@ -7,7 +7,7 @@ import {
   Building2, Users, Filter, Calendar,
   ShoppingCart, UploadCloud, Percent, TrendingUp, TrendingDown,
   FileText, Map, Settings, LogOut, Search, Menu, X, ExternalLink, UserPlus,
-  Sun, Moon, Bell, Package, ShieldAlert, Clock, Landmark, CreditCard, Lock
+  Sun, Moon, Bell, Package, ShieldAlert, Clock, Landmark, CreditCard, Lock, Wrench
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -64,6 +64,7 @@ const MENU_SECTIONS = [
     items: [
       { label: "Assinatura e Planos", icon: CreditCard, path: "/planos" },
       { label: "Configurações", icon: Settings, path: "/configuracoes" },
+      { label: "Verificar dados", icon: Wrench, path: "/manutencao" },
     ]
   }
 ];

@@ -81,7 +81,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.5.0",
+    title="OMNIREPMAX API", version="2.6.0",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -668,6 +668,9 @@ class PedidoItemIn(BaseModel):
 class PedidoIn(BaseModel):
     cliente_id: str
     representada_id: str
+    numero_referencia: Optional[str] = ""     # nº do pedido na fábrica/cliente
+    data_pedido: Optional[str] = None         # data comercial do pedido
+    data_emissao: Optional[str] = None        # data em que o documento foi emitido
     condicao_pagamento: Optional[str] = "30 dias"
     prazo_entrega: Optional[str] = ""
     transportadora: Optional[str] = ""
@@ -1124,6 +1127,198 @@ async def update_produto(pid: str, body: ProdutoIn, current=Depends(get_active_u
 async def del_produto(pid: str, current=Depends(get_active_user)):
     return await t_delete("produtos", current, pid)
 
+# ------------------------------------------------------------
+# ✅ Importação de produtos (planilha): simulação, duplicidade, lotes e desfazer
+# ------------------------------------------------------------
+class ProdutoImportLinha(BaseModel):
+    linha: int
+    # Any: a planilha pode mandar número ou texto em qualquer coluna; tudo é normalizado no servidor
+    nome: Optional[Any] = ""
+    codigo: Optional[Any] = ""
+    ean: Optional[Any] = ""
+    marca: Optional[Any] = ""
+    categoria: Optional[Any] = ""
+    preco: Optional[Any] = None
+    unidade: Optional[Any] = ""
+
+class ProdutoImportIn(BaseModel):
+    representada_id: str
+    modo: str = "atualizar"            # "atualizar" | "ignorar" (para produtos já existentes)
+    simular: bool = True               # True = só analisa, não grava
+    import_id: Optional[str] = None    # mesmo id em todos os lotes de uma importação
+    produtos: List[ProdutoImportLinha]
+
+MAX_LINHAS_IMPORTACAO = 20_000
+LOTE_IMPORTACAO = 500
+
+def _texto_codigo(v) -> str:
+    """Código/EAN como texto: sem notação científica e sem '.0' de conversão numérica."""
+    if v is None: return ""
+    if isinstance(v, bool): return ""
+    if isinstance(v, int): return str(v)
+    if isinstance(v, float):
+        return str(int(v)) if v.is_integer() else repr(v)
+    s = str(v).strip()
+    if re.fullmatch(r"\d+\.0+", s): s = s.split(".")[0]
+    if re.fullmatch(r"\d+(?:[.,]\d+)?[eE]\+?\d+", s):
+        try:
+            from decimal import Decimal
+            s = format(Decimal(s.replace(",", ".")).quantize(Decimal(1)), "f")
+        except Exception:
+            pass
+    return s
+
+def _preco_br(v) -> Optional[float]:
+    """Aceita 1.234,56 · 1234.56 · R$ 1.234,56 · 49,90 · número. None = inválido; vazio = 0."""
+    if v is None or v == "": return 0.0
+    if isinstance(v, bool): return None
+    if isinstance(v, (int, float)): return round(float(v), 2)
+    s = re.sub(r"(?i)r\$|\s", "", str(v))
+    if not s: return 0.0
+    if not re.fullmatch(r"-?[\d.,]+", s): return None
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
+    elif "," in s:
+        if s.count(",") > 1: return None
+        s = s.replace(",", ".")
+    elif s.count(".") > 1 or re.fullmatch(r"\d{1,3}\.\d{3}", s):
+        s = s.replace(".", "")           # 1.234 / 1.234.567 = milhar
+    try:
+        n = float(s)
+    except ValueError:
+        return None
+    return round(n, 2) if n >= 0 else None
+
+def _chave_produto(codigo: str, ean: str) -> Optional[str]:
+    if codigo: return f"c:{codigo.lower()}"
+    if ean and ean.lower() not in ("sem gtin", "0"): return f"e:{ean}"
+    return None
+
+@api.post("/produtos/importar")
+async def importar_produtos(body: ProdutoImportIn, current=Depends(get_active_user)):
+    tid = tid_of(current)
+    rep_doc = await db.representadas.find_one({"id": body.representada_id, "tenant_id": tid}, {"_id": 0, "id": 1})
+    if not rep_doc: raise HTTPException(404, "Representada não encontrada")
+    if body.modo not in ("atualizar", "ignorar"): raise HTTPException(400, "Modo inválido")
+    if len(body.produtos) > MAX_LINHAS_IMPORTACAO:
+        raise HTTPException(413, f"Máximo de {MAX_LINHAS_IMPORTACAO} linhas por importação. Divida a planilha.")
+
+    erros: List[dict] = []
+    validos: Dict[str, dict] = {}       # chave → produto (última ocorrência vence)
+    sem_chave: List[dict] = []
+    duplicados_arquivo = 0
+    for l in body.produtos:
+        txt = lambda v: "" if v is None else (_texto_codigo(v) if isinstance(v, (int, float)) else str(v)).strip()
+        nome = txt(l.nome)
+        codigo = _texto_codigo(l.codigo)
+        ean = _texto_codigo(l.ean)
+        l.marca, l.categoria, l.unidade = txt(l.marca), txt(l.categoria), txt(l.unidade)
+        if not any([nome, codigo, ean, l.marca, txt(l.preco)]):
+            continue  # linha totalmente em branco
+        if not nome:
+            erros.append({"linha": l.linha, "motivo": "Nome obrigatório não informado", "codigo": codigo, "ean": ean}); continue
+        preco = _preco_br(l.preco)
+        if preco is None:
+            erros.append({"linha": l.linha, "motivo": f"Preço inválido: '{l.preco}'", "nome": nome, "codigo": codigo}); continue
+        prod = {"linha": l.linha, "nome": nome, "codigo": codigo, "ean": ean,
+                "marca": (l.marca or "").strip(), "categoria": (l.categoria or "").strip(),
+                "preco": preco, "unidade": ((l.unidade or "").strip() or "UN").upper()[:6]}
+        chave = _chave_produto(codigo, ean)
+        if chave is None:
+            sem_chave.append(prod)
+        else:
+            if chave in validos: duplicados_arquivo += 1
+            validos[chave] = prod
+
+    # existentes na MESMA representada (por código ou EAN)
+    existentes: Dict[str, dict] = {}
+    async for d in db.produtos.find({"tenant_id": tid, "representada_id": body.representada_id},
+                                    {"_id": 0, "id": 1, "codigo": 1, "ean": 1, "nome": 1, "preco_tabela": 1,
+                                     "marca": 1, "categoria": 1, "unidade": 1}):
+        for k in (_chave_produto((d.get("codigo") or "").strip(), ""), _chave_produto("", (d.get("ean") or "").strip())):
+            if k: existentes.setdefault(k, d)
+    a_criar, a_atualizar, a_ignorar = [], [], []
+    for chave, prod in validos.items():
+        ex = existentes.get(chave) or (existentes.get(_chave_produto("", prod["ean"])) if prod["ean"] else None)
+        if ex:
+            (a_atualizar if body.modo == "atualizar" else a_ignorar).append((ex, prod))
+        else:
+            a_criar.append(prod)
+    a_criar.extend(sem_chave)  # sem código e sem EAN: não há como detectar duplicidade
+
+    resumo = {
+        "linhas_recebidas": len(body.produtos),
+        "validos": len(validos) + len(sem_chave),
+        "com_erro": len(erros),
+        "duplicados_no_arquivo": duplicados_arquivo,
+        "ja_existentes": len(a_atualizar) + len(a_ignorar),
+        "a_criar": len(a_criar),
+        "a_atualizar": len(a_atualizar),
+        "a_ignorar": len(a_ignorar),
+        "sem_codigo_nem_ean": len(sem_chave),
+    }
+    if body.simular:
+        return {"simulacao": True, "resumo": resumo, "erros": erros[:2000]}
+
+    import_id = body.import_id or new_id()
+    agora = iso(now_utc())
+    log = await db.import_logs.find_one({"id": import_id, "tenant_id": tid})
+    if not log:
+        await db.import_logs.insert_one({"id": import_id, "tenant_id": tid, "representada_id": body.representada_id,
+                                         "user_email": current.get("email"), "criados": [], "atualizados_antes": [],
+                                         "status": "em_andamento", "created_at": agora})
+    criados_ids: List[str] = []
+    antes: List[dict] = []
+    try:
+        docs = [{
+            "id": new_id(), "tenant_id": tid, "representada_id": body.representada_id,
+            "nome": p["nome"], "codigo": p["codigo"], "ean": p["ean"], "sku": p["codigo"],
+            "marca": p["marca"], "categoria": p["categoria"], "unidade": p["unidade"],
+            "preco_tabela": p["preco"], "preco_sugerido": p["preco"], "custo": 0.0,
+            "qtd_por_caixa": 1, "status": "ativo", "descricao": "", "import_id": import_id,
+            "created_at": agora, "updated_at": agora,
+        } for p in a_criar]
+        for i in range(0, len(docs), LOTE_IMPORTACAO):
+            lote = docs[i:i + LOTE_IMPORTACAO]
+            await db.produtos.insert_many([dict(d) for d in lote])
+            criados_ids.extend(d["id"] for d in lote)
+        for ex, p in a_atualizar:
+            antes.append(ex)
+            upd = {"nome": p["nome"], "updated_at": agora, "import_id": import_id}
+            if p["codigo"]: upd["codigo"] = p["codigo"]
+            if p["ean"]: upd["ean"] = p["ean"]
+            for campo, chave in (("marca", "marca"), ("categoria", "categoria"), ("unidade", "unidade")):
+                if p[chave]: upd[campo] = p[chave]
+            if p["preco"]: upd.update({"preco_tabela": p["preco"], "preco_sugerido": p["preco"]})
+            await db.produtos.update_one({"id": ex["id"], "tenant_id": tid}, {"$set": upd})
+    except Exception as e:
+        # ✅ compensação: desfaz o que este lote gravou e informa
+        logger.exception("Falha na importação de produtos")
+        if criados_ids: await db.produtos.delete_many({"tenant_id": tid, "id": {"$in": criados_ids}})
+        for ex in antes:
+            await db.produtos.update_one({"id": ex["id"], "tenant_id": tid}, {"$set": {k: v for k, v in ex.items() if k != "id"}})
+        raise HTTPException(500, f"A importação deste lote falhou e foi desfeita (nada deste lote ficou gravado): {e}")
+
+    await db.import_logs.update_one({"id": import_id, "tenant_id": tid}, {
+        "$push": {"criados": {"$each": criados_ids}, "atualizados_antes": {"$each": antes}},
+        "$set": {"updated_at": iso(now_utc())}})
+    return {"simulacao": False, "import_id": import_id, "resumo": resumo, "erros": erros[:2000],
+            "criados": len(criados_ids), "atualizados": len(antes), "ignorados": len(a_ignorar)}
+
+@api.post("/produtos/importar/{import_id}/desfazer")
+async def desfazer_importacao(import_id: str, current=Depends(get_active_user)):
+    """Remove os produtos criados e restaura os atualizados por uma importação."""
+    tid = tid_of(current)
+    log = await db.import_logs.find_one({"id": import_id, "tenant_id": tid}, {"_id": 0})
+    if not log: raise HTTPException(404, "Importação não encontrada")
+    if log.get("status") == "desfeita": return {"ok": True, "message": "Importação já desfeita."}
+    r = await db.produtos.delete_many({"tenant_id": tid, "id": {"$in": log.get("criados", [])}})
+    for ex in log.get("atualizados_antes", []):
+        await db.produtos.update_one({"id": ex["id"], "tenant_id": tid},
+                                     {"$set": {k: v for k, v in ex.items() if k != "id"}, "$unset": {"import_id": ""}})
+    await db.import_logs.update_one({"id": import_id, "tenant_id": tid}, {"$set": {"status": "desfeita", "desfeita_em": iso(now_utc())}})
+    return {"ok": True, "removidos": r.deleted_count, "restaurados": len(log.get("atualizados_antes", []))}
+
 @api.post("/produtos/import-txt")
 async def import_txt(body: TXTImportIn, current=Depends(get_active_user)):
     tid = tid_of(current)
@@ -1188,9 +1383,29 @@ def _calcular_parcelas_comissao(parcelas_in: Optional[List[dict]], valor_liquido
         p["valor"] = v
     return parcelas
 
+# Status de comissão (o que o representante vê) — "pendente" é o nome legado de "aguardando_pagamento"
+STATUS_COMISSAO = {
+    "aguardando_liquidez": "Aguardando liquidez",
+    "liberada": "Liberada para pagamento",
+    "aguardando_pagamento": "Aguardando pagamento",
+    "pendente": "Aguardando pagamento",
+    "parcialmente_recebida": "Parcialmente recebida",
+    "recebida": "Recebida",
+    "em_atraso": "Em atraso",
+    "cancelada": "Cancelada",
+}
+
+def _status_lancamento(comissao: dict) -> str:
+    """Contas a Receber: comissão que ainda espera a fábrica receber fica separada do 'aberto'."""
+    return "aguardando_liquidez" if comissao.get("status") == "aguardando_liquidez" else "aberto"
+
 async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parcelas_override: Optional[List[dict]] = None):
-    """Distribui o valor LÍQUIDO da comissão entre as parcelas.
-    Usa `parcelas_override` quando informado (não vazio); senão, as parcelas do pedido."""
+    """Distribui o valor LÍQUIDO da comissão entre as parcelas em Contas a Receber.
+    Usa `parcelas_override` quando informado (não vazio); senão, as parcelas do pedido.
+    Idempotente: se a comissão já tem lançamentos, não cria de novo."""
+    if await db.contas_receber.count_documents({"tenant_id": tid_of(current), "comissao_id": comissao["id"]}) > 0:
+        return
+    status_ar = _status_lancamento(comissao)
     parcelas_in = parcelas_override if parcelas_override else ped.get("parcelas", [])
     parcelas = _calcular_parcelas_comissao(parcelas_in, _to_float(comissao.get("valor_liquido")))
     n = len(parcelas)
@@ -1207,10 +1422,43 @@ async def gerar_parcelas_comissao(current: dict, ped: dict, comissao: dict, parc
             "valor_recebido": 0.0,
             "saldo_pendente": p["valor"],
             "vencimento": p["vencimento"],
-            "status": "aberto",
+            "status": status_ar,
             "historico_recebimentos": [],
             "forma_pagamento": "Boleto",
+            "nf_numero": comissao.get("nf_numero") or "",
+            "origem": "comissao",
         })
+
+async def _liberar_comissao(current: dict, com: dict, novo_status: str = "liberada",
+                            data: Optional[str] = None, observacao: str = "", origem: str = "manual") -> dict:
+    """Tira a comissão de 'aguardando liquidez': recalcula (base 'recebido'), ativa os lançamentos
+    em Contas a Receber (ou cria, se faltarem) e registra o histórico."""
+    tid = tid_of(current)
+    ped = await db.pedidos.find_one({"id": com.get("pedido_id"), "tenant_id": tid}, {"_id": 0}) or {}
+    updates: Dict[str, Any] = {"status": novo_status, "updated_at": iso(now_utc())}
+
+    if (com.get("base_calculo") or "faturado") == "recebido" and com.get("pedido_id"):
+        fats = await db.faturamentos.find({"tenant_id": tid, "pedido_id": com["pedido_id"]}, {"_id": 0}).to_list(500)
+        total_fat = sum(_to_float(f.get("valor_faturado")) for f in fats) or _to_float(com.get("valor_faturado"))
+        novo_valor = round(total_fat * _to_float(com.get("percentual")) / 100.0, 2)
+        if abs(novo_valor - _to_float(com.get("valor_liquido"))) >= 0.01 and _to_float(com.get("valor_recebido")) == 0:
+            updates.update({"valor_liquido": novo_valor, "saldo_pendente": novo_valor})
+            await db.contas_receber.delete_many({"tenant_id": tid, "comissao_id": com["id"], "valor_recebido": {"$in": [0, 0.0, None]}})
+
+    hist = list(com.get("historico_status") or [])
+    hist.append({"de": com.get("status"), "para": novo_status, "data": data or iso(now_utc()),
+                 "observacao": observacao, "origem": origem,
+                 "usuario": current.get("email"), "registrado_em": iso(now_utc())})
+    updates["historico_status"] = hist
+    await db.comissoes.update_one({"id": com["id"], "tenant_id": tid}, {"$set": updates})
+    com = {**com, **updates}
+
+    await db.contas_receber.update_many(
+        {"tenant_id": tid, "comissao_id": com["id"], "status": "aguardando_liquidez"},
+        {"$set": {"status": "aberto", "updated_at": iso(now_utc())}})
+    if ped and _to_float(com.get("valor_liquido")) > 0:
+        await gerar_parcelas_comissao(current, {**ped, "id": com["pedido_id"]}, com)  # só cria se faltar
+    return com
 
 # ✅ NOVO: regenera as parcelas das comissões de um pedido já faturado após edição.
 # Não mexe em comissões que já tiveram qualquer recebimento (preserva histórico).
@@ -1220,7 +1468,6 @@ async def _regerar_parcelas_pedido(current: dict, ped: dict) -> dict:
     comissoes = await db.comissoes.find({
         "tenant_id": tid,
         "pedido_id": ped["id"],
-        "modalidade": "faturamento",
         "status": {"$nin": ["cancelada", "recebida"]},
     }, {"_id": 0}).to_list(100)
 
@@ -1262,18 +1509,69 @@ async def get_pedidos(status: Optional[str] = None, cliente_id: Optional[str] = 
     pedidos = await t_list("pedidos", current, f)
     faturamentos = await t_list("faturamentos", current)
 
-    fat_dict = {}
+    fat_dict: Dict[str, float] = {}
+    nfs: Dict[str, List[dict]] = {}
     for fat in faturamentos:
         pid = fat.get("pedido_id")
         if pid:
-            fat_dict[pid] = fat_dict.get(pid, 0) + fat.get("valor_faturado", 0)
+            fat_dict[pid] = fat_dict.get(pid, 0) + _to_float(fat.get("valor_faturado"))
+            nfs.setdefault(pid, []).append(fat)
 
     for p in pedidos:
         valor_faturado = fat_dict.get(p["id"], 0)
         p["valor_faturado_total"] = round(valor_faturado, 2)
-        p["saldo_a_faturar"] = round(p["total"] - valor_faturado, 2)
+        p["saldo_a_faturar"] = round(_to_float(p.get("total")) - valor_faturado, 2)
+        fs = sorted(nfs.get(p["id"], []), key=lambda f: f.get("data_faturamento") or "")
+        p["faturamentos"] = [{"id": f["id"], "nf_numero": f.get("nf_numero"), "nf_serie": f.get("nf_serie"),
+                              "data_faturamento": f.get("data_faturamento"), "valor_faturado": _to_float(f.get("valor_faturado"))} for f in fs]
+        p["nf_numero"] = ", ".join(dict.fromkeys(f.get("nf_numero") for f in fs if f.get("nf_numero"))) or p.get("nf_numero") or ""
+        p["data_faturamento"] = fs[-1].get("data_faturamento") if fs else None
 
     return pedidos
+
+class FaturamentoEditIn(BaseModel):
+    nf_numero: Optional[str] = None
+    nf_serie: Optional[str] = None
+    data_faturamento: Optional[str] = None
+
+@api.patch("/faturamentos/{fid}")
+async def editar_faturamento(fid: str, body: FaturamentoEditIn, current=Depends(get_active_user)):
+    """Corrige NF/série/data de um faturamento já lançado (o valor não muda aqui)."""
+    tid = tid_of(current)
+    fat = await db.faturamentos.find_one({"id": fid, "tenant_id": tid}, {"_id": 0})
+    if not fat: raise HTTPException(404, "Faturamento não encontrado")
+    upd: Dict[str, Any] = {}
+    if body.nf_numero is not None:
+        nf = body.nf_numero.strip()
+        if not nf: raise HTTPException(400, "Informe o número da NF")
+        serie = (body.nf_serie if body.nf_serie is not None else fat.get("nf_serie") or "").strip()
+        pids_rep = [x["id"] async for x in db.pedidos.find({"tenant_id": tid, "representada_id": fat.get("representada_id")}, {"id": 1, "_id": 0})]
+        dup = await db.faturamentos.find_one({"tenant_id": tid, "nf_numero": nf, "nf_serie": serie,
+                                              "pedido_id": {"$in": pids_rep}, "id": {"$ne": fid}})
+        if dup: raise HTTPException(409, f"NF {nf}/{serie} já registrada no pedido {dup.get('pedido_numero')}.")
+        upd.update({"nf_numero": nf, "nf_serie": serie})
+    elif body.nf_serie is not None:
+        upd["nf_serie"] = body.nf_serie.strip()
+    if body.data_faturamento:
+        d = _parse_date(body.data_faturamento)
+        if not d: raise HTTPException(400, "Data inválida")
+        upd["data_faturamento"] = iso(d)
+    if not upd: raise HTTPException(400, "Nada para alterar")
+    await t_update("faturamentos", current, fid, upd)
+    # mantém NF e data iguais na comissão e nos lançamentos desse faturamento
+    filtro_com = {"tenant_id": tid, "pedido_id": fat["pedido_id"], "nf_numero": fat.get("nf_numero"), "nf_serie": fat.get("nf_serie") or ""}
+    com_upd = {k: v for k, v in upd.items() if k in ("nf_numero", "nf_serie", "data_faturamento")}
+    ids_com = [c["id"] async for c in db.comissoes.find(filtro_com, {"id": 1, "_id": 0})]
+    if ids_com:
+        await db.comissoes.update_many({"tenant_id": tid, "id": {"$in": ids_com}}, {"$set": com_upd})
+        if "nf_numero" in upd:
+            await db.contas_receber.update_many({"tenant_id": tid, "comissao_id": {"$in": ids_com}}, {"$set": {"nf_numero": upd["nf_numero"]}})
+    fats = await db.faturamentos.find({"tenant_id": tid, "pedido_id": fat["pedido_id"]}, {"_id": 0, "nf_numero": 1}).to_list(500)
+    await db.pedidos.update_one({"id": fat["pedido_id"], "tenant_id": tid}, {"$set": {
+        "nf_numero": ", ".join(dict.fromkeys(f.get("nf_numero") for f in fats if f.get("nf_numero")))}})
+    await _log_auditoria(current, "faturamento_editado", "faturamentos", fid,
+                         before={k: fat.get(k) for k in upd}, after=upd)
+    return {"ok": True}
 
 # ✅ NOVO: Painel de pedidos aguardando faturamento (item 7 do Prompt Mestre)
 @api.get("/pedidos/aguardando-faturamento")
@@ -1331,12 +1629,25 @@ async def create_pedido(body: PedidoIn, current=Depends(get_active_user)):
     if not rep: raise HTTPException(404, "Representada não encontrada")
     cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
     if not cli: raise HTTPException(404, "Cliente não encontrado")
-    # ✅ NOVO: usa a regra VIGENTE na data do pedido (não a atual)
-    regra = await comissao_vigente_em(tid, data["representada_id"], iso(now_utc()))
+    _normalizar_datas_pedido(data)
+    data["data_pedido"] = data.get("data_pedido") or iso(now_utc())
+    # ✅ usa a regra VIGENTE na data do pedido (não a atual)
+    regra = await comissao_vigente_em(tid, data["representada_id"], data["data_pedido"])
     data = calc_pedido_totals(data, regra.get("comissao_padrao", 5.0))
     data["numero"] = await next_numero(tid, "PED", "pedidos")
-    data["data_pedido"] = iso(now_utc())
     return await t_insert("pedidos", current, data)
+
+def _normalizar_datas_pedido(data: dict):
+    data["numero_referencia"] = (data.get("numero_referencia") or "").strip()
+    data["observacoes"] = (data.get("observacoes") or "").strip()
+    for campo in ("data_pedido", "data_emissao"):
+        v = data.get(campo)
+        if v:
+            d = _parse_date(v)
+            if not d: raise HTTPException(400, f"Data inválida em {campo.replace('_', ' ')}")
+            data[campo] = iso(d)
+        else:
+            data.pop(campo, None)
 
 @api.put("/pedidos/{pid}")
 async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_active_user)):
@@ -1349,7 +1660,12 @@ async def update_pedido(pid: str, body: PedidoIn, current=Depends(get_active_use
     cli = await db.clientes.find_one({"id": data["cliente_id"], "tenant_id": tid}, {"_id": 0})
     if not cli: raise HTTPException(404, "Cliente não encontrado")
     # ✅ NOVO: usa a regra vigente na data ORIGINAL do pedido (preserva o fato gerador)
-    data_ref = existing.get("data_pedido") or iso(now_utc())
+    _normalizar_datas_pedido(data)
+    # campos não enviados mantêm o valor atual (não apaga datas já gravadas)
+    data["data_pedido"] = data.get("data_pedido") or existing.get("data_pedido") or iso(now_utc())
+    if not data.get("data_emissao") and existing.get("data_emissao"):
+        data["data_emissao"] = existing["data_emissao"]
+    data_ref = data["data_pedido"]
     regra = await comissao_vigente_em(tid, data["representada_id"], data_ref)
     data = calc_pedido_totals(data, regra.get("comissao_padrao", 5.0))
     data["numero"] = existing["numero"]
@@ -1467,11 +1783,10 @@ async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(g
     # 2. Calcula comissão com base na regra vigente
     base = regra.get("base_calculo_comissao", "faturado")
     if base == "pedido":
-        valor_base = ped.get("total", 0)
-    elif base == "recebido":
-        valor_base = 0
+        valor_base = _to_float(ped.get("total"))
     else:
-        valor_base = body.valor_faturado
+        # "recebido": valor provisório sobre o faturado; recalculado quando a fábrica confirmar o recebimento
+        valor_base = _to_float(body.valor_faturado)
 
     percentual = regra.get("comissao_padrao", 5.0)
     valor_liquido = round(valor_base * (percentual / 100), 2)
@@ -1495,19 +1810,25 @@ async def registrar_faturamento(pid: str, body: FaturamentoIn, current=Depends(g
         "modalidade": modalidade,
         "status": "pendente" if modalidade == "faturamento" else "aguardando_liquidez",
         "historico_recebimentos": [],
+        "historico_status": [{"de": None, "para": "pendente" if modalidade == "faturamento" else "aguardando_liquidez",
+                              "data": data_fat, "observacao": f"Faturamento NF {body.nf_numero}", "origem": "faturamento",
+                              "usuario": current.get("email"), "registrado_em": iso(now_utc())}],
     }
     comissao = await t_insert("comissoes", current, comissao_data)
 
-    # 4. Gera contas a receber se for faturamento
-    #    (parcelas do body; se vierem vazias, usa as parcelas do pedido)
-    if modalidade == "faturamento" and valor_liquido > 0:
+    # 4. ✅ Contas a Receber SEMPRE recebe a comissão (nunca o valor do pedido).
+    #    Modalidade liquidez: entra como "aguardando liquidez" e vira "aberto" quando liberada.
+    if valor_liquido > 0:
         await gerar_parcelas_comissao(current, ped, comissao, body.parcelas or None)
 
     # 5. Atualiza status do pedido
     faturamentos = await t_list("faturamentos", current, {"pedido_id": pid})
-    total_faturado = sum(f["valor_faturado"] for f in faturamentos)
-    novo_status = "faturado" if total_faturado >= ped["total"] else "faturado_parcial"
-    await db.pedidos.update_one({"id": pid, "tenant_id": tid}, {"$set": {"status": novo_status}})
+    total_faturado = sum(_to_float(f.get("valor_faturado")) for f in faturamentos)
+    novo_status = "faturado" if total_faturado >= _to_float(ped.get("total")) - 0.01 else "faturado_parcial"
+    await db.pedidos.update_one({"id": pid, "tenant_id": tid}, {"$set": {
+        "status": novo_status,
+        "nf_numero": ", ".join(dict.fromkeys(f.get("nf_numero") for f in faturamentos if f.get("nf_numero"))),
+    }})
 
     return {"ok": True, "status": novo_status, "valor_liquido": valor_liquido}
 
@@ -1517,24 +1838,10 @@ async def confirmar_liquidez(pid: str, current=Depends(get_active_user)):
     ped = await db.pedidos.find_one({"id": pid, "tenant_id": tid})
     if not ped: raise HTTPException(404, "Pedido não encontrado")
 
-    com = await db.comissoes.find_one({"pedido_id": pid, "tenant_id": tid, "status": "aguardando_liquidez"})
-    if not com: raise HTTPException(404, "Comissão não encontrada ou já liberada.")
-
-    await db.comissoes.update_one({"id": com["id"]}, {"$set": {"status": "pendente"}})
-
-    # ✅ NOVO: usa base_calculo GUARDADA na comissão (regra vigente no faturamento),
-    # não o valor atual da representada. Preserva o histórico.
-    base = com.get("base_calculo") or "faturado"
-    if base == "recebido":
-        faturamentos = await t_list("faturamentos", current, {"pedido_id": pid})
-        total_faturado = sum(f["valor_faturado"] for f in faturamentos)
-        novo_valor = round(total_faturado * (com["percentual"] / 100), 2)
-        await db.comissoes.update_one({"id": com["id"]}, {"$set": {
-            "valor_liquido": novo_valor, "saldo_pendente": novo_valor
-        }})
-        com["valor_liquido"] = novo_valor
-
-    await gerar_parcelas_comissao(current, ped, com)
+    comissoes = await db.comissoes.find({"pedido_id": pid, "tenant_id": tid, "status": "aguardando_liquidez"}, {"_id": 0}).to_list(100)
+    if not comissoes: raise HTTPException(404, "Comissão não encontrada ou já liberada.")
+    for com in comissoes:
+        await _liberar_comissao(current, com, "liberada", observacao="Liquidez confirmada no pedido", origem="pedido")
     return {"ok": True, "message": "Comissão liberada."}
 
 @api.delete("/pedidos/{pid}")
@@ -1625,7 +1932,82 @@ async def get_comissoes(status: Optional[str] = None, representada_id: Optional[
     f: Dict[str, Any] = {}
     if status: f["status"] = status
     if representada_id: f["representada_id"] = representada_id
-    return await t_list("comissoes", current, f)
+    itens = await t_list("comissoes", current, f)
+    for c in itens:
+        c["status_label"] = STATUS_COMISSAO.get(c.get("status"), c.get("status"))
+    return itens
+
+class ComissaoStatusIn(BaseModel):
+    status: str
+    data: Optional[str] = None
+    observacao: Optional[str] = ""
+
+@api.get("/comissoes/status-disponiveis")
+async def status_comissao_disponiveis():
+    return [{"id": k, "label": v} for k, v in STATUS_COMISSAO.items() if k != "pendente"]
+
+@api.get("/comissoes/{cid}")
+async def detalhe_comissao(cid: str, current=Depends(get_active_user)):
+    tid = tid_of(current)
+    com = await db.comissoes.find_one({"id": cid, "tenant_id": tid}, {"_id": 0})
+    if not com: raise HTTPException(404, "Comissão não encontrada")
+    com["status_label"] = STATUS_COMISSAO.get(com.get("status"), com.get("status"))
+    com["lancamentos"] = await db.contas_receber.find({"tenant_id": tid, "comissao_id": cid}, {"_id": 0}).sort("vencimento", 1).to_list(100)
+    ped = await db.pedidos.find_one({"id": com.get("pedido_id"), "tenant_id": tid}, {"_id": 0, "numero": 1, "numero_referencia": 1, "total": 1, "status": 1})
+    com["pedido"] = ped
+    return com
+
+@api.post("/comissoes/{cid}/status")
+async def alterar_status_comissao(cid: str, body: ComissaoStatusIn, current=Depends(get_active_user)):
+    """Muda o status manualmente. NÃO dá baixa financeira: o recebimento continua sendo
+    registrado em Contas a Receber."""
+    tid = tid_of(current)
+    com = await db.comissoes.find_one({"id": cid, "tenant_id": tid}, {"_id": 0})
+    if not com: raise HTTPException(404, "Comissão não encontrada")
+    novo = "pendente" if body.status == "aguardando_pagamento" else body.status
+    if novo not in STATUS_COMISSAO: raise HTTPException(400, "Status inválido")
+    if novo == com.get("status"): raise HTTPException(400, "A comissão já está com esse status")
+    data = iso(_parse_date(body.data)) if body.data and _parse_date(body.data) else iso(now_utc())
+    obs = (body.observacao or "").strip()
+    efeitos: List[str] = []
+
+    if com.get("status") == "aguardando_liquidez" and novo not in ("cancelada",):
+        com = await _liberar_comissao(current, com, novo, data=data, observacao=obs)
+        efeitos.append("Lançamentos em Contas a Receber liberados para cobrança.")
+    else:
+        if novo == "cancelada":
+            if _to_float(com.get("valor_recebido")) > 0:
+                raise HTTPException(400, "Comissão com valor já recebido não pode ser cancelada. Estorne a baixa primeiro.")
+            r = await db.contas_receber.update_many(
+                {"tenant_id": tid, "comissao_id": cid, "status": {"$ne": "recebido"}},
+                {"$set": {"status": "cancelado", "saldo_pendente": 0.0, "updated_at": iso(now_utc())}})
+            if r.modified_count: efeitos.append(f"{r.modified_count} lançamento(s) em Contas a Receber cancelado(s).")
+        elif novo == "aguardando_liquidez":
+            r = await db.contas_receber.update_many(
+                {"tenant_id": tid, "comissao_id": cid, "status": "aberto", "valor_recebido": {"$in": [0, 0.0, None]}},
+                {"$set": {"status": "aguardando_liquidez", "updated_at": iso(now_utc())}})
+            if r.modified_count: efeitos.append("Lançamentos voltaram para 'aguardando liquidez'.")
+        elif com.get("status") == "cancelada":
+            async for ar in db.contas_receber.find({"tenant_id": tid, "comissao_id": cid, "status": "cancelado"}, {"_id": 0}):
+                saldo = round(max(0.0, _to_float(ar.get("valor")) - _to_float(ar.get("valor_recebido"))), 2)
+                await db.contas_receber.update_one({"id": ar["id"], "tenant_id": tid},
+                                                   {"$set": {"status": "aberto" if saldo > 0.01 else "recebido", "saldo_pendente": saldo}})
+            await db.comissoes.update_one({"id": cid, "tenant_id": tid}, {"$set": {
+                "saldo_pendente": round(max(0.0, _to_float(com.get("valor_liquido")) - _to_float(com.get("valor_recebido"))), 2)}})
+            efeitos.append("Lançamentos reabertos em Contas a Receber.")
+        if novo in ("recebida", "parcialmente_recebida"):
+            efeitos.append("Atenção: isso não registra dinheiro recebido. Dê a baixa em Contas a Receber.")
+        hist = list(com.get("historico_status") or [])
+        hist.append({"de": com.get("status"), "para": novo, "data": data, "observacao": obs, "origem": "manual",
+                     "usuario": current.get("email"), "registrado_em": iso(now_utc())})
+        await db.comissoes.update_one({"id": cid, "tenant_id": tid}, {"$set": {
+            "status": novo, "historico_status": hist, "updated_at": iso(now_utc())}})
+
+    await _log_auditoria(current, "comissao_status_alterado", "comissoes", cid,
+                         before={"status": com.get("status")}, after={"status": novo},
+                         extra={"data": data, "observacao": obs})
+    atual = await detalhe_comissao(cid, current)
+    return {"ok": True, "efeitos": efeitos, "comissao": atual}
 
 # ✅ NOVO: auditoria em alterações de comissão (before/after)
 @api.patch("/comissoes/{cid}")
@@ -1679,13 +2061,14 @@ async def receber_comissao(rid: str, body: dict, current=Depends(get_active_user
     ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid})
     if not ar: raise HTTPException(404, "Conta não encontrada")
 
-    valor_recebido = float(body.get("valor", 0))
-    data_recebimento = body.get("data", iso(now_utc()))
+    valor_recebido = _to_float(body.get("valor"))
+    data_recebimento = body.get("data") or iso(now_utc())
     if valor_recebido <= 0: raise HTTPException(400, "Valor deve ser maior que zero")
+    if ar.get("status") == "cancelado": raise HTTPException(400, "Lançamento cancelado não pode receber baixa.")
 
-    saldo_atual = ar.get("saldo_pendente", ar.get("valor", 0))
+    saldo_atual = _to_float(ar.get("saldo_pendente"), _to_float(ar.get("valor")))
     novo_saldo = saldo_atual - valor_recebido
-    novo_total_recebido = ar.get("valor_recebido", 0) + valor_recebido
+    novo_total_recebido = _to_float(ar.get("valor_recebido")) + valor_recebido
     novo_status = "recebido" if novo_saldo <= 0.01 else "aberto"
 
     historico = ar.get("historico_recebimentos", [])
@@ -1702,17 +2085,23 @@ async def receber_comissao(rid: str, body: dict, current=Depends(get_active_user
     if ar.get("comissao_id"):
         com = await db.comissoes.find_one({"id": ar["comissao_id"], "tenant_id": tid})
         if com:
-            c_saldo = com.get("saldo_pendente", com.get("valor_liquido", 0))
+            c_saldo = _to_float(com.get("saldo_pendente"), _to_float(com.get("valor_liquido")))
             c_novo_saldo = c_saldo - valor_recebido
-            c_novo_receb = com.get("valor_recebido", 0) + valor_recebido
+            c_novo_receb = _to_float(com.get("valor_recebido")) + valor_recebido
             c_status = "recebida" if c_novo_saldo <= 0.01 else "parcialmente_recebida"
             c_hist = com.get("historico_recebimentos", [])
             c_hist.append({"data": data_recebimento, "valor": valor_recebido, "saldo_restante": round(max(0, c_novo_saldo), 2)})
+            h_status = list(com.get("historico_status") or [])
+            if c_status != com.get("status"):
+                h_status.append({"de": com.get("status"), "para": c_status, "data": data_recebimento,
+                                 "observacao": f"Baixa de R$ {valor_recebido:.2f} em Contas a Receber", "origem": "baixa",
+                                 "usuario": current.get("email"), "registrado_em": iso(now_utc())})
             await db.comissoes.update_one({"id": com["id"]}, {"$set": {
                 "valor_recebido": round(c_novo_receb, 2),
                 "saldo_pendente": round(max(0, c_novo_saldo), 2),
                 "status": c_status,
                 "historico_recebimentos": c_hist,
+                "historico_status": h_status,
                 "updated_at": iso(now_utc())
             }})
 
@@ -1734,7 +2123,15 @@ async def list_recebiveis_industria(
     if representada_id: f["representada_id"] = representada_id
     if cliente_id: f["cliente_id"] = cliente_id
     if status: f["status"] = status
-    return await t_list("recebiveis_industria", current, f, sort_key="vencimento")
+    itens = await t_list("recebiveis_industria", current, f, sort_key="vencimento")
+    now = now_utc()
+    for r in itens:  # ✅ registros antigos podiam ter valores gravados como texto
+        r["valor"] = round(_to_float(r.get("valor")), 2)
+        r["valor_recebido"] = round(_to_float(r.get("valor_recebido")), 2)
+        r["saldo_pendente"] = round(max(0.0, r["valor"] - r["valor_recebido"]), 2)
+        venc = _parse_date(r.get("vencimento"))
+        r["vencido"] = bool(r["saldo_pendente"] > 0.01 and venc and venc < now and r.get("status") not in ("recebido", "cancelado"))
+    return itens
 
 @api.post("/recebiveis-industria")
 async def create_recebivel_industria(body: RecebivelIndustriaIn, current=Depends(get_active_user)):
@@ -1759,6 +2156,41 @@ async def create_recebivel_industria(body: RecebivelIndustriaIn, current=Depends
         after=doc,
     )
     return doc
+
+async def _auto_liquidez_pedido(current: dict, pedido_id: str, recebivel_id: str, data: Optional[str] = None) -> bool:
+    """Libera as comissões 'aguardando liquidez' do pedido quando TODOS os recebíveis dele estão quitados."""
+    tid = tid_of(current)
+    abertos = await db.recebiveis_industria.count_documents({
+        "tenant_id": tid, "pedido_id": pedido_id, "status": {"$nin": ["recebido", "cancelado"]}})
+    if abertos > 0:
+        return False
+    comissoes = await db.comissoes.find({"tenant_id": tid, "pedido_id": pedido_id, "status": "aguardando_liquidez"}, {"_id": 0}).to_list(100)
+    for com in comissoes:
+        await _liberar_comissao(current, com, "liberada", data=data,
+                                observacao="Liberada automaticamente: a fábrica recebeu do cliente", origem="recebivel_industria")
+        await _log_auditoria(current, "comissao_liberada_por_liquidez", "comissoes", com["id"], extra={"recebivel_id": recebivel_id})
+    return bool(comissoes)
+
+@api.get("/recebiveis-industria/resumo")
+async def resumo_recebiveis_industria(representada_id: Optional[str] = None, current=Depends(get_active_user)):
+    """Totais calculados no servidor (sempre numéricos), para os indicadores da tela."""
+    tid = tid_of(current)
+    q: Dict[str, Any] = {"tenant_id": tid}
+    if representada_id: q["representada_id"] = representada_id
+    now = now_utc()
+    tot = {"total": 0.0, "recebido": 0.0, "a_receber": 0.0, "vencido": 0.0, "qtd": 0, "qtd_vencidos": 0}
+    por_rep: Dict[str, float] = {}
+    async for r in db.recebiveis_industria.find(q, {"_id": 0}):
+        if r.get("status") == "cancelado": continue
+        valor = _to_float(r.get("valor")); recebido = _to_float(r.get("valor_recebido"))
+        saldo = max(0.0, valor - recebido)
+        tot["qtd"] += 1; tot["total"] += valor; tot["recebido"] += recebido; tot["a_receber"] += saldo
+        venc = _parse_date(r.get("vencimento"))
+        if saldo > 0.01 and venc and venc < now:
+            tot["vencido"] += saldo; tot["qtd_vencidos"] += 1
+        por_rep[r.get("representada_id") or ""] = por_rep.get(r.get("representada_id") or "", 0.0) + saldo
+    return {**{k: (round(v, 2) if isinstance(v, float) else v) for k, v in tot.items()},
+            "a_receber_por_representada": {k: round(v, 2) for k, v in por_rep.items()}}
 
 @api.post("/recebiveis-industria/{rid}/receber")
 async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_active_user)):
@@ -1798,21 +2230,8 @@ async def receber_recebivel_industria(rid: str, body: dict, current=Depends(get_
     # aguardando liquidez para o mesmo pedido, libera automaticamente.
     liberou_comissao = False
     if rec.get("pedido_id") and novo_saldo <= 0.01:
-        com = await db.comissoes.find_one({
-            "pedido_id": rec["pedido_id"],
-            "tenant_id": tid,
-            "status": "aguardando_liquidez",
-        })
-        if com:
-            await db.comissoes.update_one(
-                {"id": com["id"]},
-                {"$set": {"status": "pendente", "updated_at": iso(now_utc())}}
-            )
-            liberou_comissao = True
-            await _log_auditoria(
-                current, "comissao_liberada_por_liquidez", "comissoes", com["id"],
-                extra={"recebivel_id": rid},
-            )
+        # ✅ FIX: antes só trocava o status e NÃO gerava/ativava Contas a Receber
+        liberou_comissao = await _auto_liquidez_pedido(current, rec["pedido_id"], rid, data_receb)
 
     await _log_auditoria(
         current, "recebivel_industria_recebido", "recebiveis_industria", rid,
@@ -2342,8 +2761,8 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
         "historico_recebimentos": [],
         "data_prevista": data_prevista,
     })
-    if modalidade == "faturamento" and valor_liquido > 0:
-        # ✅ NOVO: passa as duplicatas → rateio proporcional com vencimentos reais
+    if valor_liquido > 0:
+        # ✅ Contas a Receber sempre recebe a comissão (liquidez entra como "aguardando liquidez")
         await gerar_parcelas_comissao(current, pedido, comissao, parcelas_nfe or None)
 
     res["pedido_criado"] = pedido
@@ -2518,8 +2937,8 @@ async def export_leads_csv(current=Depends(get_current_user)):
                          l.get("telefone", ""), l.get("plan", ""), l.get("created_at", "")])
     output.seek(0)
     return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
+        iter(["\ufeff" + output.getvalue()]),  # BOM: Excel abre os acentos corretamente
+        media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=leads_omnirepmax.csv"}
     )
 
@@ -2617,6 +3036,171 @@ async def recalcular_comissoes(current=Depends(get_active_user)):
         "total_comissoes_verificadas": len(comissoes),
         "detalhes": detalhes[:20],
     }
+
+# ------------------------------------------------------------
+# ✅ Reparo retroativo da integração financeira + acentos (com backup antes)
+# ------------------------------------------------------------
+_MOJIBAKE = re.compile("[ÃÂâ][\u0080-\u00bf\u2018-\u203a\u0152\u0153\u0160\u0161\u0178\u017d\u017e\u0192\u02c6\u02dc]")
+
+def _conserta_texto(s: str) -> str:
+    """Desfaz o erro clássico 'GestÃ£o' → 'Gestão' (UTF-8 lido como Windows-1252)."""
+    if not isinstance(s, str) or not _MOJIBAKE.search(s):
+        return s
+    out = bytearray()
+    for ch in s:
+        try: out += ch.encode("cp1252")
+        except UnicodeEncodeError:
+            o = ord(ch)
+            out += bytes([o]) if o < 256 else ch.encode("utf-8")
+    try:
+        novo = out.decode("utf-8")
+    except UnicodeDecodeError:
+        return s
+    return novo if len(_MOJIBAKE.findall(novo)) < len(_MOJIBAKE.findall(s)) else s
+
+def _conserta_doc(v):
+    if isinstance(v, str): return _conserta_texto(v)
+    if isinstance(v, list): return [_conserta_doc(x) for x in v]
+    if isinstance(v, dict): return {k: _conserta_doc(x) for k, x in v.items()}
+    return v
+
+CAMPOS_NUMERICOS = {
+    "recebiveis_industria": ["valor", "valor_recebido", "saldo_pendente"],
+    "contas_receber": ["valor", "valor_recebido", "saldo_pendente"],
+    "comissoes": ["valor_liquido", "valor_recebido", "saldo_pendente", "percentual", "valor_faturado", "valor_total_pedido"],
+    "faturamentos": ["valor_faturado"],
+    "pedidos": ["total", "subtotal", "comissao_valor", "comissao_percentual"],
+}
+
+@api.post("/manutencao/reparar")
+async def reparar_integracao(aplicar: bool = False, corrigir_acentos: bool = True, current=Depends(get_active_user)):
+    """Verifica e corrige os dados da empresa. Sem `aplicar=true` só mostra o que faria (nada é alterado).
+    Com `aplicar=true`, faz backup das coleções afetadas antes de qualquer mudança."""
+    if current.get("role") != "admin" and not is_superadmin(current):
+        raise HTTPException(403, "Apenas o administrador da empresa pode executar o reparo.")
+    tid = tid_of(current)
+    rel: Dict[str, Any] = {"aplicado": aplicar, "numeros_em_texto": {}, "acentos_corrigidos": {},
+                           "lancamentos_criados": [], "recebiveis_recalculados": 0,
+                           "comissoes_liberadas_por_liquidez": [], "pedidos_status_corrigido": [],
+                           "pedidos_nf_preenchida": 0, "avisos": []}
+    colecoes = ["pedidos", "faturamentos", "comissoes", "contas_receber", "recebiveis_industria",
+                "clientes", "representadas", "produtos"]
+
+    backup_id = None
+    if aplicar:
+        backup_id = new_id()
+        agora = iso(now_utc())
+        for col in colecoes:
+            docs = await db[col].find({"tenant_id": tid}, {"_id": 0}).to_list(None)
+            for i in range(0, max(1, len(docs)), 2000):   # vários documentos: não estoura o limite de 16 MB
+                await db.backups_reparo.insert_one({"backup_id": backup_id, "tenant_id": tid, "colecao": col,
+                                                    "parte": i // 2000, "docs": docs[i:i + 2000], "created_at": agora})
+        rel["backup_id"] = backup_id
+
+    # 1) números gravados como texto
+    for col, campos in CAMPOS_NUMERICOS.items():
+        n = 0
+        async for d in db[col].find({"tenant_id": tid}, {"_id": 0, "id": 1, **{c: 1 for c in campos}}):
+            upd = {c: round(_to_float(d[c]), 4) for c in campos if c in d and isinstance(d[c], str)}
+            if upd:
+                n += 1
+                if aplicar: await db[col].update_one({"id": d["id"], "tenant_id": tid}, {"$set": upd})
+        if n: rel["numeros_em_texto"][col] = n
+
+    # 2) acentos quebrados nos dados
+    if corrigir_acentos:
+        for col in ("clientes", "representadas", "produtos", "pedidos", "comissoes", "contas_receber", "recebiveis_industria"):
+            n, exemplos = 0, []
+            async for d in db[col].find({"tenant_id": tid}, {"_id": 0}):
+                novo = _conserta_doc(d)
+                if novo != d:
+                    n += 1
+                    if len(exemplos) < 3:
+                        campo = next((k for k in d if d[k] != novo.get(k) and isinstance(d[k], str)), None)
+                        if campo: exemplos.append(f"{d[campo]} → {novo[campo]}")
+                    if aplicar:
+                        await db[col].update_one({"id": d["id"], "tenant_id": tid},
+                                                 {"$set": {k: v for k, v in novo.items() if v != d.get(k)}})
+            if n: rel["acentos_corrigidos"][col] = {"registros": n, "exemplos": exemplos}
+
+    # 3) pedidos: status e NF a partir dos faturamentos
+    fats_por_ped: Dict[str, List[dict]] = {}
+    async for f in db.faturamentos.find({"tenant_id": tid}, {"_id": 0}):
+        fats_por_ped.setdefault(f.get("pedido_id"), []).append(f)
+    async for p in db.pedidos.find({"tenant_id": tid}, {"_id": 0, "id": 1, "numero": 1, "status": 1, "total": 1, "nf_numero": 1}):
+        fs = fats_por_ped.get(p["id"], [])
+        if not fs or p.get("status") == "cancelado": continue
+        total_fat = sum(_to_float(f.get("valor_faturado")) for f in fs)
+        st = "faturado" if total_fat >= _to_float(p.get("total")) - 0.01 else "faturado_parcial"
+        nf = ", ".join(dict.fromkeys(f.get("nf_numero") for f in fs if f.get("nf_numero")))
+        upd = {}
+        if p.get("status") != st: upd["status"] = st; rel["pedidos_status_corrigido"].append(p.get("numero"))
+        if nf and p.get("nf_numero") != nf: upd["nf_numero"] = nf; rel["pedidos_nf_preenchida"] += 1
+        if upd and aplicar: await db.pedidos.update_one({"id": p["id"], "tenant_id": tid}, {"$set": upd})
+
+    # 4) recebíveis da indústria: saldo e status recalculados
+    status_por_pedido: Dict[str, List[str]] = {}
+    async for r in db.recebiveis_industria.find({"tenant_id": tid}, {"_id": 0}):
+        if r.get("status") == "cancelado": continue
+        valor = _to_float(r.get("valor")); receb = _to_float(r.get("valor_recebido"))
+        saldo = round(max(0.0, valor - receb), 2)
+        st = "recebido" if saldo <= 0.01 and valor > 0 else ("parcial" if receb > 0 else "aberto")
+        if abs(_to_float(r.get("saldo_pendente"), -1) - saldo) > 0.009 or r.get("status") != st:
+            rel["recebiveis_recalculados"] += 1
+            if aplicar:
+                await db.recebiveis_industria.update_one({"id": r["id"], "tenant_id": tid},
+                                                         {"$set": {"saldo_pendente": saldo, "status": st}})
+        if r.get("pedido_id"): status_por_pedido.setdefault(r["pedido_id"], []).append(st)
+    for pid, sts in status_por_pedido.items():
+        if any(s != "recebido" for s in sts): continue   # só libera quando TODOS os recebíveis do pedido estão quitados
+        async for com in db.comissoes.find({"tenant_id": tid, "pedido_id": pid, "status": "aguardando_liquidez"}, {"_id": 0}):
+            rel["comissoes_liberadas_por_liquidez"].append(com.get("pedido_numero"))
+            if aplicar:
+                await _liberar_comissao(current, com, "liberada", observacao="Reparo: recebível da indústria já quitado",
+                                        origem="reparo")
+
+    # 5) comissões sem lançamento em Contas a Receber
+    pedidos_map = {p["id"]: p async for p in db.pedidos.find({"tenant_id": tid}, {"_id": 0})}
+    async for com in db.comissoes.find({"tenant_id": tid, "status": {"$ne": "cancelada"}}, {"_id": 0}):
+        if await db.contas_receber.count_documents({"tenant_id": tid, "comissao_id": com["id"]}) > 0:
+            continue
+        valor = _to_float(com.get("valor_liquido"))
+        if valor <= 0 and (com.get("base_calculo") == "recebido"):
+            valor = round(_to_float(com.get("valor_faturado")) * _to_float(com.get("percentual")) / 100.0, 2)
+            if aplicar and valor > 0:
+                await db.comissoes.update_one({"id": com["id"], "tenant_id": tid},
+                                              {"$set": {"valor_liquido": valor, "saldo_pendente": valor}})
+            com["valor_liquido"] = valor
+        ped = pedidos_map.get(com.get("pedido_id"))
+        if valor <= 0 or not ped:
+            if not ped: rel["avisos"].append(f"Comissão {com.get('id')} sem pedido vinculado — verifique manualmente.")
+            continue
+        rel["lancamentos_criados"].append({"pedido": com.get("pedido_numero"), "nf": com.get("nf_numero"),
+                                           "valor_comissao": valor, "status": _status_lancamento(com)})
+        if aplicar:
+            await gerar_parcelas_comissao(current, ped, com)
+
+    if aplicar:
+        await _log_auditoria(current, "reparo_integracao", "manutencao", backup_id or "-", extra={
+            k: (len(v) if isinstance(v, list) else v) for k, v in rel.items() if k != "aplicado"})
+    return rel
+
+@api.post("/manutencao/restaurar/{backup_id}")
+async def restaurar_backup_reparo(backup_id: str, current=Depends(get_active_user)):
+    """Volta as coleções da empresa ao estado de antes do reparo."""
+    if current.get("role") != "admin" and not is_superadmin(current):
+        raise HTTPException(403, "Apenas o administrador da empresa pode restaurar.")
+    tid = tid_of(current)
+    partes = await db.backups_reparo.find({"backup_id": backup_id, "tenant_id": tid}, {"_id": 0}).to_list(None)
+    if not partes: raise HTTPException(404, "Backup não encontrado")
+    restaurado: Dict[str, int] = {}
+    for col in {p["colecao"] for p in partes}:
+        docs = [d for p in sorted([x for x in partes if x["colecao"] == col], key=lambda x: x["parte"]) for d in p["docs"]]
+        await db[col].delete_many({"tenant_id": tid})
+        if docs: await db[col].insert_many(docs)
+        restaurado[col] = len(docs)
+    await _log_auditoria(current, "reparo_restaurado", "manutencao", backup_id, extra=restaurado)
+    return {"ok": True, "restaurado": restaurado}
 
 # ------------------------------------------------------------
 # Backup Cron / Stripe / Reset

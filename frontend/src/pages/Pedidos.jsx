@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import api from "../lib/api";
 import { PageHeader, StatusBadge } from "../components/Common";
 import { Button } from "../components/ui/button";
@@ -10,29 +10,33 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Plus, Trash2, Calculator, UserPlus, Loader2, Edit2,
   PlusCircle, MinusCircle, Download, FileCheck,
-  Ban, AlertCircle, Check, Share2, MessageCircle, Mail, CalendarClock
+  Ban, AlertCircle, Check, Share2, MessageCircle, Mail, CalendarClock, Eye, Save, X
 } from "lucide-react";
 import { fmtBRL, fmtDate } from "../lib/format";
 import { toast } from "sonner";
-// âœ… FIX: imports Ãºnicos (antes jsPDF era importado 2x â†’ SyntaxError e o PDF nÃ£o funcionava)
+// ✅ FIX: imports únicos (antes jsPDF era importado 2x → SyntaxError e o PDF não funcionava)
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
-const FORM_VAZIO = { cliente_id: "", representada_id: "", condicao_pagamento: "30/60", itens: [], parcelas: [] };
+const hoje = () => new Date().toISOString().split("T")[0];
+const novoForm = () => ({
+  cliente_id: "", representada_id: "", condicao_pagamento: "30/60", itens: [], parcelas: [],
+  numero_referencia: "", observacoes: "", data_pedido: hoje(), data_emissao: "",
+});
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const hojeMais = (dias) => { const dt = new Date(); dt.setDate(dt.getDate() + dias); return dt.toISOString().split("T")[0]; };
 const toDateInput = (v) => (v ? String(v).split("T")[0] : "");
 const somaParcelas = (arr) => (arr || []).reduce((acc, p) => acc + (Number(p.valor) || 0), 0);
-// Parcelas vindas do backend podem ter sÃ³ valor_base (duplicatas da NF-e) e vencimento ISO
+// Parcelas vindas do backend podem ter só valor_base (duplicatas da NF-e) e vencimento ISO
 const normParcelas = (arr) => (arr || []).map(p => ({
   ...p,
   vencimento: toDateInput(p.vencimento),
   valor: Number(p.valor ?? p.valor_base) || 0,
 }));
-// valor_base faz o backend ratear a comissÃ£o proporcionalmente a cada parcela
+// valor_base faz o backend ratear a comissão proporcionalmente a cada parcela
 const payloadParcelas = (arr) => (arr || []).map(p => ({
   ...p,
   valor: round2(p.valor),
@@ -50,7 +54,7 @@ export default function Pedidos() {
   const [tab, setTab] = useState("todos");
 
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(FORM_VAZIO);
+  const [form, setForm] = useState(novoForm());
   const [editingId, setEditingId] = useState(null);
   const [editingStatus, setEditingStatus] = useState(null);
   const [selectedProd, setSelectedProd] = useState("");
@@ -67,11 +71,15 @@ export default function Pedidos() {
   const [shareOpen, setShareOpen] = useState(false);
   const [sharePedido, setSharePedido] = useState(null);
 
-  // âœ… NOVO: ediÃ§Ã£o de parcelas em pedidos faturados
+  // ✅ NOVO: edição de parcelas em pedidos faturados
   const [parcOpen, setParcOpen] = useState(false);
   const [parcPed, setParcPed] = useState(null);
   const [parcList, setParcList] = useState([]);
   const [savingParc, setSavingParc] = useState(false);
+
+  // ✅ NOVO: visualização individual do pedido + edição de NF
+  const [verPed, setVerPed] = useState(null);
+  const [nfEdit, setNfEdit] = useState(null); // { id, nf_numero, nf_serie, data_faturamento }
 
   const load = useCallback(async () => {
     try {
@@ -99,7 +107,7 @@ export default function Pedidos() {
   };
 
   const saveNewCli = async () => {
-    if (!newCli.razao_social) return toast.error("RazÃ£o Social Ã© obrigatÃ³ria");
+    if (!newCli.razao_social) return toast.error("Razão Social é obrigatória");
     try {
       const res = await api.post("/clientes", { ...newCli, status: "ativo" });
       toast.success("Cliente cadastrado!");
@@ -125,13 +133,13 @@ export default function Pedidos() {
     const dias = (form.condicao_pagamento || "30").split("/").map(d => parseInt(d.trim()) || 30);
     const valorParcela = round2(total / dias.length);
     const parcelas = dias.map(d => ({ vencimento: hojeMais(d), valor: valorParcela }));
-    // ajusta centavos na Ãºltima parcela
+    // ajusta centavos na última parcela
     parcelas[parcelas.length - 1].valor = round2(valorParcela + (total - valorParcela * dias.length));
     setForm({ ...form, parcelas });
   };
 
   const addParcelaManual = () => {
-    // âœ… FIX: Number() â€” p.valor pode vir string do input
+    // ✅ FIX: Number() — p.valor pode vir string do input
     const restante = calcTotal() - somaParcelas(form.parcelas);
     setForm({ ...form, parcelas: [...(form.parcelas || []), { vencimento: hojeMais(30), valor: round2(Math.max(0, restante)) }] });
   };
@@ -143,18 +151,24 @@ export default function Pedidos() {
   const removeParcela = (idx) => { const novas = [...(form.parcelas || [])]; novas.splice(idx, 1); setForm({ ...form, parcelas: novas }); };
 
   const fecharForm = () => {
-    setOpen(false); setForm(FORM_VAZIO); setEditingId(null); setEditingStatus(null);
+    setOpen(false); setForm(novoForm()); setEditingId(null); setEditingStatus(null);
   };
 
   const save = async (statusFinal = "rascunho") => {
     if (!form.cliente_id || !form.representada_id) return toast.error("Selecione Cliente e Representada");
     if ((form.itens || []).length === 0) return toast.error("Adicione itens");
     try {
-      // âœ… FIX: sempre envia as parcelas do form (antes um pedido faturado editado podia ir com parcelas vazias)
-      const payload = { ...form, parcelas: payloadParcelas(form.parcelas), status: statusFinal };
+      // ✅ FIX: sempre envia as parcelas do form (antes um pedido faturado editado podia ir com parcelas vazias)
+      const payload = {
+        ...form,
+        parcelas: payloadParcelas(form.parcelas),
+        status: statusFinal,
+        data_pedido: form.data_pedido || null,
+        data_emissao: form.data_emissao || null,
+      };
       if (editingId) await api.put(`/pedidos/${editingId}`, payload);
       else await api.post("/pedidos", payload);
-      toast.success(editingId ? "Pedido atualizado!" : (statusFinal === "orcamento" ? "OrÃ§amento salvo!" : "Pedido criado!"));
+      toast.success(editingId ? "Pedido atualizado!" : (statusFinal === "orcamento" ? "Orçamento salvo!" : "Pedido criado!"));
       fecharForm(); load();
     } catch (err) { toast.error(err.response?.data?.detail || "Erro ao salvar pedido"); }
   };
@@ -166,6 +180,10 @@ export default function Pedidos() {
       condicao_pagamento: p.condicao_pagamento || "30",
       itens: p.itens || [],
       parcelas: normParcelas(p.parcelas),
+      numero_referencia: p.numero_referencia || "",
+      observacoes: p.observacoes || "",
+      data_pedido: toDateInput(p.data_pedido) || hoje(),
+      data_emissao: toDateInput(p.data_emissao),
     });
     setEditingId(p.id); setEditingStatus(p.status); setOpen(true);
   };
@@ -176,7 +194,7 @@ export default function Pedidos() {
     setFatOpen(true);
   };
 
-  // Mantido: o backend recalcula o valor da comissÃ£o e usa estas parcelas (vencimentos + proporÃ§Ã£o)
+  // Mantido: o backend recalcula o valor da comissão e usa estas parcelas (vencimentos + proporção)
   const gerarParcelasFaturamento = () => {
     const rep = reps.find(r => r.id === selectedPed.representada_id);
     const percentual = rep?.comissao_padrao || 5;
@@ -204,16 +222,16 @@ export default function Pedidos() {
       toast.success("Faturamento registrado!");
       setFatOpen(false); load();
     } catch (e) {
-      // âœ… NOVO: NF duplicada (409)
+      // ✅ NOVO: NF duplicada (409)
       if (e.response?.status === 409) {
-        toast.error("NF jÃ¡ registrada", { description: e.response?.data?.detail, duration: 8000 });
+        toast.error("NF já registrada", { description: e.response?.data?.detail, duration: 8000 });
       } else {
         toast.error(e.response?.data?.detail || "Erro ao registrar faturamento");
       }
     }
   };
 
-  // âœ… NOVO: modal de ediÃ§Ã£o de parcelas (pedidos faturados)
+  // ✅ NOVO: modal de edição de parcelas (pedidos faturados)
   const handleOpenParcelas = (p) => {
     setParcPed(p);
     setParcList(normParcelas(p.parcelas));
@@ -237,14 +255,30 @@ export default function Pedidos() {
       const res = await api.patch(`/pedidos/${parcPed.id}/parcelas`, { parcelas: payloadParcelas(parcList) });
       const r = res.data?.parcelas_regeneradas;
       if (r?.bloqueadas_por_recebimento > 0) {
-        toast.warning(`Parcelas salvas. ${r.bloqueadas_por_recebimento} comissÃ£o(Ãµes) com recebimento nÃ£o foram alteradas.`);
+        toast.warning(`Parcelas salvas. ${r.bloqueadas_por_recebimento} comissão(ões) com recebimento não foram alteradas.`);
       } else {
-        toast.success("Parcelas atualizadas e comissÃµes recalculadas!");
+        toast.success("Parcelas atualizadas e comissões recalculadas!");
       }
       setParcOpen(false); load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Erro ao salvar parcelas");
     } finally { setSavingParc(false); }
+  };
+
+  const salvarNF = async () => {
+    if (!nfEdit?.nf_numero?.trim()) return toast.error("Informe o número da NF");
+    try {
+      await api.patch(`/faturamentos/${nfEdit.id}`, {
+        nf_numero: nfEdit.nf_numero, nf_serie: nfEdit.nf_serie || "", data_faturamento: nfEdit.data_faturamento || null,
+      });
+      toast.success("Nota fiscal atualizada!");
+      setNfEdit(null);
+      const r = await api.get("/pedidos");
+      setList(r.data);
+      setVerPed(r.data.find(x => x.id === verPed?.id) || null);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Erro ao atualizar a NF");
+    }
   };
 
   const getDiasEspera = (dataPedido) => {
@@ -254,7 +288,7 @@ export default function Pedidos() {
   };
 
   const cancelarPedido = async (p) => {
-    if (!window.confirm(`Tem certeza que deseja CANCELAR o pedido ${p.numero}? Isso estornarÃ¡ as comissÃµes e contas a receber pendentes.`)) return;
+    if (!window.confirm(`Tem certeza que deseja CANCELAR o pedido ${p.numero}? Isso estornará as comissões e contas a receber pendentes.`)) return;
     try {
       await api.post(`/pedidos/${p.id}/cancelar`);
       toast.success("Pedido cancelado com sucesso.");
@@ -265,13 +299,13 @@ export default function Pedidos() {
   };
 
   const aprovarOrcamento = async (p) => {
-    if (!window.confirm(`Aprovar o orÃ§amento ${p.numero}? Ele serÃ¡ convertido em Pedido.`)) return;
+    if (!window.confirm(`Aprovar o orçamento ${p.numero}? Ele será convertido em Pedido.`)) return;
     try {
       await api.patch(`/pedidos/${p.id}/status`, { status: "aprovado" });
-      toast.success("OrÃ§amento aprovado e convertido em Pedido!");
+      toast.success("Orçamento aprovado e convertido em Pedido!");
       load();
     } catch (e) {
-      toast.error("Erro ao aprovar orÃ§amento.");
+      toast.error("Erro ao aprovar orçamento.");
     }
   };
 
@@ -283,17 +317,17 @@ export default function Pedidos() {
   const gerarTextoCompartilhamento = (p) => {
     const cliente = clientes.find(c => c.id === p.cliente_id);
     const rep = reps.find(r => r.id === p.representada_id);
-    let texto = `*Resumo do Pedido ${p.numero}*\n\n`;
-    texto += `OlÃ¡, ${cliente?.nome_fantasia || 'cliente'}!\n`;
-    texto += `Segue o resumo do seu pedido com a fÃ¡brica *${rep?.nome_fantasia}*:\n\n`;
+    let texto = `*Resumo do Pedido ${p.numero}${p.numero_referencia ? ` (ref. ${p.numero_referencia})` : ""}*\n\n`;
+    texto += `Olá, ${cliente?.nome_fantasia || 'cliente'}!\n`;
+    texto += `Segue o resumo do seu pedido com a fábrica *${rep?.nome_fantasia}*:\n\n`;
 
     (p.itens || []).forEach(it => {
-      texto += `â–ª ${it.quantidade}x ${it.nome} - ${fmtBRL(it.quantidade * it.preco_unitario)}\n`;
+      texto += `▪ ${it.quantidade}x ${it.nome} - ${fmtBRL(it.quantidade * it.preco_unitario)}\n`;
     });
 
     texto += `\n*Total do Pedido: ${fmtBRL(p.total)}*\n`;
-    texto += `CondiÃ§Ã£o de Pagamento: ${p.condicao_pagamento || 'A combinar'}\n\n`;
-    texto += `Qualquer dÃºvida, estou Ã  disposiÃ§Ã£o!`;
+    texto += `Condição de Pagamento: ${p.condicao_pagamento || 'A combinar'}\n\n`;
+    texto += `Qualquer dúvida, estou à disposição!`;
     return encodeURIComponent(texto);
   };
 
@@ -303,13 +337,13 @@ export default function Pedidos() {
       const rep = reps.find(r => r.id === p.representada_id);
 
       const doc = new jsPDF();
-      const titulo = p.status === "orcamento" ? "OrÃ§amento" : "Pedido";
+      const titulo = p.status === "orcamento" ? "Orçamento" : "Pedido";
 
       doc.setFontSize(20);
       doc.text(`${titulo}: ${p.numero}`, 14, 20);
       doc.setFontSize(10);
-      doc.text(`Data: ${fmtDate(p.data_pedido)}`, 14, 28);
-      doc.text(`Status: ${(p.status || "").toUpperCase()}`, 14, 33);
+      doc.text(`Data do pedido: ${fmtDate(p.data_pedido)}${p.data_emissao ? `   ·   Emissão: ${fmtDate(p.data_emissao)}` : ""}`, 14, 28);
+      doc.text(`Status: ${(p.status || "").toUpperCase()}${p.numero_referencia ? `   ·   Nº ref.: ${p.numero_referencia}` : ""}${p.nf_numero ? `   ·   NF: ${p.nf_numero}` : ""}`, 14, 33);
 
       doc.setFontSize(12);
       doc.text("Cliente:", 14, 45);
@@ -329,10 +363,10 @@ export default function Pedidos() {
         fmtBRL(it.quantidade * it.preco_unitario)
       ]);
 
-      // âœ… FIX: autoTable via default import (nÃ£o depende do side-effect no prototype)
+      // ✅ FIX: autoTable via default import (não depende do side-effect no prototype)
       autoTable(doc, {
         startY: 65,
-        head: [['Produto', 'Qtd', 'PreÃ§o Unit.', 'Total']],
+        head: [['Produto', 'Qtd', 'Preço Unit.', 'Total']],
         body,
         theme: 'striped',
         headStyles: { fillColor: [7, 91, 255] }
@@ -361,6 +395,13 @@ export default function Pedidos() {
         });
       }
 
+      if (p.observacoes) {
+        const y = (doc.lastAutoTable?.finalY ?? finalY) + 12;
+        doc.setFontSize(11); doc.setFont(undefined, 'bold'); doc.text("Observações:", 14, y);
+        doc.setFont(undefined, 'normal'); doc.setFontSize(10);
+        doc.text(doc.splitTextToSize(p.observacoes, 180), 14, y + 6);
+      }
+
       doc.save(`${titulo}_${p.numero}.pdf`);
       toast.success("PDF gerado com sucesso!");
     } catch (e) {
@@ -380,41 +421,50 @@ export default function Pedidos() {
 
   return (
     <div className="pb-10">
-      <PageHeader title="Pedidos" subtitle="LanÃ§amento, OrÃ§amentos e Faturamento" actions={
-        <Button onClick={() => { setForm(FORM_VAZIO); setEditingId(null); setEditingStatus(null); setOpen(true); }} className="bg-[#075BFF]">
-          <Plus className="w-4 h-4 mr-2" /> Novo Pedido / OrÃ§amento
+      <PageHeader title="Pedidos" subtitle="Lançamento, Orçamentos e Faturamento" actions={
+        <Button onClick={() => { setForm(novoForm()); setEditingId(null); setEditingStatus(null); setOpen(true); }} className="bg-[#075BFF]">
+          <Plus className="w-4 h-4 mr-2" /> Novo Pedido / Orçamento
         </Button>
       } />
 
       <Tabs value={tab} onValueChange={setTab} className="mb-6">
         <TabsList className="grid w-full grid-cols-4 max-w-2xl">
           <TabsTrigger value="todos">Todos</TabsTrigger>
-          <TabsTrigger value="orcamentos">OrÃ§amentos</TabsTrigger>
+          <TabsTrigger value="orcamentos">Orçamentos</TabsTrigger>
           <TabsTrigger value="aguardando">Aguardando Faturamento</TabsTrigger>
           <TabsTrigger value="faturados">Totalmente Faturados</TabsTrigger>
         </TabsList>
       </Tabs>
 
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-x-auto">
+        <table className="w-full text-sm min-w-[1100px]">
           <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
             <tr>
-              <th className="px-5 py-4 text-left text-slate-700 dark:text-slate-300">NÂº Pedido</th>
-              <th className="px-5 py-4 text-left text-slate-700 dark:text-slate-300">Cliente / Representada</th>
-              <th className="px-5 py-4 text-right text-slate-700 dark:text-slate-300">Total</th>
+              <th className="px-4 py-4 text-left text-slate-700 dark:text-slate-300">Nº Pedido</th>
+              <th className="px-4 py-4 text-left text-slate-700 dark:text-slate-300">Cliente / Representada</th>
+              <th className="px-4 py-4 text-left text-slate-700 dark:text-slate-300">Data do pedido</th>
+              <th className="px-4 py-4 text-left text-slate-700 dark:text-slate-300">Emissão</th>
+              <th className="px-4 py-4 text-left text-slate-700 dark:text-slate-300">NF</th>
+              <th className="px-4 py-4 text-right text-slate-700 dark:text-slate-300">Total</th>
               <th className="px-5 py-4 text-right text-amber-600">A Faturar</th>
               <th className="px-5 py-4 text-center text-slate-700 dark:text-slate-300">Status</th>
-              <th className="px-5 py-4 text-right text-slate-700 dark:text-slate-300">AÃ§Ãµes</th>
+              <th className="px-5 py-4 text-right text-slate-700 dark:text-slate-300">Ações</th>
             </tr>
           </thead>
           <tbody>
             {pedidosFiltrados.map(p => (
               <tr key={p.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
-                <td className="px-5 py-3 font-mono font-bold text-slate-900 dark:text-white">{p.numero}</td>
+                <td className="px-4 py-3">
+                  <div className="font-mono font-bold text-slate-900 dark:text-white">{p.numero}</div>
+                  {p.numero_referencia && <div className="text-xs text-slate-500">Ref.: {p.numero_referencia}</div>}
+                </td>
                 <td className="px-5 py-3">
                   <div className="font-semibold text-slate-900 dark:text-white">{clientes.find(c => c.id === p.cliente_id)?.nome_fantasia}</div>
                   <div className="text-xs text-slate-500">{reps.find(r => r.id === p.representada_id)?.nome_fantasia}</div>
                 </td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">{fmtDate(p.data_pedido)}</td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">{p.data_emissao ? fmtDate(p.data_emissao) : "—"}</td>
+                <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">{p.nf_numero || "—"}</td>
                 <td className="px-5 py-3 text-right font-mono text-slate-600 dark:text-slate-400">{fmtBRL(p.total)}</td>
                 <td className="px-5 py-3 text-right font-mono font-bold text-amber-600 dark:text-amber-500">
                   {p.saldo_a_faturar > 0 ? fmtBRL(p.saldo_a_faturar) : "-"}
@@ -429,6 +479,9 @@ export default function Pedidos() {
                 </td>
                 <td className="px-5 py-3 text-right">
                   <div className="flex items-center justify-end gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setVerPed(p)} title="Ver detalhes" className="text-slate-500 hover:text-[#075BFF]">
+                      <Eye className="w-4 h-4" />
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => handleOpenShare(p)} title="Compartilhar" className="text-slate-500 hover:text-emerald-600">
                       <Share2 className="w-4 h-4" />
                     </Button>
@@ -449,14 +502,14 @@ export default function Pedidos() {
                       </Button>
                     )}
 
-                    {/* âœ… EdiÃ§Ã£o liberada em qualquer status, exceto cancelado/orÃ§amento */}
+                    {/* ✅ Edição liberada em qualquer status, exceto cancelado/orçamento */}
                     {podeEditar(p.status) && (
                       <Button size="sm" variant="outline" onClick={() => handleEdit(p)} title="Editar">
                         <Edit2 className="w-3.5 h-3.5" />
                       </Button>
                     )}
 
-                    {/* âœ… NOVO: editar parcelas em pedidos faturados */}
+                    {/* ✅ NOVO: editar parcelas em pedidos faturados */}
                     {isFaturado(p.status) && (
                       <Button size="sm" variant="outline" onClick={() => handleOpenParcelas(p)} title="Editar parcelas" className="h-8">
                         <CalendarClock className="w-3.5 h-3.5 mr-1" /> Parcelas
@@ -473,7 +526,7 @@ export default function Pedidos() {
               </tr>
             ))}
             {pedidosFiltrados.length === 0 && (
-              <tr><td colSpan={6} className="text-center py-10 text-slate-500">Nenhum pedido encontrado nesta aba.</td></tr>
+              <tr><td colSpan={9} className="text-center py-10 text-slate-500">Nenhum pedido encontrado nesta aba.</td></tr>
             )}
           </tbody>
         </table>
@@ -481,14 +534,33 @@ export default function Pedidos() {
 
       <Dialog open={open} onOpenChange={(v) => (v ? setOpen(true) : fecharForm())}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{editingId ? "Editar Pedido" : "Novo Pedido / OrÃ§amento"}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingId ? "Editar Pedido" : "Novo Pedido / Orçamento"}</DialogTitle></DialogHeader>
 
           {editingId && isFaturado(editingStatus) && (
             <div className="flex items-start gap-2 text-xs bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30 rounded-lg p-3">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              Pedido jÃ¡ faturado: ao salvar, as parcelas de comissÃ£o ainda nÃ£o recebidas serÃ£o recalculadas. ComissÃµes com recebimento nÃ£o sÃ£o alteradas.
+              Pedido já faturado: ao salvar, as parcelas de comissão ainda não recebidas serão recalculadas. Comissões com recebimento não são alteradas.
             </div>
           )}
+
+          {/* ✅ NOVO: dados do pedido */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+            <div className="space-y-1.5">
+              <Label>Nº do pedido (fábrica/cliente)</Label>
+              <Input value={form.numero_referencia} onChange={e => setForm({ ...form, numero_referencia: e.target.value })}
+                     placeholder="Ex.: OC-12345" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Data do pedido</Label>
+              <Input type="date" value={form.data_pedido} onChange={e => setForm({ ...form, data_pedido: e.target.value })}
+                     className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Data de emissão</Label>
+              <Input type="date" value={form.data_emissao} onChange={e => setForm({ ...form, data_emissao: e.target.value })}
+                     className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
 
@@ -538,13 +610,13 @@ export default function Pedidos() {
                 <Button onClick={gerarParcelas} variant="secondary" size="sm" disabled={(form.itens || []).length === 0}><Calculator className="w-4 h-4 mr-1" /> Auto-Calcular</Button>
               </div>
               <div className="space-y-1.5">
-                <Label>CondiÃ§Ã£o para Auto-CÃ¡lculo</Label>
+                <Label>Condição para Auto-Cálculo</Label>
                 <Input className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white" value={form.condicao_pagamento} onChange={e => setForm({...form, condicao_pagamento: e.target.value})} placeholder="Ex: 30/60/90" />
               </div>
               <div className="space-y-2 mt-2 max-h-[300px] overflow-y-auto pr-2">
                 {(form.parcelas || []).map((p, i) => (
                   <div key={i} className="flex gap-2 items-center bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
-                    <span className="text-xs font-bold text-slate-400 w-6">{i+1}Âª</span>
+                    <span className="text-xs font-bold text-slate-400 w-6">{i+1}ª</span>
                     <Input type="date" value={toDateInput(p.vencimento)} onChange={e => updateParcela(i, "vencimento", e.target.value)} className="flex-1 h-8 text-xs bg-transparent border-none p-0 text-slate-900 dark:text-white" />
                     <Input type="number" step="0.01" value={p.valor} onChange={e => updateParcela(i, "valor", parseFloat(e.target.value) || 0)} className="w-24 h-8 text-xs font-mono bg-transparent border-none p-0 text-slate-900 dark:text-white" />
                     <MinusCircle className="w-4 h-4 text-rose-500 cursor-pointer" onClick={() => removeParcela(i)} />
@@ -555,13 +627,21 @@ export default function Pedidos() {
             </div>
           </div>
 
+          {/* ✅ NOVO: observações */}
+          <div className="space-y-1.5 pb-2">
+            <Label>Observações</Label>
+            <textarea value={form.observacoes} onChange={e => setForm({ ...form, observacoes: e.target.value })} rows={3}
+                      placeholder="Condições especiais, negociações, acordos..."
+                      className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#075BFF]" />
+          </div>
+
           <DialogFooter className="flex gap-2 justify-end">
             <Button variant="outline" onClick={fecharForm}>Cancelar</Button>
             {editingId ? (
-              <Button onClick={() => save(editingStatus || "aprovado")} className="bg-[#075BFF]">Salvar alteraÃ§Ãµes</Button>
+              <Button onClick={() => save(editingStatus || "aprovado")} className="bg-[#075BFF]">Salvar alterações</Button>
             ) : (
               <>
-                <Button variant="outline" onClick={() => save("orcamento")} className="border-[#075BFF] text-[#075BFF] hover:bg-blue-50">Salvar como OrÃ§amento</Button>
+                <Button variant="outline" onClick={() => save("orcamento")} className="border-[#075BFF] text-[#075BFF] hover:bg-blue-50">Salvar como Orçamento</Button>
                 <Button onClick={() => save("aprovado")} className="bg-[#075BFF]">Criar Pedido (Aprovado)</Button>
               </>
             )}
@@ -569,18 +649,122 @@ export default function Pedidos() {
         </DialogContent>
       </Dialog>
 
-      {/* âœ… NOVO: Modal de ediÃ§Ã£o de parcelas (pedidos faturados) */}
+      {/* ✅ NOVO: Visualização individual do pedido */}
+      <Dialog open={!!verPed} onOpenChange={v => { if (!v) { setVerPed(null); setNfEdit(null); } }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          {verPed && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex flex-wrap items-center gap-3">
+                  Pedido {verPed.numero} <StatusBadge status={verPed.status} />
+                </DialogTitle>
+              </DialogHeader>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm py-2">
+                {[
+                  ["Nº do pedido (ref.)", verPed.numero_referencia || "—"],
+                  ["Cliente", clientes.find(c => c.id === verPed.cliente_id)?.nome_fantasia || clientes.find(c => c.id === verPed.cliente_id)?.razao_social || "—"],
+                  ["Representada", reps.find(r => r.id === verPed.representada_id)?.nome_fantasia || "—"],
+                  ["Data do pedido", fmtDate(verPed.data_pedido)],
+                  ["Data de emissão", verPed.data_emissao ? fmtDate(verPed.data_emissao) : "—"],
+                  ["Nota(s) fiscal(is)", verPed.nf_numero || "—"],
+                  ["Valor total", fmtBRL(verPed.total)],
+                  ["Faturado", fmtBRL(verPed.valor_faturado_total || 0)],
+                  ["Comissão prevista", `${fmtBRL(verPed.comissao_valor || 0)} (${verPed.comissao_percentual ?? "-"}%)`],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <p className="text-xs text-slate-500">{k}</p>
+                    <p className="font-semibold text-slate-900 dark:text-white break-words">{v}</p>
+                  </div>
+                ))}
+              </div>
+
+              {verPed.observacoes && (
+                <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-sm">
+                  <p className="text-xs text-slate-500 mb-1">Observações</p>
+                  <p className="text-slate-800 dark:text-slate-200 whitespace-pre-wrap">{verPed.observacoes}</p>
+                </div>
+              )}
+
+              <div className="pt-2">
+                <p className="text-sm font-bold text-slate-900 dark:text-white mb-2">Itens</p>
+                <div className="space-y-1">
+                  {(verPed.itens || []).map((it, i) => (
+                    <div key={i} className="flex justify-between text-sm border-b border-slate-100 dark:border-slate-800 py-1">
+                      <span className="text-slate-700 dark:text-slate-300">{it.quantidade}x {it.nome}</span>
+                      <span className="font-mono text-slate-900 dark:text-white">{fmtBRL(it.subtotal ?? it.quantidade * it.preco_unitario)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <p className="text-sm font-bold text-slate-900 dark:text-white mb-2">Faturamentos (notas fiscais)</p>
+                {(verPed.faturamentos || []).length === 0 && <p className="text-sm text-slate-500">Ainda não faturado.</p>}
+                <div className="space-y-2">
+                  {(verPed.faturamentos || []).map(f => (
+                    <div key={f.id} className="flex flex-wrap items-center gap-2 text-sm bg-slate-50 dark:bg-slate-800/50 rounded-lg p-2">
+                      {nfEdit?.id === f.id ? (
+                        <>
+                          <Input value={nfEdit.nf_numero} onChange={e => setNfEdit({ ...nfEdit, nf_numero: e.target.value })} placeholder="Nº NF" className="w-28 h-8" />
+                          <Input value={nfEdit.nf_serie} onChange={e => setNfEdit({ ...nfEdit, nf_serie: e.target.value })} placeholder="Série" className="w-20 h-8" />
+                          <Input type="date" value={nfEdit.data_faturamento} onChange={e => setNfEdit({ ...nfEdit, data_faturamento: e.target.value })} className="w-40 h-8" />
+                          <Button size="sm" onClick={salvarNF} className="h-8 bg-[#075BFF]"><Save className="w-3.5 h-3.5" /></Button>
+                          <Button size="sm" variant="ghost" onClick={() => setNfEdit(null)} className="h-8"><X className="w-3.5 h-3.5" /></Button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-mono font-semibold text-slate-900 dark:text-white">NF {f.nf_numero}{f.nf_serie ? `/${f.nf_serie}` : ""}</span>
+                          <span className="text-slate-500">{fmtDate(f.data_faturamento)}</span>
+                          <span className="font-mono ml-auto text-slate-900 dark:text-white">{fmtBRL(f.valor_faturado)}</span>
+                          <Button size="sm" variant="ghost" className="h-8" title="Corrigir NF"
+                                  onClick={() => setNfEdit({ id: f.id, nf_numero: f.nf_numero || "", nf_serie: f.nf_serie || "", data_faturamento: toDateInput(f.data_faturamento) })}>
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {normParcelas(verPed.parcelas).length > 0 && (
+                <div className="pt-2">
+                  <p className="text-sm font-bold text-slate-900 dark:text-white mb-2">Parcelas do pedido</p>
+                  {normParcelas(verPed.parcelas).map((pc, i) => (
+                    <div key={i} className="flex justify-between text-sm py-1 border-b border-slate-100 dark:border-slate-800">
+                      <span className="text-slate-600 dark:text-slate-400">{i + 1}ª · {fmtDate(pc.vencimento)}</span>
+                      <span className="font-mono text-slate-900 dark:text-white">{fmtBRL(pc.valor)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <DialogFooter className="gap-2">
+                {podeEditar(verPed.status) && (
+                  <Button variant="outline" onClick={() => { const p = verPed; setVerPed(null); handleEdit(p); }}>
+                    <Edit2 className="w-4 h-4 mr-2" /> Editar pedido
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => gerarPDF(verPed)}><Download className="w-4 h-4 mr-2" /> PDF</Button>
+                <Button onClick={() => setVerPed(null)} className="bg-[#075BFF]">Fechar</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ NOVO: Modal de edição de parcelas (pedidos faturados) */}
       <Dialog open={parcOpen} onOpenChange={setParcOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Parcelas do Pedido {parcPed?.numero}</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <p className="text-xs text-slate-500">
-              As parcelas de comissÃ£o ainda nÃ£o recebidas serÃ£o recalculadas proporcionalmente a estas parcelas, com os novos vencimentos.
+              As parcelas de comissão ainda não recebidas serão recalculadas proporcionalmente a estas parcelas, com os novos vencimentos.
             </p>
             <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
               {parcList.map((p, i) => (
                 <div key={i} className="flex gap-2 items-center bg-slate-50 dark:bg-slate-800/50 p-2 rounded border border-slate-200 dark:border-slate-700">
-                  <span className="text-xs font-bold text-slate-400 w-6">{i + 1}Âª</span>
+                  <span className="text-xs font-bold text-slate-400 w-6">{i + 1}ª</span>
                   <Input type="date" value={p.vencimento} onChange={e => updateParcelaEdit(i, "vencimento", e.target.value)} className="flex-1 h-8 text-xs bg-white dark:bg-slate-900 text-slate-900 dark:text-white" />
                   <Input type="number" step="0.01" value={p.valor} onChange={e => updateParcelaEdit(i, "valor", parseFloat(e.target.value) || 0)} className="w-28 h-8 text-xs font-mono bg-white dark:bg-slate-900 text-slate-900 dark:text-white" />
                   <MinusCircle className="w-4 h-4 text-rose-500 cursor-pointer shrink-0" onClick={() => removeParcelaEdit(i)} />
@@ -592,7 +776,7 @@ export default function Pedidos() {
             <div className="flex justify-between text-sm border-t border-slate-200 dark:border-slate-800 pt-3">
               <span className="text-slate-500">Soma: <b className="font-mono text-slate-900 dark:text-white">{fmtBRL(somaParcelas(parcList))}</b> / Total: <span className="font-mono">{fmtBRL(parcPed?.total || 0)}</span></span>
               {Math.abs(parcDiferenca) >= 0.01 && (
-                <span className="text-amber-600 font-semibold text-xs flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5" /> DiferenÃ§a {fmtBRL(parcDiferenca)}</span>
+                <span className="text-amber-600 font-semibold text-xs flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5" /> Diferença {fmtBRL(parcDiferenca)}</span>
               )}
             </div>
           </div>
@@ -663,14 +847,14 @@ export default function Pedidos() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5"><Label>NÂº Nota Fiscal</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={fatForm.nf_numero} onChange={e => setFatForm({...fatForm, nf_numero: e.target.value})} /></div>
-              <div className="space-y-1.5"><Label>SÃ©rie</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={fatForm.nf_serie} onChange={e => setFatForm({...fatForm, nf_serie: e.target.value})} /></div>
+              <div className="space-y-1.5"><Label>Nº Nota Fiscal</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={fatForm.nf_numero} onChange={e => setFatForm({...fatForm, nf_numero: e.target.value})} /></div>
+              <div className="space-y-1.5"><Label>Série</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={fatForm.nf_serie} onChange={e => setFatForm({...fatForm, nf_serie: e.target.value})} /></div>
               <div className="space-y-1.5"><Label>Data Faturamento</Label><Input type="date" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={fatForm.data_faturamento} onChange={e => setFatForm({...fatForm, data_faturamento: e.target.value})} /></div>
               <div className="space-y-1.5"><Label>Valor Faturado (R$)</Label><Input type="number" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" step="0.01" value={fatForm.valor_faturado} onChange={e => setFatForm({...fatForm, valor_faturado: parseFloat(e.target.value || 0)})} /></div>
             </div>
             <div className="border-t border-slate-200 dark:border-slate-800 pt-4 mt-2">
               <div className="flex justify-between items-center mb-2">
-                <Label>Parcelas da ComissÃ£o</Label>
+                <Label>Parcelas da Comissão</Label>
                 <Button variant="outline" size="sm" onClick={gerarParcelasFaturamento}><Calculator className="w-3 h-3 mr-1"/> Calcular</Button>
               </div>
               <div className="space-y-2 max-h-40 overflow-y-auto">
@@ -692,10 +876,10 @@ export default function Pedidos() {
 
       <Dialog open={cliOpen} onOpenChange={setCliOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Cadastro RÃ¡pido de Cliente</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Cadastro Rápido de Cliente</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-1.5 relative"><Label>CNPJ</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={newCli.cnpj_cpf} onChange={e => setNewCli({...newCli, cnpj_cpf: e.target.value})} onBlur={e => buscarCNPJ(e.target.value)} />{loadingCnpj && <Loader2 className="absolute right-3 top-8 w-4 h-4 animate-spin text-blue-500" />}</div>
-            <div className="space-y-1.5"><Label>RazÃ£o Social *</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={newCli.razao_social} onChange={e => setNewCli({...newCli, razao_social: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Razão Social *</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={newCli.razao_social} onChange={e => setNewCli({...newCli, razao_social: e.target.value})} /></div>
             <div className="space-y-1.5"><Label>Nome Fantasia</Label><Input className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white" value={newCli.nome_fantasia} onChange={e => setNewCli({...newCli, nome_fantasia: e.target.value})} /></div>
           </div>
           <DialogFooter><Button onClick={saveNewCli} className="bg-[#075BFF]">Salvar</Button></DialogFooter>
