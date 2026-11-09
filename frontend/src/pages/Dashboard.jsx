@@ -111,10 +111,10 @@ export default function Dashboard() {
   const [recebiveisIndustria, setRecebiveisIndustria] = useState([]);
 
   // ✅ NOVO: indicadores comparativos + meta (uma requisição, respeita os filtros)
-  const [filtros, setFiltros] = useState({ representada_id: "", rede: "" });
-  const { dados: com, recarregar: recarregarComercial } = useDashboardComercial(filtros);
+  const [filtros, setFiltros] = useState({ representada_id: "", rede: "", cliente_id: "" });
+  const { dados: com, erro: erroComercial, recarregar: recarregarComercial } = useDashboardComercial(filtros);
   const cards = com?.cards;
-  const filtrado = !!(filtros.representada_id || filtros.rede);
+  const filtrado = !!(filtros.representada_id || filtros.rede || filtros.cliente_id);
 
   useEffect(() => { 
     api.get("/dashboard").then((r) => setD(r.data)); 
@@ -189,7 +189,7 @@ export default function Dashboard() {
       )}
 
       {/* ✅ NOVO: Visão Geral Comercial (filtros + meta do mês) */}
-      <VisaoGeralComercial dados={com} filtros={filtros} onFiltros={setFiltros} onMetasSalvas={recarregarComercial} />
+      <VisaoGeralComercial dados={com} erro={erroComercial} filtros={filtros} onFiltros={setFiltros} onMetasSalvas={recarregarComercial} />
 
       {/* 4 chips coloridas — agora com comparativos (mês anterior, ano vigente, ano anterior) */}
       {filtrado && (

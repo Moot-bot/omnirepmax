@@ -17,7 +17,7 @@ def nid(): N[0] += 1; return f"x{N[0]}"
 from fastapi.testclient import TestClient
 with TestClient(s.app) as c:
     def conta(email):
-        r = c.post("/api/auth/signup", json={"email": email, "password": "senha1234", "name": "U"}).json()
+        r = c.post("/api/auth/signup", json={"aceite_termos": True, "email": email, "password": "senha1234", "name": "U"}).json()
         return {"Authorization": f"Bearer {r['token']}"}, r["user"]["tenant_id"]
     H, tid = conta("a@teste.com")
     HB, tidB = conta("b@teste.com")
@@ -203,3 +203,15 @@ with TestClient(s.app) as c:
     print(f"✔ desempenho: 1 requisição para tudo; {ms:.0f} ms com 5.000+ pedidos (banco em memória)")
 
 print("\nTODOS OS TESTES DO DASHBOARD PASSARAM")
+
+# ✅ filtro por cliente
+with TestClient(s.app) as c2:
+    r = c2.post("/api/auth/login", json={"email": "a@teste.com", "password": "senha1234"}).json()
+    H2 = {"Authorization": f"Bearer {r['token']}"}
+    d = c2.get("/api/dashboard/comercial?cliente_id=C3", headers=H2).json()
+    assert d["cards"]["volume_vendas"]["mes"] == 2000, d["cards"]["volume_vendas"]
+    assert d["meta"]["valor"] is None and "cliente" in d["meta"]["origem"]
+    assert [x["nome"] for x in d["filtros"]["clientes"]] == ["Loja 1", "Loja 2", "Loja 3"]
+    d = c2.get("/api/dashboard/comercial?rede=Rede%20Sul&cliente_id=C3", headers=H2).json()
+    assert d["cards"]["volume_vendas"]["mes"] == 0
+    print("✔ filtro por cliente: cards só do cliente; lista de clientes no filtro")

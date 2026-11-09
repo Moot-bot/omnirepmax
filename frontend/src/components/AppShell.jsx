@@ -166,10 +166,16 @@ export default function AppShell() {
 
         <div className="h-20 flex items-center justify-between px-6 border-b border-[#1E3A8A]/40 relative z-10 bg-white/5 backdrop-blur-sm">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
-            <img src="/logo.png" alt="OmniRepMax" className="h-9 w-auto object-contain drop-shadow-[0_0_12px_rgba(8,213,245,0.6)]" />
-            <span className="font-bold text-2xl tracking-tight text-white">
-              OMNIREP<span className="text-[#08D5F5] drop-shadow-[0_0_8px_rgba(8,213,245,0.8)]">MAX</span>
-            </span>
+            {/* ✅ logo2 da pasta public (tenta .png, .svg, .webp, .jpg; se nenhum existir, volta ao logo antigo) */}
+            <img
+              src="/logo2.png" alt="OmniRepMax"
+              className="h-11 w-auto max-w-[210px] object-contain"
+              onError={(e) => {
+                const ordem = ["/logo2.png", "/logo2.svg", "/logo2.webp", "/logo2.jpg", "/logo.png"];
+                const atual = ordem.findIndex(src => e.currentTarget.src.endsWith(src));
+                if (atual >= 0 && atual < ordem.length - 1) e.currentTarget.src = ordem[atual + 1];
+              }}
+            />
           </div>
           <button className="md:hidden text-slate-400" onClick={() => setIsMobileOpen(false)}>
             <X className="w-5 h-5" />

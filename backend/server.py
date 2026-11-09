@@ -82,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.8.1",
+    title="OMNIREPMAX API", version="2.8.2",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -2474,13 +2474,16 @@ async def _clientes_da_rede(tid: str, rede: Optional[str]) -> Optional[set]:
             if " ".join((c.get("grupo_economico") or "").split()).lower() == alvo}
 
 async def _indicadores_comerciais(tid: str, ano: int, mes: int, representada_id: Optional[str] = None,
-                                  rede: Optional[str] = None, hoje: Optional[date] = None) -> dict:
+                                  rede: Optional[str] = None, hoje: Optional[date] = None,
+                                  cliente_id: Optional[str] = None) -> dict:
     """Uma consulta por fonte (pedidos, faturamentos, comissões, contas a receber) cobrindo
     do ano anterior até hoje; os períodos são separados em memória no fuso de Brasília."""
     hoje = hoje or hoje_br()
     ano_ant_m, mes_ant_m = _mes_anterior(ano, mes)
     limite = f"{ano - 2}-12-31"            # folga de 1 dia para o fuso
     clientes_rede = await _clientes_da_rede(tid, rede)
+    if cliente_id:   # ✅ filtro por um cliente específico
+        clientes_rede = {cliente_id} if clientes_rede is None else (clientes_rede & {cliente_id})
     fim_ano_vig = hoje if ano == hoje.year else date(ano, 12, 31)
 
     def filtra(doc) -> bool:
@@ -2644,7 +2647,7 @@ def _situacao_meta(meta_valor: Optional[float], vendido: float, ano: int, mes: i
 @api.get("/dashboard/comercial")
 async def dashboard_comercial(ano: Optional[int] = None, mes: Optional[int] = None,
                               representada_id: Optional[str] = None, rede: Optional[str] = None,
-                              current=Depends(get_active_user)):
+                              cliente_id: Optional[str] = None, current=Depends(get_active_user)):
     """Endpoint único: 4 cards com comparativos + Visão Geral Comercial (meta do mês)."""
     tid = tid_of(current)
     hoje = hoje_br()
@@ -2660,14 +2663,24 @@ async def dashboard_comercial(ano: Optional[int] = None, mes: Optional[int] = No
             contagem.setdefault(nome.lower(), {}).setdefault(nome, 0)
             contagem[nome.lower()][nome] += 1
     redes = sorted((max(v.items(), key=lambda kv: kv[1])[0] for v in contagem.values()), key=str.lower)
-    ind = await _indicadores_comerciais(tid, ano, mes, representada_id, rede, hoje)
-    meta = await _resolver_meta(tid, ano, mes, representada_id, rede, nomes_rep)
+    clientes_lista = sorted(
+        [{"id": c["id"], "nome": (c.get("nome_fantasia") or c.get("razao_social") or "").strip() or "(sem nome)"}
+         async for c in db.clientes.find({"tenant_id": tid}, {"_id": 0, "id": 1, "nome_fantasia": 1, "razao_social": 1})],
+        key=lambda c: c["nome"].lower())
+    ind = await _indicadores_comerciais(tid, ano, mes, representada_id, rede, hoje, cliente_id=cliente_id)
+    if cliente_id:
+        nome_cli = next((c["nome"] for c in clientes_lista if c["id"] == cliente_id), "este cliente")
+        meta = {"valor": None, "origem": f"Metas são por agência, representada ou rede — não por cliente ({nome_cli})",
+                "meta_id": None, "tipo": None}
+    else:
+        meta = await _resolver_meta(tid, ano, mes, representada_id, rede, nomes_rep)
     vendido = ind["volume_vendas"]["mes"]
     return {
         "periodo": {"ano": ano, "mes": mes, "rotulo": f"{MESES_PT[mes].upper()} DE {ano}", "hoje": hoje.isoformat(),
                     "mes_corrente": (ano, mes) == (hoje.year, hoje.month)},
-        "filtros": {"representada_id": representada_id, "rede": rede,
-                    "representadas": [{"id": r["id"], "nome": nomes_rep[r["id"]]} for r in reps], "redes": redes},
+        "filtros": {"representada_id": representada_id, "rede": rede, "cliente_id": cliente_id,
+                    "representadas": [{"id": r["id"], "nome": nomes_rep[r["id"]]} for r in reps], "redes": redes,
+                    "clientes": clientes_lista},
         "cards": {k: ind[k] for k in ("volume_vendas", "faturamento", "comissoes_previstas", "em_atraso")},
         "meta": {**meta, "vendido_mes": vendido,
                  "vendido_hoje": ind["vendido_hoje"] if (ano, mes) == (hoje.year, hoje.month) else 0.0,

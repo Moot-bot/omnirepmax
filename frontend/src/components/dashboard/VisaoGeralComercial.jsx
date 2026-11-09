@@ -12,10 +12,10 @@ const BARRA = { batida: "from-amber-400 to-yellow-300", andamento: "from-[#075BF
 const selCls = "h-10 px-3 rounded-lg border text-sm bg-white border-slate-200 text-slate-900 dark:bg-[#0A1838] dark:border-[#1E3A8A]/50 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]";
 
 /**
- * Bloco "VISÃO GERAL COMERCIAL" do Dashboard: filtros (representada + rede) e card da meta do mês.
+ * Bloco "VISÃO GERAL COMERCIAL" do Dashboard: filtros (representada + cliente/rede) e card da meta do mês.
  * Recebe os dados do useDashboardComercial — a mesma resposta alimenta os 4 cards.
  */
-export default function VisaoGeralComercial({ dados, filtros, onFiltros, onMetasSalvas }) {
+export default function VisaoGeralComercial({ dados, filtros, onFiltros, onMetasSalvas, erro }) {
   const [metasAberto, setMetasAberto] = useState(false);
   const meta = dados?.meta;
   const periodo = dados?.periodo;
@@ -41,14 +41,33 @@ export default function VisaoGeralComercial({ dados, filtros, onFiltros, onMetas
               {(dados?.filtros?.representadas || []).map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
             </select>
           </div>
-          <label className="sr-only" htmlFor="f-rede">Rede</label>
-          <select id="f-rede" className={`${selCls} min-w-[180px]`} value={filtros.rede || ""}
-                  onChange={e => onFiltros({ ...filtros, rede: e.target.value })}>
-            <option value="">Todas as redes</option>
-            {(dados?.filtros?.redes || []).map(r => <option key={r} value={r}>{r}</option>)}
+          <label className="sr-only" htmlFor="f-cli">Cliente ou rede</label>
+          <select id="f-cli" className={`${selCls} min-w-[200px] max-w-[260px]`}
+                  value={filtros.cliente_id ? `c:${filtros.cliente_id}` : filtros.rede ? `r:${filtros.rede}` : ""}
+                  onChange={e => {
+                    const v = e.target.value;
+                    onFiltros({ ...filtros, cliente_id: v.startsWith("c:") ? v.slice(2) : "", rede: v.startsWith("r:") ? v.slice(2) : "" });
+                  }}>
+            <option value="">Todos os clientes</option>
+            {(dados?.filtros?.redes || []).length > 0 && (
+              <optgroup label="Redes (grupo econômico)">
+                {dados.filtros.redes.map(r => <option key={r} value={`r:${r}`}>Rede {r}</option>)}
+              </optgroup>
+            )}
+            {(dados?.filtros?.clientes || []).length > 0 && (
+              <optgroup label="Clientes">
+                {dados.filtros.clientes.map(c => <option key={c.id} value={`c:${c.id}`}>{c.nome}</option>)}
+              </optgroup>
+            )}
           </select>
         </div>
       </div>
+
+      {erro && !dados && (
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 dark:bg-rose-500/10 dark:border-rose-500/30 p-3 text-sm text-rose-700 dark:text-rose-300">
+          Não foi possível carregar os indicadores: {erro}
+        </div>
+      )}
 
       {/* Card da meta */}
       <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.03] p-4 sm:p-5">

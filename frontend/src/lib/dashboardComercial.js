@@ -16,16 +16,20 @@ export function useDashboardComercial(filtros = {}) {
       const params = {};
       if (filtros.representada_id) params.representada_id = filtros.representada_id;
       if (filtros.rede) params.rede = filtros.rede;
+      if (filtros.cliente_id) params.cliente_id = filtros.cliente_id;
       if (filtros.ano) params.ano = filtros.ano;
       if (filtros.mes) params.mes = filtros.mes;
       const r = await api.get("/dashboard/comercial", { params });
       if (meu === seq.current) { setDados(r.data); setErro(null); }   // ignora respostas atrasadas
     } catch (e) {
-      if (meu === seq.current) setErro(e.response?.data?.detail || "Erro ao carregar os indicadores.");
+      if (meu === seq.current) setErro(
+        e.response?.status === 404
+          ? "o servidor no ar ainda está numa versão antiga (publique o server.py mais recente)."
+          : (e.response?.data?.detail || (e.response ? `erro ${e.response.status}` : "sem resposta do servidor")));
     } finally {
       if (meu === seq.current) setCarregando(false);
     }
-  }, [filtros.representada_id, filtros.rede, filtros.ano, filtros.mes]);
+  }, [filtros.representada_id, filtros.rede, filtros.cliente_id, filtros.ano, filtros.mes]);
 
   useEffect(() => { recarregar(); }, [recarregar]);
   return { dados, carregando, erro, recarregar };
