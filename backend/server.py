@@ -82,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.8.3",
+    title="OMNIREPMAX API", version="2.9.0",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -3109,12 +3109,16 @@ def _parse_nfe(x: str) -> dict:
 
     # ✅ NOVO: dhEmi (layout 3.10/4.00) com fallback dEmi (layout 2.00)
     emissao_raw = f(r"<dhEmi>(.*?)</dhEmi>") or f(r"<dEmi>(.*?)</dEmi>")
+    emit_seg = f(r"<emit\b[^>]*>(.*?)</emit>")
+    dest_seg = f(r"<dest\b[^>]*>(.*?)</dest>")
     emissao_dt = _parse_date(emissao_raw)
 
     return {
-        "emitente": {"cnpj": f(r"<emit\b[^>]*>.*?<CNPJ>(.*?)</CNPJ>"), "nome": f(r"<emit\b[^>]*>.*?<xNome>(.*?)</xNome>")},
-        "destinatario": {"cnpj": f(r"<dest\b[^>]*>.*?<CNPJ>(.*?)</CNPJ>") or f(r"<dest\b[^>]*>.*?<CPF>(.*?)</CPF>"),
-                         "nome": f(r"<dest\b[^>]*>.*?<xNome>(.*?)</xNome>")},
+        # ✅ busca dentro do bloco <emit>/<dest> (emitente com CPF não "pega" mais o CNPJ do destinatário)
+        "emitente": {"cnpj": _rx(r"<CNPJ>(.*?)</CNPJ>", emit_seg) or _rx(r"<CPF>(.*?)</CPF>", emit_seg),
+                     "nome": _rx(r"<xNome>(.*?)</xNome>", emit_seg)},
+        "destinatario": {"cnpj": _rx(r"<CNPJ>(.*?)</CNPJ>", dest_seg) or _rx(r"<CPF>(.*?)</CPF>", dest_seg),
+                         "nome": _rx(r"<xNome>(.*?)</xNome>", dest_seg)},
         "numero": f(r"<nNF>(.*?)</nNF>"), "serie": f(r"<serie>(.*?)</serie>"),
         "data_emissao": iso(emissao_dt) if emissao_dt else emissao_raw,
         "valor_total": _to_float(f(r"<vNF>(.*?)</vNF>")),
@@ -3131,10 +3135,13 @@ async def _match_or_create_pedido(current: dict, parsed: dict, representada_id: 
     emit = _only_digits(parsed.get("emitente", {}).get("cnpj"))
     dest = _only_digits(parsed.get("destinatario", {}).get("cnpj"))
     reps = await t_list("representadas", current, leve=True)
-    clis = await t_list("clientes", current, leve=True)
-
-    rep = next((r for r in reps if r["id"] == representada_id), None) if representada_id else next((r for r in reps if _only_digits(r.get("cnpj")) == emit and emit), None)
-    cli = next((c for c in clis if c["id"] == cliente_id), None) if cliente_id else next((c for c in clis if _only_digits(c.get("cnpj_cpf")) == dest and dest), None)
+    clis = await t_list("clientes", current, leve=True, limit=20000)
+    proj = {"_id": 0, **CAMPOS_PESADOS}
+    # ✅ por id direto no banco (antes procurava só nos 1.000 primeiros clientes)
+    rep = (await db.representadas.find_one({"tenant_id": tid, "id": representada_id}, proj) if representada_id
+           else next((r for r in reps if _only_digits(r.get("cnpj")) == emit and emit), None))
+    cli = (await db.clientes.find_one({"tenant_id": tid, "id": cliente_id}, proj) if cliente_id
+           else next((c for c in clis if _only_digits(c.get("cnpj_cpf")) == dest and dest), None))
 
     res = {
         "representada_match": rep, "cliente_match": cli,
@@ -3269,7 +3276,502 @@ async def import_xml(body: XMLImportIn, current=Depends(get_active_user)):
 
 @api.get("/xml/historico")
 async def xml_historico(current=Depends(get_active_user)):
-    return await t_list("xml_files", current)
+    itens = await t_list("xml_files", current, limit=200)
+    for h in itens:            # o XML bruto e os itens não vão para a lista (deixavam a tela lenta)
+        h.pop("xml", None); h["qtd_itens"] = len(h.pop("itens", None) or [])
+    return itens
+
+# ------------------------------------------------------------
+# ✅ v2.9: Importação de notas — XML NF-e (vários de uma vez) e planilha CSV/Excel
+#    Fluxo em 2 passos: /importar-notas/analisar (não grava nada) → /importar-notas/confirmar
+#    A IA (Groq) entra em dois pontos: mapear colunas de planilhas fora do padrão e
+#    ler XMLs que não são NF-e modelo 55 (ex.: layouts próprios de ERP). Sempre marcado como "lido pela IA".
+# ------------------------------------------------------------
+import unicodedata as _ud
+
+def _sem_acento(s) -> str:
+    s = _ud.normalize("NFD", str(s or ""))
+    return "".join(ch for ch in s if _ud.category(ch) != "Mn")
+
+def _norm_txt(s) -> str:
+    s = _sem_acento(s).lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+_SUFIXOS_EMPRESA = {"ltda", "me", "epp", "eireli", "sa", "s", "a", "cia", "comercio", "industria", "de", "da", "do", "e", "das", "dos"}
+def _chave_nome(s) -> str:
+    return " ".join(w for w in _norm_txt(s).split() if w not in _SUFIXOS_EMPRESA)
+
+def _num_br(v) -> float:
+    """Número em formato brasileiro ou internacional: '1.234,56', '1234.56', '1.234' (milhar), 'R$ 10,00'."""
+    if v is None or v == "": return 0.0
+    if isinstance(v, bool): return 0.0
+    if isinstance(v, (int, float)): return float(v)
+    s = re.sub(r"[^\d,.\-]", "", str(v))
+    if not s: return 0.0
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
+    elif "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif s.count(".") > 1 or re.fullmatch(r"-?\d{1,3}\.\d{3}", s):
+        s = s.replace(".", "")
+    try: return float(s)
+    except ValueError: return 0.0
+
+def _data_br(v) -> Optional[str]:
+    """Aceita dd/mm/aaaa, dd/mm/aa, dd-mm-aaaa, aaaa-mm-dd(Thh:mm), número serial do Excel. Devolve ISO (meio-dia UTC)."""
+    if v is None or v == "": return None
+    if isinstance(v, (int, float)) and 20000 < float(v) < 80000:
+        d = date(1899, 12, 30) + timedelta(days=int(v))
+        return iso(datetime(d.year, d.month, d.day, 12, tzinfo=timezone.utc))
+    s = str(v).strip()
+    m = re.match(r"^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})", s)
+    if m:
+        dd, mm, aa = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if aa < 100: aa += 2000
+        try: return iso(datetime(aa, mm, dd, 12, tzinfo=timezone.utc))
+        except ValueError: return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
+    if m:
+        try: return iso(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), 12, tzinfo=timezone.utc))
+        except ValueError: return None
+    d = _parse_date(s)
+    return iso(d) if d else None
+
+# campo: (rótulo, sinônimos) — a ordem importa: os mais específicos primeiro
+CAMPOS_NOTA_PLANILHA: Dict[str, tuple] = {
+    "nf_numero":         ("Número da NF", ["numero nf", "n nf", "no nf", "num nf", "numero da nf", "numero da nota", "nota fiscal", "nf", "nfe", "nf e", "nota", "numero nota", "documento", "numero documento", "n nota", "num nota", "doc", "doc fiscal", "n doc"]),
+    "serie":             ("Série", ["serie", "serie nf", "serie da nota"]),
+    "data_emissao":      ("Data de emissão", ["data emissao", "emissao", "dt emissao", "data de emissao", "data da nota", "data nf", "data faturamento", "data do faturamento", "data", "dt"]),
+    "emitente_cnpj":     ("CNPJ da representada", ["cnpj representada", "cnpj emitente", "cnpj fabrica", "cnpj fornecedor", "cnpj industria"]),
+    "emitente_nome":     ("Representada", ["representada", "emitente", "fabrica", "fornecedor", "industria", "razao social emitente", "nome emitente"]),
+    "cliente_cnpj":      ("CNPJ/CPF do cliente", ["cnpj cliente", "cnpj cpf cliente", "cnpj destinatario", "cpf cnpj", "cnpj cpf", "cnpj", "cpf", "documento cliente"]),
+    "cliente_nome":      ("Cliente", ["cliente", "razao social cliente", "nome cliente", "destinatario", "razao social", "nome do cliente", "nome fantasia", "sacado", "comprador"]),
+    "cliente_cidade":    ("Cidade do cliente", ["cidade", "municipio", "cidade cliente"]),
+    "cliente_uf":        ("UF do cliente", ["uf", "estado", "uf cliente"]),
+    "produto_codigo":    ("Código do produto", ["codigo produto", "cod produto", "codigo", "cod", "referencia", "ref", "sku", "codigo item"]),
+    "produto_ean":       ("EAN", ["ean", "gtin", "codigo de barras", "cod barras", "ean13"]),
+    "produto_descricao": ("Descrição do produto", ["descricao produto", "descricao", "produto", "item", "nome produto", "descricao do produto", "mercadoria"]),
+    "quantidade":        ("Quantidade", ["quantidade", "qtd", "qtde", "quant", "qt"]),
+    "preco_unitario":    ("Preço unitário", ["preco unitario", "valor unitario", "vl unitario", "vlr unitario", "vl unit", "vlr unit", "unitario", "preco"]),
+    "valor_item":        ("Valor do item", ["valor item", "total item", "valor do item", "valor produto", "vl total item", "subtotal", "valor total item"]),
+    "valor_total":       ("Valor total da nota", ["valor total nf", "valor nf", "valor da nota", "total nf", "valor total da nota", "total da nota", "valor total", "total", "valor", "montante", "valor liquido"]),
+    "vencimentos":       ("Vencimentos (datas separadas por ;)", ["vencimentos", "vencimento", "venc", "datas vencimento", "duplicatas"]),
+}
+
+def _mapear_colunas_auto(cab: List[str]) -> Dict[str, Optional[int]]:
+    norm = [_norm_txt(c) for c in cab]
+    usado: set = set(); mapa: Dict[str, Optional[int]] = {}
+    for fase in ("exato", "contem"):
+        for campo, (_, sins) in CAMPOS_NOTA_PLANILHA.items():
+            if mapa.get(campo) is not None: continue
+            for sin in sins:
+                idx = next((i for i, n in enumerate(norm) if i not in usado and n and (
+                    n == sin if fase == "exato" else (len(sin) >= 4 and (n.startswith(sin + " ") or n.endswith(" " + sin))))), None)
+                if idx is not None:
+                    mapa[campo] = idx; usado.add(idx); break
+    return {c: mapa.get(c) for c in CAMPOS_NOTA_PLANILHA}
+
+def _achar_cabecalho(linhas: List[List[Any]]) -> int:
+    melhor, idx = -1, 0
+    for i, l in enumerate(linhas[:15]):
+        pontos = sum(1 for v in _mapear_colunas_auto([str(c) for c in l]).values() if v is not None)
+        if pontos > melhor: melhor, idx = pontos, i
+    return idx
+
+def _mapa_valido(mapa: Dict[str, Optional[int]]) -> List[str]:
+    """Lista o que falta para conseguir montar as notas."""
+    falta = []
+    if mapa.get("nf_numero") is None: falta.append("Número da NF")
+    if mapa.get("data_emissao") is None: falta.append("Data de emissão")
+    if mapa.get("cliente_cnpj") is None and mapa.get("cliente_nome") is None: falta.append("Cliente (CNPJ ou nome)")
+    if mapa.get("valor_total") is None and mapa.get("valor_item") is None and not (
+            mapa.get("quantidade") is not None and mapa.get("preco_unitario") is not None):
+        falta.append("Valor (total da nota, do item ou quantidade × preço)")
+    return falta
+
+async def _groq_json(system: str, user: str, max_tokens: int = 2000) -> Any:
+    """Chama a Groq e devolve o JSON da resposta (ou levanta RuntimeError com mensagem clara)."""
+    key = os.environ.get("GROQ_API_KEY")
+    if not key: raise RuntimeError("IA indisponível: GROQ_API_KEY não configurada no servidor.")
+    try: from groq import Groq
+    except ImportError: raise RuntimeError("IA indisponível: módulo 'groq' não instalado.")
+    def _chamar():
+        c = Groq(api_key=key)
+        args = dict(messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"), temperature=0, max_tokens=max_tokens)
+        try:
+            r = c.chat.completions.create(**args, response_format={"type": "json_object"})
+        except Exception as e:   # modelo sem "modo JSON": tenta sem, e extrai o JSON do texto
+            if "response_format" not in str(e) and "json" not in str(e).lower(): raise
+            r = c.chat.completions.create(**args)
+        return r.choices[0].message.content or ""
+    try: raw = await asyncio.wait_for(asyncio.to_thread(_chamar), timeout=60)
+    except asyncio.TimeoutError: raise RuntimeError("A IA demorou demais para responder. Tente de novo.")
+    except Exception as e: raise RuntimeError(f"Erro na IA: {e}")
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m: raise RuntimeError("A IA não devolveu um resultado válido.")
+    try: return json.loads(m.group(0))
+    except Exception: raise RuntimeError("A IA não devolveu um JSON válido.")
+
+async def _mapear_colunas_ia(cab: List[str], amostra: List[List[Any]]) -> Dict[str, Optional[int]]:
+    campos = {k: v[0] for k, v in CAMPOS_NOTA_PLANILHA.items()}
+    system = ("Você mapeia colunas de planilhas de notas fiscais/vendas de representantes comerciais para um modelo fixo. "
+              "Responda APENAS um objeto JSON {\"campo\": \"nome exato da coluna\" ou null}. Use só colunas que existem. "
+              "Uma coluna não pode ir para dois campos. 'emitente' = a fábrica/representada que emitiu a nota; "
+              "'cliente' = quem comprou. 'valor_total' é o total da NOTA; 'valor_item' é o total da linha/produto.")
+    user = (f"Campos do modelo: {json.dumps(campos, ensure_ascii=False)}\n"
+            f"Colunas da planilha: {json.dumps(cab, ensure_ascii=False)}\n"
+            f"Primeiras linhas: {json.dumps([[str(c)[:40] for c in l] for l in amostra[:5]], ensure_ascii=False)}")
+    resp = await _groq_json(system, user, 1500)
+    pos = {c: i for i, c in enumerate(cab)}
+    pos_norm = {_norm_txt(c): i for i, c in enumerate(cab)}
+    mapa: Dict[str, Optional[int]] = {}; usado: set = set()
+    for campo in CAMPOS_NOTA_PLANILHA:
+        col = resp.get(campo) if isinstance(resp, dict) else None
+        i = pos.get(col) if isinstance(col, str) else None
+        if i is None and isinstance(col, str): i = pos_norm.get(_norm_txt(col))
+        mapa[campo] = i if i is not None and i not in usado else None
+        if mapa[campo] is not None: usado.add(mapa[campo])
+    return mapa
+
+def _notas_da_planilha(linhas: List[List[Any]], ini: int, mapa: Dict[str, Optional[int]], arquivo: str) -> tuple:
+    """Agrupa as linhas por (NF, emitente) e monta notas no mesmo formato do XML."""
+    def pega(l, campo):
+        i = mapa.get(campo)
+        return l[i] if i is not None and i < len(l) else ""
+    grupos: Dict[tuple, dict] = {}; ordem: List[tuple] = []; avisos: List[str] = []
+    for n_linha, l in enumerate(linhas[ini + 1:], start=ini + 2):
+        if not any(str(c).strip() for c in l): continue
+        nf = re.sub(r"\.0$", "", str(pega(l, "nf_numero")).strip())
+        if not nf:
+            avisos.append(f"Linha {n_linha}: sem número de NF — ignorada."); continue
+        emit_cnpj = _only_digits(str(pega(l, "emitente_cnpj")))
+        emit_nome = str(pega(l, "emitente_nome")).strip()
+        k = (nf.lstrip("0") or "0", emit_cnpj or _chave_nome(emit_nome))
+        if k not in grupos:
+            ordem.append(k)
+            vencs = [x for x in re.split(r"[;|,]\s*|\s{2,}", str(pega(l, "vencimentos") or "")) if x.strip()]
+            grupos[k] = {
+                "origem": "planilha", "arquivo": arquivo, "linha": n_linha,
+                "numero": nf, "serie": str(pega(l, "serie")).strip().replace(".0", ""),
+                "data_emissao": _data_br(pega(l, "data_emissao")),
+                "emitente": {"cnpj": emit_cnpj, "nome": emit_nome},
+                "destinatario": {"cnpj": _only_digits(str(pega(l, "cliente_cnpj"))), "nome": str(pega(l, "cliente_nome")).strip(),
+                                 "cidade": str(pega(l, "cliente_cidade")).strip(), "uf": str(pega(l, "cliente_uf")).strip().upper()[:2]},
+                "_total_col": _num_br(pega(l, "valor_total")), "_vencs": [_data_br(v) for v in vencs],
+                "itens": [],
+            }
+        g = grupos[k]
+        desc, cod = str(pega(l, "produto_descricao")).strip(), str(pega(l, "produto_codigo")).strip()
+        qtd, preco, vitem = _num_br(pega(l, "quantidade")), _num_br(pega(l, "preco_unitario")), _num_br(pega(l, "valor_item"))
+        if desc or cod:
+            q = qtd or (1.0 if (vitem or preco) else 0.0)
+            tot = vitem or round(q * preco, 2)
+            g["itens"].append({"codigo": cod, "ean": _only_digits(str(pega(l, "produto_ean"))), "nome": desc or f"Produto {cod}",
+                               "quantidade": q, "preco": preco or (round(tot / q, 4) if q else 0.0), "total": round(tot, 2)})
+        elif vitem and not g["_total_col"]:
+            g["_total_col"] = vitem
+    notas = []
+    for k in ordem:
+        g = grupos[k]
+        soma_itens = round(sum(i["total"] for i in g["itens"]), 2)
+        total = round(g.pop("_total_col") or soma_itens, 2)
+        vencs = [v for v in g.pop("_vencs") if v]
+        g["valor_total"] = total
+        g["valor_produtos"] = soma_itens or total
+        pesos = [1.0] * len(vencs)
+        g["parcelas"] = [{"numero": f"{i+1:03d}", "vencimento": v, "valor_base": val, "valor": val, "origem": "planilha"}
+                         for i, (v, val) in enumerate(zip(vencs, _ratear(total, pesos)))] if vencs else []
+        if not g["data_emissao"]: avisos.append(f"NF {g['numero']}: data de emissão vazia ou inválida — será usada a data de hoje.")
+        notas.append(g)
+    return notas, avisos
+
+def _parse_nfe_completo(x: str) -> dict:
+    """_parse_nfe + endereço/fantasia de emitente e destinatário, totais e situação (cancelamento)."""
+    p = _parse_nfe(x)
+    xc = _normalizar_xml_nfe(x)
+    emit = _rx(r"<emit\b[^>]*>(.*?)</emit>", xc); dest = _rx(r"<dest\b[^>]*>(.*?)</dest>", xc)
+    p["emitente"].update({"fantasia": _rx(r"<xFant>(.*?)</xFant>", emit), "ie": _rx(r"<IE>(.*?)</IE>", emit),
+                          "cidade": _rx(r"<xMun>(.*?)</xMun>", emit), "uf": _rx(r"<UF>(.*?)</UF>", emit),
+                          "telefone": _rx(r"<fone>(.*?)</fone>", emit), "cep": _rx(r"<CEP>(.*?)</CEP>", emit)})
+    end_d = _rx(r"<enderDest>(.*?)</enderDest>", dest)
+    lgr = ", ".join(x for x in (_rx(r"<xLgr>(.*?)</xLgr>", end_d), _rx(r"<nro>(.*?)</nro>", end_d), _rx(r"<xBairro>(.*?)</xBairro>", end_d)) if x)
+    p["destinatario"].update({"cidade": _rx(r"<xMun>(.*?)</xMun>", end_d), "uf": _rx(r"<UF>(.*?)</UF>", end_d),
+                              "cep": _rx(r"<CEP>(.*?)</CEP>", end_d), "telefone": _rx(r"<fone>(.*?)</fone>", end_d),
+                              "endereco": lgr, "email": _rx(r"<email>(.*?)</email>", dest), "ie": _rx(r"<IE>(.*?)</IE>", dest)})
+    tot = _rx(r"<ICMSTot>(.*?)</ICMSTot>", xc)
+    p["valor_produtos"] = round(_to_float(_rx(r"<vProd>(.*?)</vProd>", tot)) - _to_float(_rx(r"<vDesc>(.*?)</vDesc>", tot)), 2)
+    p["chave"] = _rx(r"<chNFe>(.*?)</chNFe>", xc) or _rx(r'<infNFe[^>]*\bId="NFe(\d{44})"', x)
+    p["modelo"] = _rx(r"<mod>(.*?)</mod>", xc)
+    p["tipo_operacao"] = _rx(r"<tpNF>(.*?)</tpNF>", xc)   # 0 = entrada, 1 = saída
+    for parc in p["parcelas"]: parc["valor"] = parc.get("valor_base", 0)
+    p["origem"] = "xml"
+    return p
+
+def _tipo_xml(x: str) -> str:
+    xc = _normalizar_xml_nfe(x)[:200000]
+    if re.search(r"<tpEvento>\s*110111\s*</tpEvento>", xc): return "cancelamento"
+    if re.search(r"<(procEventoNFe|evento|envEvento)\b", xc): return "evento"
+    if re.search(r"<infNFe\b", xc): return "nfe"
+    if re.search(r"<(CompNfse|Nfse|InfNfse|ConsultarNfse|NFSe)\b", xc, re.I): return "nfse"
+    if re.search(r"<(cteProc|CTe|infCte)\b", xc): return "cte"
+    return "desconhecido"
+
+async def _nota_por_ia(x: str, arquivo: str) -> dict:
+    system = ("Você extrai dados de documentos fiscais em XML (qualquer layout) para o modelo de um sistema de representantes comerciais. "
+              "Responda APENAS JSON: {\"numero\":\"\",\"serie\":\"\",\"data_emissao\":\"AAAA-MM-DD\",\"valor_total\":0,"
+              "\"emitente\":{\"cnpj\":\"\",\"nome\":\"\"},\"destinatario\":{\"cnpj\":\"\",\"nome\":\"\",\"cidade\":\"\",\"uf\":\"\"},"
+              "\"itens\":[{\"codigo\":\"\",\"ean\":\"\",\"nome\":\"\",\"quantidade\":0,\"preco\":0,\"total\":0}],"
+              "\"parcelas\":[{\"vencimento\":\"AAAA-MM-DD\",\"valor\":0}]}. Números com ponto decimal. Não invente: deixe vazio o que não existir.")
+    corpo = re.sub(r"<(Signature|ds:Signature)\b.*?</\1>", "", x, flags=re.S)[:24000]
+    r = await _groq_json(system, f"Arquivo: {arquivo}\n\n{corpo}", 3000)
+    nota = {
+        "origem": "ia", "arquivo": arquivo, "numero": str(r.get("numero") or "").strip(), "serie": str(r.get("serie") or ""),
+        "data_emissao": _data_br(r.get("data_emissao")), "valor_total": round(_num_br(r.get("valor_total")), 2),
+        "emitente": {"cnpj": _only_digits(str((r.get("emitente") or {}).get("cnpj") or "")), "nome": str((r.get("emitente") or {}).get("nome") or "")},
+        "destinatario": {k: str((r.get("destinatario") or {}).get(k) or "") for k in ("cnpj", "nome", "cidade", "uf")},
+        "itens": [{"codigo": str(i.get("codigo") or ""), "ean": _only_digits(str(i.get("ean") or "")), "nome": str(i.get("nome") or "Item"),
+                   "quantidade": _num_br(i.get("quantidade")), "preco": _num_br(i.get("preco")), "total": round(_num_br(i.get("total")), 2)}
+                  for i in (r.get("itens") or []) if isinstance(i, dict)][:500],
+    }
+    nota["destinatario"]["cnpj"] = _only_digits(nota["destinatario"]["cnpj"])
+    pars = [p for p in (r.get("parcelas") or []) if isinstance(p, dict) and _data_br(p.get("vencimento"))]
+    nota["parcelas"] = [{"numero": f"{i+1:03d}", "vencimento": _data_br(p.get("vencimento")), "valor_base": _num_br(p.get("valor")),
+                         "valor": _num_br(p.get("valor")), "origem": "ia"} for i, p in enumerate(pars)]
+    if not nota["valor_total"]: nota["valor_total"] = round(sum(i["total"] for i in nota["itens"]), 2)
+    nota["valor_produtos"] = round(sum(i["total"] for i in nota["itens"]), 2) or nota["valor_total"]
+    if not nota["numero"] or not nota["valor_total"]: raise RuntimeError("a IA não encontrou número e valor da nota neste XML")
+    return nota
+
+def _casar(lista: List[dict], cnpj: str, nome: str, campo_cnpj: str) -> tuple:
+    """Procura por CNPJ; sem CNPJ, por nome (razão social ou fantasia, sem LTDA/ME etc.). Devolve (registro, como)."""
+    cnpj = _only_digits(cnpj)
+    if cnpj:
+        r = next((x for x in lista if _only_digits(x.get(campo_cnpj)) == cnpj), None)
+        if r: return r, "cnpj"
+    ch = _chave_nome(nome)
+    if ch and len(ch) >= 3:
+        for x in lista:
+            if ch in {_chave_nome(x.get("razao_social")), _chave_nome(x.get("nome_fantasia"))}:
+                return x, "nome"
+    return None, None
+
+class ArquivoXMLIn(BaseModel):
+    nome: str = "nota.xml"
+    conteudo: str
+
+class PlanilhaNotasIn(BaseModel):
+    nome: str = "planilha.csv"
+    linhas: List[List[Any]]
+    mapeamento: Optional[Dict[str, Optional[int]]] = None   # escolhido pelo usuário na tela
+    linha_cabecalho: Optional[int] = None
+    usar_ia: bool = False
+
+class AnalisarNotasIn(BaseModel):
+    xmls: List[ArquivoXMLIn] = []
+    planilha: Optional[PlanilhaNotasIn] = None
+    ia_para_xml_desconhecido: bool = True
+
+@api.post("/importar-notas/analisar")
+async def importar_notas_analisar(body: AnalisarNotasIn, current=Depends(get_active_user)):
+    """Lê XMLs e/ou planilha e devolve a prévia das notas (nada é gravado)."""
+    require_feature(current, "xml", "A importação de notas")
+    if len(body.xmls) > 300: raise HTTPException(400, "Envie no máximo 300 XMLs por vez.")
+    tid = tid_of(current)
+    notas: List[dict] = []; erros: List[dict] = []; avisos: List[str] = []; planilha_info = None
+    ia_usos = 0
+
+    for arq in body.xmls:
+        x = (arq.conteudo or "").strip()
+        if not x.startswith("<") and "<" not in x[:500]:
+            erros.append({"arquivo": arq.nome, "motivo": "não é um arquivo XML (se for o PDF/DANFE, envie o XML da nota)"}); continue
+        tipo = _tipo_xml(x)
+        if tipo == "cancelamento":
+            erros.append({"arquivo": arq.nome, "motivo": "é um evento de CANCELAMENTO de NF-e — não gera pedido",
+                          "chave_cancelada": _rx(r"<chNFe>(.*?)</chNFe>", _normalizar_xml_nfe(x))}); continue
+        if tipo == "evento":
+            erros.append({"arquivo": arq.nome, "motivo": "é um evento da NF-e (carta de correção/ciência), não a nota"}); continue
+        if tipo == "cte":
+            erros.append({"arquivo": arq.nome, "motivo": "é um CT-e (conhecimento de transporte), não uma nota de venda"}); continue
+        try:
+            if tipo == "nfe":
+                n = _parse_nfe_completo(x); n["arquivo"] = arq.nome
+                if n.get("tipo_operacao") == "0":
+                    avisos.append(f"{arq.nome}: nota de ENTRADA (devolução/compra) — confira antes de importar.")
+                if not n.get("numero"): raise RuntimeError("número da NF não encontrado")
+            else:
+                if not body.ia_para_xml_desconhecido:
+                    raise RuntimeError("layout não reconhecido (não é NF-e modelo 55)")
+                if ia_usos >= 20: raise RuntimeError("limite de 20 leituras por IA por envio")
+                _rl_hit(f"ai:{tid}", AI_LIMIT_POR_HORA, 3600)
+                ia_usos += 1
+                n = await _nota_por_ia(x, arq.nome)
+            n["xml"] = x if len(x) < 400_000 else ""
+            notas.append(n)
+        except HTTPException: raise
+        except Exception as e:
+            erros.append({"arquivo": arq.nome, "motivo": str(e)})
+
+    if body.planilha and body.planilha.linhas:
+        pl = body.planilha
+        linhas = [[("" if c is None else c) for c in (l or [])] for l in pl.linhas[:20000]]
+        ini = pl.linha_cabecalho if pl.linha_cabecalho is not None and 0 <= pl.linha_cabecalho < len(linhas) else _achar_cabecalho(linhas)
+        cab = [str(c).strip() for c in linhas[ini]] if linhas else []
+        origem_mapa = "automatico"
+        if pl.mapeamento:
+            mapa = {c: (pl.mapeamento.get(c) if isinstance(pl.mapeamento.get(c), int) and 0 <= pl.mapeamento.get(c) < len(cab) else None)
+                    for c in CAMPOS_NOTA_PLANILHA}
+            origem_mapa = "usuario"
+        else:
+            mapa = _mapear_colunas_auto(cab)
+        falta = _mapa_valido(mapa)
+        erro_ia = None
+        if (pl.usar_ia or (falta and not pl.mapeamento)) and cab:
+            try:
+                _rl_hit(f"ai:{tid}", AI_LIMIT_POR_HORA, 3600)
+                mapa_ia = await _mapear_colunas_ia(cab, linhas[ini + 1: ini + 6])
+                if len(_mapa_valido(mapa_ia)) <= len(falta) or pl.usar_ia:
+                    mapa, origem_mapa = mapa_ia, "ia"; falta = _mapa_valido(mapa)
+            except HTTPException: raise
+            except Exception as e:
+                erro_ia = str(e)
+        planilha_info = {"arquivo": pl.nome, "linha_cabecalho": ini, "colunas": cab, "mapeamento": mapa,
+                         "origem_mapeamento": origem_mapa, "faltando": falta, "erro_ia": erro_ia,
+                         "campos": [{"id": k, "rotulo": v[0]} for k, v in CAMPOS_NOTA_PLANILHA.items()],
+                         "total_linhas": max(0, len(linhas) - ini - 1)}
+        if not falta:
+            ns, av = _notas_da_planilha(linhas, ini, mapa, pl.nome)
+            notas.extend(ns); avisos.extend(av[:50])
+
+    # casamento com cadastros, duplicidades e status
+    reps = await t_list("representadas", current, leve=True)
+    clis = await t_list("clientes", current, leve=True, limit=20000)
+    nf_existentes: Dict[tuple, str] = {}
+    async for p in db.pedidos.find({"tenant_id": tid, "nf_numero": {"$nin": [None, ""]}},
+                                   {"_id": 0, "representada_id": 1, "nf_numero": 1, "numero": 1}):
+        for nf in str(p["nf_numero"]).split(","):
+            nf_existentes[(p.get("representada_id"), nf.strip().lstrip("0"))] = p.get("numero")
+    vistos: set = set()
+    for i, n in enumerate(notas):
+        n["id_temp"] = f"n{i+1}"
+        n.setdefault("parcelas", []); n.setdefault("itens", [])
+        rep, como_r = _casar(reps, n["emitente"].get("cnpj"), n["emitente"].get("fantasia") or n["emitente"].get("nome"), "cnpj")
+        if not rep and n["emitente"].get("fantasia"):
+            rep, como_r = _casar(reps, "", n["emitente"].get("nome"), "cnpj")
+        cli, como_c = _casar(clis, n["destinatario"].get("cnpj"), n["destinatario"].get("nome"), "cnpj_cpf")
+        n["representada_id"] = rep["id"] if rep else None; n["representada_por"] = como_r
+        n["cliente_id"] = cli["id"] if cli else None; n["cliente_por"] = como_c
+        chave_nf = (n["representada_id"], str(n.get("numero") or "").lstrip("0"))
+        n["duplicada_pedido"] = nf_existentes.get(chave_nf) if n["representada_id"] else None
+        chave_lote = n.get("chave") or f"{n['emitente'].get('cnpj') or _chave_nome(n['emitente'].get('nome'))}|{chave_nf[1]}"
+        n["repetida_no_envio"] = chave_lote in vistos
+        vistos.add(chave_lote)
+        n["status"] = ("duplicada" if n["duplicada_pedido"] or n["repetida_no_envio"]
+                       else "pronta" if n["representada_id"] and n["cliente_id"] else "pendente")
+
+    return {
+        "notas": notas, "erros": erros, "avisos": avisos, "planilha": planilha_info,
+        "representadas": [{"id": r["id"], "nome": r.get("nome_fantasia") or r.get("razao_social"), "cnpj": r.get("cnpj"),
+                           "comissao_padrao": r.get("comissao_padrao")} for r in reps],
+        "clientes": sorted([{"id": c["id"], "nome": c.get("nome_fantasia") or c.get("razao_social"), "cnpj": c.get("cnpj_cpf")}
+                            for c in clis], key=lambda c: (c["nome"] or "").lower()),
+        "limite_representadas": _limites(current).get("representadas"),
+    }
+
+class NotaConfirmarIn(BaseModel):
+    nota: Dict[str, Any]
+    representada_id: Optional[str] = None
+    cliente_id: Optional[str] = None
+    criar_representada: bool = False
+    comissao_nova_representada: Optional[float] = None
+    criar_cliente: bool = False
+
+class ConfirmarNotasIn(BaseModel):
+    notas: List[NotaConfirmarIn]
+
+@api.post("/importar-notas/confirmar")
+async def importar_notas_confirmar(body: ConfirmarNotasIn, current=Depends(get_active_user)):
+    """Cria os pedidos faturados (com faturamento, comissão e Contas a Receber) das notas escolhidas."""
+    require_feature(current, "xml", "A importação de notas")
+    if len(body.notas) > 500: raise HTTPException(400, "Importe no máximo 500 notas por vez.")
+    tid = tid_of(current)
+    criadas_rep: Dict[str, str] = {}; criados_cli: Dict[str, str] = {}
+    lim = _limites(current).get("representadas")
+    resultados = []
+    for item in body.notas:
+        n = item.nota or {}
+        res = {"id_temp": n.get("id_temp"), "numero": n.get("numero"), "arquivo": n.get("arquivo")}
+        try:
+            if not n.get("numero"): raise ValueError("nota sem número")
+            rep_id = item.representada_id
+            if not rep_id and item.criar_representada:
+                e = n.get("emitente") or {}
+                k = _only_digits(e.get("cnpj")) or _chave_nome(e.get("nome"))
+                if not k: raise ValueError("emitente sem CNPJ e sem nome para cadastrar a representada")
+                if k in criadas_rep: rep_id = criadas_rep[k]
+                else:
+                    if lim is not None and await db.representadas.count_documents({"tenant_id": tid}) >= lim:
+                        raise ValueError(f"seu plano permite {lim} representadas — faça upgrade ou escolha uma existente")
+                    doc = RepresentadaIn(razao_social=e.get("nome") or e.get("fantasia") or "Representada",
+                                         nome_fantasia=e.get("fantasia") or e.get("nome") or "", cnpj=e.get("cnpj") or "",
+                                         inscricao_estadual=e.get("ie") or "", cidade=e.get("cidade") or "", estado=e.get("uf") or "",
+                                         cep=e.get("cep") or "", telefone=e.get("telefone") or "",
+                                         comissao_padrao=item.comissao_nova_representada if item.comissao_nova_representada is not None else 5.0,
+                                         observacoes="Cadastrada automaticamente pela importação de notas").model_dump()
+                    rep = await t_insert("representadas", current, doc)
+                    rep_id = criadas_rep[k] = rep["id"]
+            cli_id = item.cliente_id
+            if not cli_id and item.criar_cliente:
+                d = n.get("destinatario") or {}
+                k = _only_digits(d.get("cnpj")) or _chave_nome(d.get("nome"))
+                if not k: raise ValueError("cliente sem CNPJ e sem nome para cadastrar")
+                if k in criados_cli: cli_id = criados_cli[k]
+                else:
+                    ja, _ = _casar(await t_list("clientes", current, {"cnpj_cpf": {"$nin": [None, ""]}} if _only_digits(d.get("cnpj")) else None, leve=True, limit=20000),
+                                   d.get("cnpj"), d.get("nome"), "cnpj_cpf")
+                    if ja: cli_id = ja["id"]
+                    else:
+                        cli = await t_insert("clientes", current, {
+                            "razao_social": d.get("nome") or "Cliente", "nome_fantasia": d.get("nome") or "",
+                            "cnpj_cpf": d.get("cnpj") or "", "cidade": d.get("cidade") or "", "estado": d.get("uf") or "",
+                            "cep": d.get("cep") or "", "endereco": d.get("endereco") or "", "telefone": d.get("telefone") or "",
+                            "email": d.get("email") or "", "inscricao_estadual": d.get("ie") or "", "status": "ativo",
+                            "origem": "importacao_notas"})
+                        cli_id = cli["id"]
+                    criados_cli[k] = cli_id
+            if not rep_id or not cli_id:
+                raise ValueError("escolha (ou cadastre) a representada e o cliente")
+            parsed = {k: n.get(k) for k in ("numero", "serie", "data_emissao", "valor_total", "itens", "parcelas", "emitente", "destinatario")}
+            parsed["data_emissao"] = parsed.get("data_emissao") or iso(now_utc())
+            parsed["valor_total"] = round(_to_float(parsed.get("valor_total")), 2)
+            parsed["itens"] = [{**i, "quantidade": _to_float(i.get("quantidade")), "preco": _to_float(i.get("preco")),
+                                "total": _to_float(i.get("total"))} for i in (parsed.get("itens") or []) if isinstance(i, dict)]
+            parsed["parcelas"] = [{**p, "valor_base": _to_float(p.get("valor_base", p.get("valor")))}
+                                  for p in (parsed.get("parcelas") or []) if isinstance(p, dict)]
+            r = await _match_or_create_pedido(current, parsed, rep_id, cli_id)
+            if r.get("pedido_erro") == "duplicado_reutilizado":
+                res.update({"ok": False, "duplicada": True, "pedido": (r.get("pedido_criado") or {}).get("numero"),
+                            "erro": "NF já importada antes — nada foi criado"})
+            elif r.get("pedido_criado"):
+                p = r["pedido_criado"]
+                res.update({"ok": True, "pedido": p.get("numero"), "pedido_id": p.get("id"), "total": p.get("total"),
+                            "comissao": p.get("comissao_valor")})
+                await t_insert("xml_files", current, {
+                    **{k: v for k, v in n.items() if k not in ("xml", "status", "id_temp")},
+                    "filename": n.get("arquivo"), "pedido_id": p.get("id"), "representada_id": rep_id, "cliente_id": cli_id})
+            else:
+                res.update({"ok": False, "erro": r.get("pedido_erro") or "não foi possível criar o pedido"})
+        except Exception as e:
+            if isinstance(e, HTTPException): raise
+            logger.exception("importar nota") if not isinstance(e, ValueError) else None
+            res.update({"ok": False, "erro": str(e)})
+        resultados.append(res)
+    ok = sum(1 for r in resultados if r.get("ok"))
+    await _log_auditoria(current, "importacao_notas", "pedidos", "-", extra={"importadas": ok, "enviadas": len(body.notas),
+                                                                          "representadas_criadas": len(criadas_rep), "clientes_criados": len(criados_cli)})
+    return {"importadas": ok, "falhas": len(resultados) - ok, "representadas_criadas": len(criadas_rep),
+            "clientes_criados": len(set(criados_cli.values())), "resultados": resultados}
 
 # ------------------------------------------------------------
 # Relatórios Avançados

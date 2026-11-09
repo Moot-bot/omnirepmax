@@ -1,495 +1,553 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import api from "../lib/api";
 import { PageHeader } from "../components/Common";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "../components/ui/select";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "../components/ui/dialog";
-import { Label } from "../components/ui/label";
-import {
-  FileUp, CheckCircle2, AlertTriangle, FileText, Loader2,
-  UserPlus, Calendar, DollarSign,
+  FileUp, CheckCircle2, AlertTriangle, FileText, Loader2, Sparkles, Download, X,
+  ChevronDown, ChevronRight, FileSpreadsheet, RefreshCw, Copy, Ban,
 } from "lucide-react";
 import { fmtBRL, fmtDate } from "../lib/format";
+import { decodificarTexto, lerCSV } from "../lib/planilhaProdutos";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
+/**
+ * Importação de notas — XML NF-e (vários arquivos de uma vez) e planilhas CSV/Excel.
+ * 1) O servidor analisa e devolve a prévia (nada é gravado).
+ * 2) Você confere, escolhe/cadastra representada e cliente, e confirma.
+ * A IA (Groq) mapeia colunas de planilhas fora do padrão e lê XMLs que não são NF-e modelo 55.
+ */
+
+const NOVA = "__nova";
+const temDados = (p) => !!(p && (String(p.cnpj || "").replace(/\D/g, "") || String(p.nome || p.fantasia || "").trim()));
+const TRUNC = (s, n = 38) => (s && s.length > n ? s.slice(0, n - 1) + "…" : s || "—");
+const fmtCnpj = (v) => {
+  const d = String(v || "").replace(/\D/g, "");
+  if (d.length === 14) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+  if (d.length === 11) return d.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, "$1.$2.$3-$4");
+  return v || "";
+};
+const selCls = "h-8 w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs px-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#075BFF]/40";
+
+const STATUS = {
+  pronta:    { rotulo: "Pronta",      cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" },
+  pendente:  { rotulo: "Cadastrar",   cls: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300" },
+  duplicada: { rotulo: "Já importada", cls: "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300" },
+};
+
+const MODELO_CABECALHO = ["Número NF", "Série", "Data emissão", "CNPJ representada", "Representada", "CNPJ cliente", "Cliente",
+  "Cidade", "UF", "Código produto", "EAN", "Descrição produto", "Quantidade", "Preço unitário", "Valor total NF", "Vencimentos"];
+const MODELO_LINHAS = [
+  ["1234", "1", "05/11/2026", "12.345.678/0001-99", "Fábrica Exemplo", "98.765.432/0001-55", "Loja Exemplo Ltda", "Joinville", "SC",
+    "REF-100", "7891234567895", "Tênis modelo 100 - 38", "12", "89,90", "1.351,80", "05/12/2026; 04/01/2027"],
+  ["1234", "1", "05/11/2026", "12.345.678/0001-99", "Fábrica Exemplo", "98.765.432/0001-55", "Loja Exemplo Ltda", "Joinville", "SC",
+    "REF-200", "", "Sandália modelo 200", "6", "45,50", "1.351,80", ""],
+];
+
+function baixarModelo() {
+  const esc = (v) => (/[;"\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v);
+  const csv = [MODELO_CABECALHO, ...MODELO_LINHAS].map(l => l.map(esc).join(";")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: "modelo_importacao_notas.csv" });
+  a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function lerArquivo(f) {
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  const buf = await f.arrayBuffer();
+  if (ext === "xml") return { tipo: "xml", nome: f.name, conteudo: decodificarTexto(buf) };
+  if (ext === "csv" || ext === "txt") return { tipo: "planilha", nome: f.name, linhas: lerCSV(decodificarTexto(buf)).linhas };
+  if (["xlsx", "xls", "xlsm", "ods"].includes(ext)) {
+    const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+    // aba com mais linhas preenchidas
+    let melhor = null;
+    for (const nome of wb.SheetNames) {
+      const linhas = XLSX.utils.sheet_to_json(wb.Sheets[nome], { header: 1, raw: false, defval: "", dateNF: "dd/mm/yyyy" });
+      const cheias = linhas.filter(l => l.some(c => String(c).trim())).length;
+      if (!melhor || cheias > melhor.cheias) melhor = { linhas, cheias };
+    }
+    return { tipo: "planilha", nome: f.name, linhas: melhor ? melhor.linhas : [] };
+  }
+  if (ext === "pdf") throw new Error(`${f.name}: PDF (DANFE) não tem os dados estruturados — envie o arquivo XML da nota.`);
+  if (ext === "zip") throw new Error(`${f.name}: descompacte o ZIP e envie os XMLs (pode selecionar vários de uma vez).`);
+  throw new Error(`${f.name}: formato não suportado. Envie .xml, .csv, .xlsx ou .xls.`);
+}
+
 export default function ImportacaoXML() {
-  const [xml, setXml] = useState("");
-  const [filename, setFilename] = useState("");
-  const [parsed, setParsed] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [repId, setRepId] = useState("");
-  const [cliId, setCliId] = useState("");
+  const [xmls, setXmls] = useState([]);              // [{nome, conteudo}]
+  const [planilha, setPlanilha] = useState(null);    // {nome, linhas}
+  const [colar, setColar] = useState("");
+  const [mostrarColar, setMostrarColar] = useState(false);
+  const [analise, setAnalise] = useState(null);
+  const [escolhas, setEscolhas] = useState({});      // id_temp -> {incluir, rep, cli, comissao}
+  const [mapa, setMapa] = useState(null);            // mapeamento editado
+  const [busy, setBusy] = useState(null);            // "analisar" | "ia" | "importar"
+  const [resultado, setResultado] = useState(null);
+  const [aberta, setAberta] = useState(null);
   const [historico, setHistorico] = useState([]);
+  const [arrastando, setArrastando] = useState(false);
+  const inputRef = useRef(null);
 
-  // ✅ NOVO: cadastro rápido de cliente sem sair da tela
-  const [cliOpen, setCliOpen] = useState(false);
-  const [newCli, setNewCli] = useState({
-    razao_social: "", nome_fantasia: "", cnpj_cpf: "",
-    cidade: "", estado: "", email: "", telefone: "",
-  });
-  const [loadingCnpj, setLoadingCnpj] = useState(false);
+  const carregarHistorico = useCallback(() => {
+    api.get("/xml/historico").then(r => setHistorico(r.data || [])).catch(() => {});
+  }, []);
+  useEffect(() => { carregarHistorico(); }, [carregarHistorico]);
 
-  useEffect(() => {
-    api.get("/xml/historico").then((r) => setHistorico(r.data)).catch(() => {});
-  }, [parsed]);
+  // ---------- leitura dos arquivos ----------
+  const adicionarArquivos = async (files) => {
+    const novosXml = []; let novaPlanilha = null;
+    for (const f of Array.from(files || [])) {
+      try {
+        const a = await lerArquivo(f);
+        if (a.tipo === "xml") novosXml.push({ nome: a.nome, conteudo: a.conteudo });
+        else novaPlanilha = { nome: a.nome, linhas: a.linhas };
+      } catch (e) { toast.error(e.message); }
+    }
+    if (!novosXml.length && !novaPlanilha) return;
+    const xs = [...xmls.filter(x => !novosXml.some(n => n.nome === x.nome)), ...novosXml];
+    const pl = novaPlanilha || planilha;
+    setXmls(xs); if (novaPlanilha) { setPlanilha(novaPlanilha); setMapa(null); }
+    analisar({ xs, pl, mapeamento: novaPlanilha ? null : mapa });
+  };
 
-  const importar = async (overrides) => {
-    if (!xml.trim()) return toast.error("Cole o XML da NF-e");
-    setBusy(true);
+  const adicionarColado = () => {
+    const t = colar.trim();
+    if (!t.startsWith("<")) return toast.error("Cole o conteúdo do XML (começa com <).");
+    const xs = [...xmls, { nome: `colado-${xmls.length + 1}.xml`, conteudo: t }];
+    setXmls(xs); setColar(""); setMostrarColar(false);
+    analisar({ xs, pl: planilha, mapeamento: mapa });
+  };
+
+  const limpar = () => {
+    setXmls([]); setPlanilha(null); setAnalise(null); setEscolhas({}); setMapa(null); setResultado(null);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  // ---------- análise (prévia) ----------
+  const analisar = async ({ xs = xmls, pl = planilha, mapeamento = null, usarIa = false } = {}) => {
+    if (!xs.length && !pl) { setAnalise(null); return; }
+    setBusy(usarIa ? "ia" : "analisar"); setResultado(null);
     try {
-      const body = {
-        xml_content: xml,
-        filename: filename || "manual.xml",
-        create_pedido: true,
-      };
-      const finalRep = overrides?.repId || repId;
-      const finalCli = overrides?.cliId || cliId;
-      if (finalRep) body.representada_id = finalRep;
-      if (finalCli) body.cliente_id = finalCli;
-
-      const { data } = await api.post("/xml/import", body);
-      setParsed(data);
-
-      if (data.pedido_criado && data.pedido_erro !== "duplicado_reutilizado") {
-        toast.success(`Pedido ${data.pedido_criado.numero} criado automaticamente a partir da NF-e!`);
-      } else if (data.pedido_erro === "duplicado_reutilizado") {
-        toast.info(`NF-e já importada anteriormente. Pedido ${data.pedido_criado?.numero} reaproveitado.`);
-      } else if (data.pedido_erro === "match_pendente") {
-        toast.warning("NF-e processada. Associe representada e/ou cadastre o cliente para criar o pedido.");
-      } else if (data.pedido_erro) {
-        toast.error(data.pedido_erro);
+      const body = { xmls: xs };
+      if (pl) body.planilha = { nome: pl.nome, linhas: pl.linhas, mapeamento: mapeamento || null, usar_ia: usarIa };
+      const { data } = await api.post("/importar-notas/analisar", body);
+      setAnalise(data);
+      if (data.planilha) setMapa(data.planilha.mapeamento);
+      const esc = {};
+      const unicaRep = data.representadas.length === 1 ? data.representadas[0].id : "";
+      for (const n of data.notas) {
+        esc[n.id_temp] = {
+          incluir: n.status !== "duplicada",
+          // sem dados do emitente (planilha sem coluna de representada): usa a única cadastrada ou pede para escolher
+          rep: n.representada_id || (temDados(n.emitente) ? NOVA : unicaRep),
+          cli: n.cliente_id || (temDados(n.destinatario) ? NOVA : ""),
+          comissao: 5,
+        };
       }
+      setEscolhas(esc);
+      if (data.planilha?.origem_mapeamento === "ia") toast.success("A IA identificou as colunas da planilha. Confira antes de importar.");
+      if (data.planilha?.erro_ia) toast.warning(data.planilha.erro_ia);
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Erro ao processar XML");
-    } finally {
-      setBusy(false);
-    }
+      toast.error(e.response?.data?.detail || "Não foi possível analisar os arquivos.");
+    } finally { setBusy(null); }
   };
 
-  const onFile = (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setFilename(f.name);
-    const rd = new FileReader();
-    rd.onload = () => setXml(rd.result);
-    rd.readAsText(f, "utf-8");
-  };
+  // ---------- confirmar ----------
+  const notas = analise?.notas || [];
+  const selecionadas = notas.filter(n => escolhas[n.id_temp]?.incluir);
+  const totalSel = selecionadas.reduce((s, n) => s + (Number(n.valor_total) || 0), 0);
+  const novasReps = useMemo(() => {
+    const m = new Map();
+    for (const n of selecionadas) if (escolhas[n.id_temp]?.rep === NOVA) m.set(n.emitente?.cnpj || n.emitente?.nome, n.emitente);
+    return m.size;
+  }, [selecionadas, escolhas]);
 
-  const needsAssociation =
-    parsed && !parsed.pedido_criado && parsed.pedido_erro === "match_pendente";
-
-  // ✅ NOVO: busca CNPJ via BrasilAPI
-  const buscarCNPJ = async (cnpjRaw) => {
-    const cnpj = (cnpjRaw || "").replace(/\D/g, "");
-    if (cnpj.length !== 14) return;
-    setLoadingCnpj(true);
+  const importar = async () => {
+    if (!selecionadas.length) return toast.error("Selecione ao menos uma nota.");
+    const semRep = selecionadas.filter(n => !escolhas[n.id_temp]?.rep).map(n => n.numero);
+    const semCli = selecionadas.filter(n => !escolhas[n.id_temp]?.cli).map(n => n.numero);
+    if (semRep.length) return toast.error(`Escolha a representada da(s) NF ${semRep.slice(0, 5).join(", ")}${semRep.length > 5 ? "…" : ""} (ou use “Representada p/ todas”).`);
+    if (semCli.length) return toast.error(`Escolha o cliente da(s) NF ${semCli.slice(0, 5).join(", ")}${semCli.length > 5 ? "…" : ""}.`);
+    setBusy("importar");
     try {
-      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
-      const data = await res.json();
-      setNewCli((prev) => ({
-        ...prev,
-        razao_social: data.razao_social || prev.razao_social,
-        nome_fantasia: data.nome_fantasia || prev.nome_fantasia,
-        cidade: data.municipio || prev.cidade,
-        estado: data.uf || prev.estado,
-      }));
-      toast.success("Dados do CNPJ carregados.");
-    } catch {
-      toast.error("Não foi possível buscar o CNPJ.");
-    } finally {
-      setLoadingCnpj(false);
-    }
+      const { data } = await api.post("/importar-notas/confirmar", {
+        notas: selecionadas.map(n => {
+          const e = escolhas[n.id_temp];
+          const { xml: _x, ...nota } = n;
+          return {
+            nota,
+            representada_id: e.rep !== NOVA ? e.rep : null, criar_representada: e.rep === NOVA,
+            comissao_nova_representada: e.rep === NOVA ? Number(e.comissao) || 0 : null,
+            cliente_id: e.cli !== NOVA ? e.cli : null, criar_cliente: e.cli === NOVA,
+          };
+        }),
+      });
+      setResultado(data);
+      if (data.importadas) toast.success(`${data.importadas} nota(s) importada(s) — pedidos, comissões e Contas a Receber criados.`);
+      if (data.falhas) toast.warning(`${data.falhas} nota(s) não foram importadas. Veja os motivos.`);
+      carregarHistorico();
+      // tira da prévia o que foi importado
+      const ok = new Set(data.resultados.filter(r => r.ok).map(r => r.id_temp));
+      setAnalise(a => a && { ...a, notas: a.notas.filter(n => !ok.has(n.id_temp)) });
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Erro ao importar.");
+    } finally { setBusy(null); }
   };
 
-  // ✅ NOVO: abre modal já preenchido com destinatário do XML
-  const abrirCadastroCliente = () => {
-    const dest = parsed?.destinatario || {};
-    setNewCli({
-      razao_social: dest.nome || "",
-      nome_fantasia: dest.nome || "",
-      cnpj_cpf: dest.cnpj || "",
-      cidade: "", estado: "", email: "", telefone: "",
+  const setEsc = (id, patch) => setEscolhas(s => ({ ...s, [id]: { ...s[id], ...patch } }));
+  const marcarTodas = (v) => setEscolhas(s => {
+    const n = { ...s };
+    for (const nota of notas) if (nota.status !== "duplicada") n[nota.id_temp] = { ...n[nota.id_temp], incluir: v };
+    return n;
+  });
+  const aplicarRepATodas = (repId) => {
+    if (!repId) return;
+    setEscolhas(s => {
+      const n = { ...s };
+      for (const nota of notas) if (!nota.representada_id || n[nota.id_temp]?.rep === "") n[nota.id_temp] = { ...n[nota.id_temp], rep: repId };
+      return n;
     });
-    setCliOpen(true);
-    if ((dest.cnpj || "").replace(/\D/g, "").length === 14) {
-      buscarCNPJ(dest.cnpj);
-    }
   };
 
-  const saveNewCli = async () => {
-    if (!newCli.razao_social) return toast.error("Razão Social é obrigatória");
-    try {
-      const res = await api.post("/clientes", { ...newCli, status: "ativo" });
-      toast.success("Cliente cadastrado! Continuando importação...");
-      setCliOpen(false);
-      // ✅ Reimporta já com o cliente recém-criado vinculado
-      await importar({ cliId: res.data.id });
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Erro ao cadastrar cliente");
-    }
-  };
+  const pl = analise?.planilha;
+  const nomeRep = (id) => analise?.representadas.find(r => r.id === id)?.nome;
+  const nomeCli = (id) => analise?.clientes.find(c => c.id === id)?.nome;
 
   return (
-    <div>
+    <div className="pb-10">
       <PageHeader
-        title="Importação XML NF-e"
-        subtitle="Envie o XML da nota — o sistema cria o pedido automaticamente"
+        title="Importar notas"
+        subtitle="XML da NF-e (vários de uma vez) ou planilha CSV/Excel — o sistema cria pedido, comissão e Contas a Receber"
       />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* ============ COLUNA ESQUERDA: UPLOAD + HISTÓRICO ============ */}
-        <div className="p-5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-          <label className="block mb-3">
-            <div className="text-sm font-semibold mb-2">1. Enviar arquivo XML da NF-e</div>
-            <input
-              data-testid="inp-xml-file"
-              type="file"
-              accept=".xml,text/xml,application/xml"
-              onChange={onFile}
-              className="text-sm block w-full border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 bg-slate-50 dark:bg-slate-900"
-            />
-            {filename && <div className="text-xs text-slate-500 mt-2">📎 {filename}</div>}
-          </label>
-          <div className="text-sm font-semibold mb-2 mt-4">Ou cole o conteúdo:</div>
-          <Textarea
-            data-testid="inp-xml-content"
-            rows={6}
-            value={xml}
-            onChange={(e) => setXml(e.target.value)}
-            placeholder="<nfeProc>..."
-            className="font-mono text-xs"
-          />
-          <Button
-            data-testid="btn-import-xml"
-            onClick={() => importar()}
-            disabled={busy || !xml.trim()}
-            className="mt-3 bg-[#0A1A3B] hover:bg-[#1E3A8A] text-white"
-          >
-            {busy ? (
-              <><Loader2 className="w-4 h-4 mr-1 animate-spin" />Processando...</>
-            ) : (
-              <><FileUp className="w-4 h-4 mr-1" />Processar XML e criar pedido</>
-            )}
+
+      {/* ===== 1. Envio ===== */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setArrastando(true); }}
+        onDragLeave={() => setArrastando(false)}
+        onDrop={(e) => { e.preventDefault(); setArrastando(false); adicionarArquivos(e.dataTransfer.files); }}
+        className={`rounded-2xl border-2 border-dashed p-6 sm:p-8 text-center transition-colors ${arrastando ? "border-[#075BFF] bg-[#075BFF]/5" : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"}`}
+      >
+        <FileUp className="w-10 h-10 mx-auto text-[#075BFF] mb-3" />
+        <p className="font-semibold text-slate-900 dark:text-white">Arraste os arquivos aqui ou</p>
+        <div className="mt-3 flex flex-wrap justify-center gap-2">
+          <Button onClick={() => inputRef.current?.click()} disabled={!!busy} className="bg-[#075BFF] hover:bg-blue-600">
+            Escolher arquivos
           </Button>
-
-          <div className="mt-5 pt-5 border-t border-slate-100 dark:border-slate-800">
-            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
-              Histórico ({historico.length})
-            </div>
-            <div className="space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
-              {historico.slice(0, 10).map((h) => (
-                <div
-                  key={h.id}
-                  className="flex items-center justify-between text-xs p-2 rounded hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-100 dark:border-slate-800 last:border-0"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span className="truncate">
-                      NF {h.numero || "?"} · {h.emitente?.nome || "—"}
-                    </span>
-                  </div>
-                  <div className="font-mono text-slate-500 shrink-0">{fmtBRL(h.valor_total)}</div>
-                </div>
-              ))}
-              {historico.length === 0 && (
-                <div className="text-xs text-slate-400">Nenhum XML importado ainda.</div>
-              )}
-            </div>
+          <Button variant="outline" onClick={() => setMostrarColar(v => !v)} disabled={!!busy}>Colar XML</Button>
+          <Button variant="outline" onClick={baixarModelo}><Download className="w-4 h-4 mr-1" /> Modelo de planilha</Button>
+        </div>
+        <input ref={inputRef} type="file" multiple className="hidden"
+               accept=".xml,.csv,.txt,.xlsx,.xls,.xlsm,.ods,text/xml,application/xml"
+               onChange={(e) => { adicionarArquivos(e.target.files); e.target.value = ""; }} />
+        <p className="text-xs text-slate-500 mt-3">
+          Aceita <b>XML de NF-e</b> (pode selecionar vários), <b>CSV</b> e <b>Excel</b>. Planilha em outro formato? A IA identifica as colunas.
+        </p>
+        {mostrarColar && (
+          <div className="mt-4 text-left max-w-2xl mx-auto">
+            <Textarea rows={5} value={colar} onChange={(e) => setColar(e.target.value)} placeholder="<nfeProc>…" className="font-mono text-xs" />
+            <Button size="sm" className="mt-2" onClick={adicionarColado} disabled={!colar.trim()}>Adicionar</Button>
           </div>
-        </div>
-
-        {/* ============ COLUNA DIREITA: RESULTADO ============ */}
-        <div className="p-5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-          <div className="text-sm font-semibold mb-3">2. Dados extraídos</div>
-          {!parsed ? (
-            <div className="text-sm text-slate-500">Aguardando importação...</div>
-          ) : (
-            <div className="space-y-3 text-sm">
-              {parsed.pedido_criado && (
-                <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200 flex items-start gap-2">
-                  <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-semibold">Pedido {parsed.pedido_criado.numero} criado!</div>
-                    <div className="text-xs mt-0.5">
-                      Faturado · {fmtBRL(parsed.pedido_criado.total)} · Comissão{" "}
-                      {fmtBRL(parsed.pedido_criado.comissao_valor)}
-                    </div>
-                    <Link to="/pedidos" className="text-xs underline mt-1 inline-block">
-                      Ver pedidos →
-                    </Link>
-                  </div>
-                </div>
-              )}
-
-              {needsAssociation && (
-                <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-amber-900 dark:text-amber-200">
-                  <div className="flex items-start gap-2 mb-3">
-                    <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-semibold">Associação manual necessária</div>
-                      <div className="text-xs mt-0.5">
-                        {!parsed.representada_match && (
-                          <>
-                            CNPJ emitente <span className="font-mono">{parsed.emitente?.cnpj}</span>{" "}
-                            não encontrado nas representadas.<br />
-                          </>
-                        )}
-                        {!parsed.cliente_match && (
-                          <>
-                            CNPJ destinatário{" "}
-                            <span className="font-mono">{parsed.destinatario?.cnpj}</span> não
-                            encontrado nos clientes.
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {!parsed.representada_match && (
-                      <div>
-                        <Label className="text-xs">Representada</Label>
-                        <Select value={repId} onValueChange={setRepId}>
-                          <SelectTrigger data-testid="xml-rep-select" className="h-8 text-xs">
-                            <SelectValue placeholder="Selecione..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {parsed.representada_sugestoes.map((r) => (
-                              <SelectItem key={r.id} value={r.id}>{r.nome}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-                    {!parsed.cliente_match && (
-                      <div>
-                        <Label className="text-xs">Cliente</Label>
-                        <Select value={cliId} onValueChange={setCliId}>
-                          <SelectTrigger data-testid="xml-cli-select" className="h-8 text-xs">
-                            <SelectValue placeholder="Selecione..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {parsed.cliente_sugestoes.map((c) => (
-                              <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* ✅ NOVO: cadastrar cliente na hora, sem sair da tela */}
-                  {!parsed.cliente_match && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={abrirCadastroCliente}
-                      className="mt-2 w-full border-amber-400 text-amber-900 hover:bg-amber-100 dark:hover:bg-amber-500/20"
-                    >
-                      <UserPlus className="w-3.5 h-3.5 mr-1" />
-                      Cadastrar cliente agora (sem sair da tela)
-                    </Button>
-                  )}
-
-                  <Button
-                    data-testid="btn-associate-xml"
-                    size="sm"
-                    disabled={
-                      busy ||
-                      (!parsed.representada_match && !repId) ||
-                      (!parsed.cliente_match && !cliId)
-                    }
-                    onClick={() => importar({})}
-                    className="mt-3 bg-[#0A1A3B] hover:bg-[#1E3A8A] text-white w-full"
-                  >
-                    Criar pedido com associação
-                  </Button>
-                </div>
-              )}
-
-              <div>
-                <div className="text-xs text-slate-500">Emitente (Representada)</div>
-                <div className="font-semibold flex items-center gap-2">
-                  {parsed.emitente?.nome || "-"}
-                  {parsed.representada_match && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                </div>
-                <div className="font-mono text-xs">{parsed.emitente?.cnpj}</div>
-                {parsed.representada_match && (
-                  <div className="text-xs text-emerald-600 mt-1">
-                    → {parsed.representada_match.nome_fantasia || parsed.representada_match.razao_social}
-                  </div>
-                )}
-              </div>
-              <div>
-                <div className="text-xs text-slate-500">Destinatário (Cliente)</div>
-                <div className="font-semibold flex items-center gap-2">
-                  {parsed.destinatario?.nome || "-"}
-                  {parsed.cliente_match && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                </div>
-                <div className="font-mono text-xs">{parsed.destinatario?.cnpj}</div>
-                {parsed.cliente_match && (
-                  <div className="text-xs text-emerald-600 mt-1">
-                    → {parsed.cliente_match.nome_fantasia || parsed.cliente_match.razao_social}
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <div className="text-xs text-slate-500">NF nº</div>
-                  <div className="font-mono">{parsed.numero || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500">Série</div>
-                  <div className="font-mono">{parsed.serie || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500">Valor total</div>
-                  <div className="font-mono font-bold text-[#0A1A3B] dark:text-blue-400">
-                    {fmtBRL(parsed.valor_total)}
-                  </div>
-                </div>
-              </div>
-
-              {/* ✅ NOVO: parcelas do boleto extraídas do XML */}
-              {parsed.parcelas?.length > 0 && (
-                <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-xs font-semibold text-blue-900 dark:text-blue-200 flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5" />
-                      Parcelas do boleto ({parsed.parcelas.length})
-                    </div>
-                    <div className="text-xs font-mono text-blue-900 dark:text-blue-200 flex items-center gap-1">
-                      <DollarSign className="w-3 h-3" />
-                      {fmtBRL(parsed.parcelas.reduce((a, p) => a + (p.valor || 0), 0))}
-                    </div>
-                  </div>
-                  <div className="space-y-1 max-h-40 overflow-y-auto">
-                    {parsed.parcelas.map((p, i) => (
-                      <div
-                        key={i}
-                        className="flex justify-between text-xs bg-white dark:bg-slate-800 rounded px-2 py-1"
-                      >
-                        <span className="font-mono text-slate-600 dark:text-slate-300">
-                          {i + 1}ª · {fmtDate(p.vencimento)}
-                        </span>
-                        <span className="font-mono font-semibold text-slate-900 dark:text-white">
-                          {fmtBRL(p.valor)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <div className="text-xs text-slate-500 mb-1">
-                  Itens ({parsed.itens?.length || 0})
-                </div>
-                <div className="space-y-1 max-h-56 overflow-y-auto scrollbar-thin">
-                  {parsed.itens?.map((i, k) => (
-                    <div
-                      key={k}
-                      className="text-xs flex justify-between border-b border-slate-100 dark:border-slate-800 py-1"
-                    >
-                      <span className="truncate max-w-[60%]">{i.nome}</span>
-                      <span className="font-mono whitespace-nowrap">
-                        {i.quantidade}× {fmtBRL(i.preco)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
-      {/* ✅ MODAL: cadastro rápido de cliente */}
-      <Dialog open={cliOpen} onOpenChange={setCliOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Cadastro rápido de cliente (a partir do XML)</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5 relative">
-              <Label>CNPJ</Label>
-              <Input
-                className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                value={newCli.cnpj_cpf}
-                onChange={(e) => setNewCli({ ...newCli, cnpj_cpf: e.target.value })}
-                onBlur={(e) => buscarCNPJ(e.target.value)}
-              />
-              {loadingCnpj && (
-                <Loader2 className="absolute right-3 top-8 w-4 h-4 animate-spin text-blue-500" />
-              )}
+      {(xmls.length > 0 || planilha) && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          {xmls.map(x => (
+            <span key={x.nome} className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-1">
+              <FileText className="w-3 h-3" /> {TRUNC(x.nome, 28)}
+              <button className="ml-0.5 text-slate-400 hover:text-rose-500" onClick={() => {
+                const xs = xmls.filter(y => y.nome !== x.nome); setXmls(xs); analisar({ xs, pl: planilha, mapeamento: mapa });
+              }}><X className="w-3 h-3" /></button>
+            </span>
+          ))}
+          {planilha && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 px-2.5 py-1">
+              <FileSpreadsheet className="w-3 h-3" /> {TRUNC(planilha.nome, 28)}
+              <button className="ml-0.5 hover:text-rose-500" onClick={() => { setPlanilha(null); setMapa(null); analisar({ xs: xmls, pl: null }); }}><X className="w-3 h-3" /></button>
+            </span>
+          )}
+          <button className="text-slate-500 hover:text-rose-500 underline ml-1" onClick={limpar}>limpar tudo</button>
+          {busy === "analisar" && <span className="inline-flex items-center gap-1 text-slate-500"><Loader2 className="w-3 h-3 animate-spin" /> analisando…</span>}
+        </div>
+      )}
+
+      {/* ===== 2. Colunas da planilha ===== */}
+      {pl && (
+        <div className="mt-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div>
+              <p className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Colunas da planilha
+                <span className={`text-[10px] font-semibold uppercase rounded-full px-2 py-0.5 ${pl.origem_mapeamento === "ia" ? "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>
+                  {pl.origem_mapeamento === "ia" ? "mapeado pela IA" : pl.origem_mapeamento === "usuario" ? "ajustado por você" : "automático"}
+                </span>
+              </p>
+              <p className="text-xs text-slate-500">{pl.total_linhas} linha(s) · cabeçalho na linha {pl.linha_cabecalho + 1}. Ajuste se alguma coluna estiver errada.</p>
             </div>
-            <div className="space-y-1.5">
-              <Label>Razão Social *</Label>
-              <Input
-                className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                value={newCli.razao_social}
-                onChange={(e) => setNewCli({ ...newCli, razao_social: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Nome Fantasia</Label>
-              <Input
-                className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                value={newCli.nome_fantasia}
-                onChange={(e) => setNewCli({ ...newCli, nome_fantasia: e.target.value })}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Cidade</Label>
-                <Input
-                  className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                  value={newCli.cidade}
-                  onChange={(e) => setNewCli({ ...newCli, cidade: e.target.value })}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>UF</Label>
-                <Input
-                  className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                  value={newCli.estado}
-                  onChange={(e) => setNewCli({ ...newCli, estado: e.target.value })}
-                  maxLength={2}
-                />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>E-mail</Label>
-              <Input
-                type="email"
-                className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                value={newCli.email}
-                onChange={(e) => setNewCli({ ...newCli, email: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Telefone / WhatsApp</Label>
-              <Input
-                className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                value={newCli.telefone}
-                onChange={(e) => setNewCli({ ...newCli, telefone: e.target.value })}
-              />
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" disabled={!!busy} onClick={() => analisar({ mapeamento: null, usarIa: true })}>
+                {busy === "ia" ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1 text-violet-500" />} Mapear com IA
+              </Button>
+              <Button size="sm" disabled={!!busy} onClick={() => analisar({ mapeamento: mapa })} className="bg-[#075BFF] hover:bg-blue-600">
+                <RefreshCw className="w-3.5 h-3.5 mr-1" /> Aplicar colunas
+              </Button>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCliOpen(false)}>Cancelar</Button>
-            <Button onClick={saveNewCli} className="bg-[#075BFF]">
-              Salvar e continuar importação
+          {pl.faltando?.length > 0 && (
+            <div className="mb-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 p-3 text-xs text-amber-800 dark:text-amber-200">
+              <b>Faltam colunas para montar as notas:</b> {pl.faltando.join(", ")}. Escolha abaixo ou clique em “Mapear com IA”.
+              {pl.erro_ia && <div className="mt-1 opacity-80">IA: {pl.erro_ia}</div>}
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2">
+            {pl.campos.map(c => (
+              <label key={c.id} className="text-xs">
+                <span className="text-slate-500">{c.rotulo}</span>
+                <select className={selCls} value={mapa?.[c.id] ?? ""}
+                        onChange={(e) => setMapa(m => ({ ...m, [c.id]: e.target.value === "" ? null : Number(e.target.value) }))}>
+                  <option value="">— não usar —</option>
+                  {pl.colunas.map((col, i) => <option key={i} value={i}>{col || `(coluna ${i + 1})`}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ===== arquivos recusados e avisos ===== */}
+      {analise?.erros?.length > 0 && (
+        <div className="mt-4 rounded-xl border border-rose-200 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/10 p-4 text-sm">
+          <p className="font-semibold text-rose-700 dark:text-rose-300 flex items-center gap-2"><Ban className="w-4 h-4" /> {analise.erros.length} arquivo(s) não importável(is)</p>
+          <ul className="mt-1 text-xs text-rose-700 dark:text-rose-300 list-disc pl-5 space-y-0.5">
+            {analise.erros.map((e, i) => <li key={i}><b>{e.arquivo}</b>: {e.motivo}</li>)}
+          </ul>
+        </div>
+      )}
+      {analise?.avisos?.length > 0 && (
+        <div className="mt-3 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-4 text-xs text-amber-800 dark:text-amber-200">
+          <ul className="list-disc pl-5 space-y-0.5">{analise.avisos.slice(0, 12).map((a, i) => <li key={i}>{a}</li>)}</ul>
+          {analise.avisos.length > 12 && <p className="mt-1">… e mais {analise.avisos.length - 12}.</p>}
+        </div>
+      )}
+
+      {/* ===== 3. Prévia das notas ===== */}
+      {notas.length > 0 && (
+        <div className="mt-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-100 dark:border-slate-800">
+            <div>
+              <p className="font-bold text-slate-900 dark:text-white">Confira as notas ({notas.length})</p>
+              <p className="text-xs text-slate-500">
+                {notas.filter(n => n.status === "pronta").length} prontas · {notas.filter(n => n.status === "pendente").length} com cadastro novo · {notas.filter(n => n.status === "duplicada").length} já importadas
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {notas.some(n => !n.representada_id) && analise.representadas.length > 1 && (
+                <select className={`${selCls} w-56`} defaultValue="" onChange={(e) => { aplicarRepATodas(e.target.value); e.target.value = ""; }}>
+                  <option value="">Representada p/ todas sem vínculo…</option>
+                  {analise.representadas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                </select>
+              )}
+              <Button size="sm" variant="outline" onClick={() => marcarTodas(true)}>Marcar todas</Button>
+              <Button size="sm" variant="outline" onClick={() => marcarTodas(false)}>Desmarcar</Button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs text-slate-500">
+                <tr>
+                  <th className="w-8 px-3 py-2"></th>
+                  <th className="text-left px-3 py-2">NF</th>
+                  <th className="text-left px-3 py-2 min-w-[200px]">Representada (emitente)</th>
+                  <th className="text-left px-3 py-2 min-w-[200px]">Cliente (destinatário)</th>
+                  <th className="text-right px-3 py-2">Valor</th>
+                  <th className="text-center px-3 py-2">Parcelas</th>
+                  <th className="text-center px-3 py-2">Situação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {notas.map(n => {
+                  const e = escolhas[n.id_temp] || {};
+                  const dup = n.status === "duplicada";
+                  const aberto = aberta === n.id_temp;
+                  return (
+                    <React.Fragment key={n.id_temp}>
+                      <tr className={`border-t border-slate-100 dark:border-slate-800 align-top ${dup ? "opacity-60" : ""}`}>
+                        <td className="px-3 py-3">
+                          <input type="checkbox" className="w-4 h-4 accent-[#075BFF]" disabled={dup}
+                                 checked={!!e.incluir} onChange={(ev) => setEsc(n.id_temp, { incluir: ev.target.checked })} />
+                        </td>
+                        <td className="px-3 py-3">
+                          <button className="flex items-center gap-1 font-mono font-bold text-slate-900 dark:text-white hover:text-[#075BFF]"
+                                  onClick={() => setAberta(aberto ? null : n.id_temp)}>
+                            {aberto ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                            {n.numero}{n.serie ? `-${n.serie}` : ""}
+                          </button>
+                          <div className="text-[11px] text-slate-500">{n.data_emissao ? fmtDate(n.data_emissao) : "sem data"}</div>
+                          <div className="text-[10px] text-slate-400 truncate max-w-[140px]" title={n.arquivo}>{n.arquivo}</div>
+                          {n.origem === "ia" && <span className="inline-flex items-center gap-0.5 text-[10px] text-violet-600"><Sparkles className="w-3 h-3" /> lido pela IA</span>}
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="text-xs font-medium text-slate-800 dark:text-slate-200" title={n.emitente?.nome}>{TRUNC(n.emitente?.fantasia || n.emitente?.nome)}</div>
+                          <div className="text-[10px] font-mono text-slate-400 mb-1">{fmtCnpj(n.emitente?.cnpj)}</div>
+                          {!dup && (
+                            <>
+                              <select className={`${selCls} ${!e.rep ? "border-rose-400" : ""}`} value={e.rep ?? ""} onChange={(ev) => setEsc(n.id_temp, { rep: ev.target.value })}>
+                                {!e.rep && <option value="">Escolha a representada…</option>}
+                                {temDados(n.emitente) && <option value={NOVA}>+ Cadastrar como nova representada</option>}
+                                {analise.representadas.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                              </select>
+                              {e.rep === NOVA ? (
+                                <label className="mt-1 flex items-center gap-1 text-[11px] text-slate-500">
+                                  Comissão
+                                  <input type="number" min="0" max="100" step="0.1" value={e.comissao}
+                                         onChange={(ev) => setEsc(n.id_temp, { comissao: ev.target.value })}
+                                         className="w-16 h-6 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-1 text-xs" />%
+                                </label>
+                              ) : n.representada_por === "nome" && e.rep === n.representada_id ? (
+                                <div className="text-[10px] text-amber-600 mt-0.5">vinculada pelo nome — confira</div>
+                              ) : null}
+                            </>
+                          )}
+                          {dup && n.duplicada_pedido && <div className="text-[11px] text-slate-500">Pedido {n.duplicada_pedido}</div>}
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="text-xs font-medium text-slate-800 dark:text-slate-200" title={n.destinatario?.nome}>{TRUNC(n.destinatario?.nome)}</div>
+                          <div className="text-[10px] font-mono text-slate-400 mb-1">
+                            {fmtCnpj(n.destinatario?.cnpj)}{n.destinatario?.cidade ? ` · ${n.destinatario.cidade}/${n.destinatario.uf || ""}` : ""}
+                          </div>
+                          {!dup && (
+                            n.cliente_id && e.cli === n.cliente_id && !e.trocarCli ? (
+                              <div className="text-[11px] text-emerald-600 flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> {TRUNC(nomeCli(n.cliente_id), 26)}
+                                <button className="text-slate-400 underline ml-1" onClick={() => setEsc(n.id_temp, { trocarCli: true })}>trocar</button>
+                                {n.cliente_por === "nome" && <span className="text-amber-600 ml-1">(pelo nome)</span>}
+                              </div>
+                            ) : (
+                              <select className={`${selCls} ${!e.cli ? "border-rose-400" : ""}`} value={e.cli ?? ""} onChange={(ev) => setEsc(n.id_temp, { cli: ev.target.value })}>
+                                {!e.cli && <option value="">Escolha o cliente…</option>}
+                                {temDados(n.destinatario) && <option value={NOVA}>+ Cadastrar este cliente</option>}
+                                {analise.clientes.map(c => <option key={c.id} value={c.id}>{c.nome}{c.cnpj ? ` · ${fmtCnpj(c.cnpj)}` : ""}</option>)}
+                              </select>
+                            )
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-right font-mono font-semibold whitespace-nowrap">
+                          {fmtBRL(n.valor_total)}
+                          {n.valor_produtos && Math.abs(n.valor_produtos - n.valor_total) > 0.01 && (
+                            <div className="text-[10px] text-slate-400 font-normal">produtos {fmtBRL(n.valor_produtos)}</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center text-xs text-slate-600 dark:text-slate-300">{n.parcelas?.length || "1 (30 dias)"}</td>
+                        <td className="px-3 py-3 text-center">
+                          <span className={`text-[11px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${STATUS[n.status]?.cls}`}>
+                            {n.repetida_no_envio ? "Repetida" : STATUS[n.status]?.rotulo}
+                          </span>
+                        </td>
+                      </tr>
+                      {aberto && (
+                        <tr className="bg-slate-50/70 dark:bg-slate-800/30">
+                          <td></td>
+                          <td colSpan={6} className="px-3 py-3">
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-xs">
+                              <div className="lg:col-span-2">
+                                <p className="font-semibold mb-1">Itens ({n.itens?.length || 0})</p>
+                                <div className="max-h-48 overflow-y-auto space-y-0.5">
+                                  {(n.itens || []).map((i, k) => (
+                                    <div key={k} className="flex justify-between gap-3 border-b border-slate-100 dark:border-slate-800 py-0.5">
+                                      <span className="truncate">{i.codigo ? <span className="font-mono text-slate-400 mr-1">{i.codigo}</span> : null}{i.nome}</span>
+                                      <span className="font-mono whitespace-nowrap">{i.quantidade}× {fmtBRL(i.preco)} = {fmtBRL(i.total)}</span>
+                                    </div>
+                                  ))}
+                                  {!n.itens?.length && <p className="text-slate-400">Sem itens (só o valor da nota).</p>}
+                                </div>
+                              </div>
+                              <div>
+                                <p className="font-semibold mb-1">Parcelas (duplicatas)</p>
+                                {(n.parcelas || []).map((p, k) => (
+                                  <div key={k} className="flex justify-between py-0.5"><span>{k + 1}ª · {fmtDate(p.vencimento)}</span><span className="font-mono">{fmtBRL(p.valor ?? p.valor_base)}</span></div>
+                                ))}
+                                {!n.parcelas?.length && <p className="text-slate-400">Sem duplicatas: a comissão vence em 30 dias.</p>}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/20">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              <b>{selecionadas.length}</b> nota(s) · {fmtBRL(totalSel)}
+              {novasReps > 0 && <span className="text-amber-600"> · {novasReps} representada(s) nova(s)</span>}
+            </p>
+            <Button onClick={importar} disabled={!!busy || !selecionadas.length} className="bg-[#075BFF] hover:bg-blue-600">
+              {busy === "importar" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-1" />}
+              Importar {selecionadas.length} nota(s)
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </div>
+      )}
+
+      {analise && !notas.length && !resultado && !busy && (analise.erros.length > 0 || pl) && (
+        <p className="mt-4 text-sm text-slate-500">Nenhuma nota para importar{pl?.faltando?.length ? " — ajuste as colunas da planilha acima." : "."}</p>
+      )}
+
+      {/* ===== 4. Resultado ===== */}
+      {resultado && (
+        <div className={`mt-6 rounded-2xl border p-5 ${resultado.falhas ? "border-amber-200 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30" : "border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30"}`}>
+          <p className="font-bold flex items-center gap-2 text-slate-900 dark:text-white">
+            {resultado.falhas ? <AlertTriangle className="w-5 h-5 text-amber-500" /> : <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+            {resultado.importadas} importada(s){resultado.falhas ? ` · ${resultado.falhas} não importada(s)` : ""}
+          </p>
+          <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+            {resultado.representadas_criadas ? `${resultado.representadas_criadas} representada(s) e ` : ""}
+            {resultado.clientes_criados ? `${resultado.clientes_criados} cliente(s) cadastrado(s). ` : ""}
+            Cada nota virou um pedido faturado, com comissão e parcelas em Contas a Receber.
+          </p>
+          <ul className="mt-2 text-xs space-y-0.5">
+            {resultado.resultados.map((r, i) => (
+              <li key={i} className={r.ok ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"}>
+                NF {r.numero}: {r.ok ? `pedido ${r.pedido} · ${fmtBRL(r.total)} · comissão ${fmtBRL(r.comissao)}` : r.erro}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 flex gap-3 text-xs">
+            <Link to="/pedidos" className="underline font-semibold">Ver pedidos →</Link>
+            <Link to="/comissoes" className="underline font-semibold">Ver comissões →</Link>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Histórico ===== */}
+      <div className="mt-8 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Últimas importações ({historico.length})</p>
+        <div className="space-y-1 max-h-64 overflow-y-auto">
+          {historico.slice(0, 30).map(h => (
+            <div key={h.id} className="flex items-center justify-between gap-3 text-xs py-1.5 border-b border-slate-100 dark:border-slate-800 last:border-0">
+              <div className="flex items-center gap-2 min-w-0">
+                {h.origem === "planilha" ? <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> : <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+                <span className="truncate">NF {h.numero || "?"} · {h.emitente?.fantasia || h.emitente?.nome || "—"} → {h.destinatario?.nome || "—"}</span>
+                {!h.pedido_id && <span className="text-amber-600 shrink-0">(sem pedido)</span>}
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <span className="text-slate-400">{h.created_at ? fmtDate(h.created_at) : ""}</span>
+                <span className="font-mono text-slate-600 dark:text-slate-300">{fmtBRL(h.valor_total)}</span>
+              </div>
+            </div>
+          ))}
+          {!historico.length && <p className="text-xs text-slate-400">Nenhuma nota importada ainda.</p>}
+        </div>
+      </div>
+      <p className="mt-3 text-[11px] text-slate-400 flex items-center gap-1">
+        <Copy className="w-3 h-3" /> Notas já importadas (mesmo número e representada) são detectadas e não geram pedido duplicado.
+      </p>
     </div>
   );
 }

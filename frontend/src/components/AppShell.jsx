@@ -38,7 +38,7 @@ const MENU_SECTIONS = [
     title: "Catálogo & Vendas",
     items: [
       { label: "Pedidos", icon: ShoppingCart, path: "/pedidos" },
-      { label: "Importar XML", icon: UploadCloud, path: "/xml" },
+      { label: "Importar notas (XML/planilha)", icon: UploadCloud, path: "/xml" },
       { label: "Aguardando Faturamento", icon: Clock, path: "/pedidos/aguardando-faturamento" },
     ]
   },
