@@ -29,7 +29,7 @@ export default function ContasReceber() {
 
   const handleOpen = (ar) => {
     setSelectedAR(ar);
-    setValorReceber(ar.saldo_pendente || ar.valor);
+    setValorReceber(ar.saldo_pendente ?? ar.valor);
     setDataRecebimento(new Date().toISOString().split('T')[0]);
     setOpen(true);
   };
@@ -37,21 +37,40 @@ export default function ContasReceber() {
   const confirmar = async () => {
     try {
       await api.post(`/contas-receber/${selectedAR.id}/receber`, {
-        valor: parseFloat(valorReceber), data: new Date(dataRecebimento).toISOString()
+        valor: parseFloat(valorReceber), data: dataRecebimento
       });
-      toast.success("Comissão recebida!"); setOpen(false); load();
-    } catch { toast.error("Erro ao registrar"); }
+      toast.success("Recebimento registrado!"); setOpen(false); load();
+    } catch (e) { toast.error(e.response?.data?.detail || "Erro ao registrar"); }
   };
 
-  const totalPendente = list.filter(a => a.status !== "recebido").reduce((acc, a) => acc + (a.saldo_pendente || a.valor), 0);
+  // ✅ Mesma conta da tela Comissões ("Saldo a Receber"): parcelas de comissão ainda não pagas.
+  //    Antes: `saldo_pendente || valor` somava o valor CHEIO quando o saldo era 0 (ex.: canceladas),
+  //    e lançamentos avulsos (sem comissão) entravam como se fossem comissão.
+  const n = (v) => Number(v) || 0;
+  const pendentes = list.filter(a => a.status !== "recebido" && a.status !== "cancelado");
+  const deComissao = pendentes.filter(a => a.comissao_id && !a.comissao_orfa);
+  const totalPendente = deComissao.reduce((acc, a) => acc + n(a.saldo_pendente), 0);
+  const totalAguardando = deComissao.filter(a => a.status === "aguardando_liquidez").reduce((acc, a) => acc + n(a.saldo_pendente), 0);
+  const outros = pendentes.filter(a => !a.comissao_id || a.comissao_orfa);
+  const totalOutros = outros.reduce((acc, a) => acc + n(a.saldo_pendente), 0);
 
   return (
     <div className="pb-10">
-      <PageHeader title="Contas a Receber (Comissões)" subtitle="Gestão de parcelas e liquidez" />
+      <PageHeader title="Contas a Receber" subtitle="Parcelas de comissão e outros recebimentos" />
       
-      <div className="mb-6 p-5 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-lg inline-block min-w-[300px]">
-        <div className="text-sm font-semibold uppercase opacity-90">Comissões Pendentes</div>
-        <div className="text-3xl font-bold mt-1">{fmtBRL(totalPendente)}</div>
+      <div className="mb-6 flex flex-wrap gap-4">
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-lg min-w-[300px]">
+          <div className="text-sm font-semibold uppercase opacity-90">Comissões Pendentes</div>
+          <div className="text-3xl font-bold mt-1">{fmtBRL(totalPendente)}</div>
+          {totalAguardando > 0 && <div className="text-xs opacity-90 mt-1">inclui {fmtBRL(totalAguardando)} aguardando liquidez</div>}
+        </div>
+        {outros.length > 0 && (
+          <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm min-w-[260px]">
+            <div className="text-sm font-semibold uppercase text-slate-500">Outros a receber</div>
+            <div className="text-3xl font-bold mt-1 text-slate-900 dark:text-white">{fmtBRL(totalOutros)}</div>
+            <div className="text-xs text-slate-500 mt-1">{outros.length} lançamento(s) sem comissão vinculada</div>
+          </div>
+        )}
       </div>
 
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
@@ -80,10 +99,14 @@ export default function ContasReceber() {
                 <td className="px-5 py-3 text-slate-600 dark:text-slate-400">{fmtDate(ar.vencimento)}</td>
                 <td className="px-5 py-3 text-right font-mono text-slate-600 dark:text-slate-400">{fmtBRL(ar.valor)}</td>
                 <td className="px-5 py-3 text-right font-mono text-emerald-600 dark:text-emerald-400">{fmtBRL(ar.valor_recebido || 0)}</td>
-                <td className="px-5 py-3 text-right font-mono font-bold text-amber-600 dark:text-amber-500">{fmtBRL(ar.saldo_pendente || ar.valor)}</td>
+                <td className="px-5 py-3 text-right font-mono font-bold text-amber-600 dark:text-amber-500">{fmtBRL(ar.saldo_pendente ?? ar.valor)}</td>
                 <td className="px-5 py-3 text-center"><StatusBadge status={ar.status} /></td>
                 <td className="px-5 py-3 text-right">
-                  {ar.status !== "recebido" ? (
+                  {ar.status === "cancelado" ? (
+                    <span className="text-xs text-slate-400">Cancelado</span>
+                  ) : ar.status === "aguardando_liquidez" ? (
+                    <span className="text-xs text-amber-600" title="Libere a comissão em Comissões quando a fábrica receber do cliente">Aguardando liquidez</span>
+                  ) : ar.status !== "recebido" ? (
                     <Button size="sm" onClick={() => handleOpen(ar)} className="bg-[#075BFF] h-8">
                       <DollarSign className="w-3.5 h-3.5 mr-1" /> Baixar
                     </Button>

@@ -8,6 +8,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/
 import { Percent, TrendingUp, DollarSign, Clock, Building2, ListChecks, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 
+// "2026-12-01" é data local (sem isso o navegador mostra 30/11 por causa do fuso)
+const fmtData = (v) => {
+  if (!v) return "—";
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : new Date(v).toLocaleDateString("pt-BR");
+};
+
 export default function Comissoes() {
   const [list, setList] = useState([]);
   const [reps, setReps] = useState([]);
@@ -36,18 +43,23 @@ export default function Comissoes() {
   useEffect(() => { load(); }, [load]);
 
   // --- Cálculos do Resumo Global ---
-  const comissoesPrevistas = list.reduce((acc, c) => acc + (c.valor_liquido || 0), 0);
-  const totalAReceber = list.reduce((acc, c) => acc + (c.saldo_pendente || 0), 0);
-  const recebido = list.reduce((acc, c) => acc + (c.valor_recebido || 0), 0);
+  // ✅ O servidor já devolve saldo e recebido calculados pelas parcelas em Contas a Receber,
+  //    então "Saldo a Receber" aqui = "Comissões pendentes" lá. Canceladas não entram em nada.
+  const n = (v) => Number(v) || 0;
+  const ativas = list.filter(c => c.status !== "cancelada");
+  const comissoesPrevistas = ativas.reduce((acc, c) => acc + n(c.valor_liquido), 0);
+  const totalAReceber = ativas.reduce((acc, c) => acc + n(c.saldo_pendente), 0);
+  const aguardandoLiquidez = ativas.filter(c => c.status === "aguardando_liquidez").reduce((acc, c) => acc + n(c.saldo_pendente), 0);
+  const recebido = ativas.reduce((acc, c) => acc + n(c.valor_recebido), 0);
   const hoje = new Date();
   
   // Comissões vencidas ignoram as que estão aguardando liquidez (pois a data prevista ainda pode ser futura)
-  const vencidas = list.filter(c => c.status !== "aguardando_liquidez" && c.saldo_pendente > 0 && new Date(c.data_prevista) < hoje)
-                      .reduce((acc, c) => acc + c.saldo_pendente, 0);
+  const vencidas = ativas.filter(c => c.status !== "aguardando_liquidez" && n(c.saldo_pendente) > 0 && c.data_prevista && new Date(c.data_prevista) < hoje)
+                      .reduce((acc, c) => acc + n(c.saldo_pendente), 0);
 
   // --- Agrupamento por Representada ---
   const resumoPorFabrica = reps.map(rep => {
-    const comRep = list.filter(c => c.representada_id === rep.id);
+    const comRep = ativas.filter(c => c.representada_id === rep.id);
     if (comRep.length === 0) return null;
     
     return {
@@ -55,9 +67,9 @@ export default function Comissoes() {
       nome: rep.nome_fantasia || rep.razao_social,
       logo: rep.logo,
       qtdPedidos: comRep.length,
-      totalGerado: comRep.reduce((acc, c) => acc + (c.valor_liquido || 0), 0),
-      totalRecebido: comRep.reduce((acc, c) => acc + (c.valor_recebido || 0), 0),
-      saldoPendente: comRep.reduce((acc, c) => acc + (c.saldo_pendente || 0), 0),
+      totalGerado: comRep.reduce((acc, c) => acc + n(c.valor_liquido), 0),
+      totalRecebido: comRep.reduce((acc, c) => acc + n(c.valor_recebido), 0),
+      saldoPendente: comRep.reduce((acc, c) => acc + n(c.saldo_pendente), 0),
     };
   }).filter(Boolean);
 
@@ -97,6 +109,9 @@ export default function Comissoes() {
         <Card className="p-5 border-l-4 border-l-amber-500 shadow-sm bg-white dark:bg-slate-900">
           <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1"><Clock className="w-4 h-4" /> Saldo a Receber</div>
           <div className="text-2xl font-bold text-amber-600">{fmtBRL(totalAReceber)}</div>
+          {aguardandoLiquidez > 0 && (
+            <div className="text-[11px] text-slate-500 mt-1">inclui {fmtBRL(aguardandoLiquidez)} aguardando liquidez</div>
+          )}
         </Card>
 
         <Card className="p-5 border-l-4 border-l-emerald-500 shadow-sm bg-white dark:bg-slate-900">
@@ -175,7 +190,7 @@ export default function Comissoes() {
                   
                   <td className="px-5 py-3 text-center text-slate-500 font-medium">{c.percentual}%</td>
                   <td className="px-5 py-3 text-right font-mono font-bold text-emerald-600">{fmtBRL(c.valor_liquido)}</td>
-                  <td className="px-5 py-3 text-right font-mono font-bold text-amber-600">{fmtBRL(c.saldo_pendente)}</td>
+                  <td className="px-5 py-3 text-right font-mono font-bold text-amber-600">{fmtBRL(c.status === "cancelada" ? 0 : c.saldo_pendente)}</td>
                   <td className="px-5 py-3 text-center"><StatusBadge status={c.status} /></td>
                   <td className="px-5 py-3 text-right">
                     <Button size="sm" variant="outline" onClick={() => verParcelas(c)} className="h-8 border-[#075BFF] text-[#075BFF] hover:bg-[#075BFF]/10">
@@ -214,10 +229,23 @@ export default function Comissoes() {
               <p className="text-sm text-slate-500 text-center py-4">Carregando...</p>
             ) : selectedCom?.status === "aguardando_liquidez" ? (
               // NOVO AVISO DE LIQUIDEZ
-              <div className="flex flex-col items-center justify-center p-6 bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/30 text-center">
-                <AlertCircle className="w-8 h-8 text-amber-500 mb-2" />
-                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Aguardando Liquidez</p>
-                <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">As parcelas serão geradas no Contas a Receber assim que você confirmar que a fábrica recebeu o pagamento do cliente.</p>
+              <div className="space-y-2">
+                <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/30">
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    <b>Aguardando liquidez:</b> as parcelas já aparecem em Contas a Receber, mas só podem receber baixa depois
+                    que você confirmar que a fábrica recebeu do cliente.
+                  </p>
+                </div>
+                {parcelas.map((p, i) => (
+                  <div key={p.id} className="flex justify-between items-center p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900">
+                    <div>
+                      <p className="text-sm font-semibold">Parcela {i + 1}</p>
+                      <p className="text-xs text-slate-500">Vencimento: {fmtData(p.vencimento)}</p>
+                    </div>
+                    <p className="text-sm font-mono font-bold text-slate-700 dark:text-slate-300">{fmtBRL(p.valor)}</p>
+                  </div>
+                ))}
               </div>
             ) : parcelas.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-4">Nenhuma parcela encontrada no Contas a Receber.</p>
@@ -227,10 +255,13 @@ export default function Comissoes() {
                   <div key={p.id} className="flex justify-between items-center p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900">
                     <div>
                       <p className="text-sm font-semibold">Parcela {i + 1}</p>
-                      <p className="text-xs text-slate-500">Vencimento: {new Date(p.vencimento).toLocaleDateString('pt-BR')}</p>
+                      <p className="text-xs text-slate-500">Vencimento: {fmtData(p.vencimento)}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-mono font-bold text-slate-700 dark:text-slate-300">{fmtBRL(p.valor)}</p>
+                      {n(p.valor_recebido) > 0 && p.status !== "recebido" && (
+                        <p className="text-[11px] text-emerald-600">recebido {fmtBRL(p.valor_recebido)} · falta {fmtBRL(p.saldo_pendente)}</p>
+                      )}
                       <div className="mt-1"><StatusBadge status={p.status === "recebido" ? "pago" : p.status} /></div>
                     </div>
                   </div>

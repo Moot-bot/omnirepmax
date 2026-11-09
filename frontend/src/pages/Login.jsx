@@ -12,8 +12,8 @@ export default function Login() {
   const { user, login, loading } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const nav = useNavigate();
-  const [email, setEmail] = useState("alvarofilho39@gmail.com");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   if (loading) return null;

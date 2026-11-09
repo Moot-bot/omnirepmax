@@ -82,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.8.2",
+    title="OMNIREPMAX API", version="2.8.3",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -1420,14 +1420,15 @@ def _saldo_ar(a: dict) -> float:
     return round(max(0.0, _to_float(a.get("valor")) - _to_float(a.get("valor_recebido"))), 2)
 
 def _comissoes_a_receber(comissoes: List[dict], ar: List[dict]) -> float:
-    """Fonte única do 'Comissão a receber': os lançamentos de comissão em Contas a Receber que estão em aberto.
+    """Fonte única do 'Comissão a receber': parcelas de comissão em Contas a Receber ainda não pagas
+    (em aberto + aguardando liquidez) — o mesmo número das telas Comissões e Contas a Receber.
     Comissões antigas sem lançamento entram pelo próprio saldo (até o reparo criar os lançamentos)."""
     com_com_ar = {a.get("comissao_id") for a in ar if a.get("comissao_id")}
     ids_validos = {c.get("id") for c in comissoes}
     total = sum(_saldo_ar(a) for a in ar
-                if a.get("comissao_id") in ids_validos and a.get("status") == "aberto")
+                if a.get("comissao_id") in ids_validos and a.get("status") in ("aberto", "aguardando_liquidez"))
     total += sum(_to_float(c.get("saldo_pendente")) for c in comissoes
-                 if c.get("id") not in com_com_ar and c.get("status") not in ("recebida", "aguardando_liquidez", "cancelada"))
+                 if c.get("id") not in com_com_ar and c.get("status") not in ("recebida", "cancelada"))
     return round(total, 2)
 
 async def _sincronizar_comissao(tid: str, cid: str, usuario: str = "", origem: str = "sincronizacao",
@@ -2024,8 +2025,23 @@ async def get_comissoes(status: Optional[str] = None, representada_id: Optional[
     if status: f["status"] = status
     if representada_id: f["representada_id"] = representada_id
     itens = await t_list("comissoes", current, f)
+    # ✅ saldo e recebido calculados AO VIVO pelas parcelas em Contas a Receber (as duas telas sempre batem)
+    ars_por_com: Dict[str, List[dict]] = {}
+    async for a in db.contas_receber.find({"tenant_id": tid_of(current), "comissao_id": {"$nin": [None, ""]},
+                                           "status": {"$ne": "cancelado"}},
+                                          {"_id": 0, "comissao_id": 1, "valor": 1, "valor_recebido": 1, "status": 1}):
+        ars_por_com.setdefault(a["comissao_id"], []).append(a)
     for c in itens:
         c["status_label"] = STATUS_COMISSAO.get(c.get("status"), c.get("status"))
+        for k in ("valor_liquido", "valor_recebido", "saldo_pendente", "valor_faturado", "valor_total_pedido", "percentual"):
+            if k in c: c[k] = round(_to_float(c.get(k)), 2)
+        ars = ars_por_com.get(c.get("id"))
+        if c.get("status") == "cancelada":
+            c["saldo_pendente"] = 0.0
+        elif ars:
+            c["valor_recebido"] = round(sum(_to_float(a.get("valor_recebido")) for a in ars), 2)
+            c["saldo_pendente"] = round(sum(_saldo_ar(a) for a in ars), 2)
+        c["qtd_parcelas"] = len(ars or [])
     return itens
 
 class ComissaoStatusIn(BaseModel):
@@ -2156,7 +2172,14 @@ async def del_comissao(cid: str, current=Depends(get_active_user)):
 
 @api.get("/contas-receber")
 async def get_ar(current=Depends(get_active_user)):
-    return await t_list("contas_receber", current, sort_key="vencimento")
+    itens = await t_list("contas_receber", current, sort_key="vencimento")
+    ids_com = {c["id"] async for c in db.comissoes.find({"tenant_id": tid_of(current)}, {"_id": 0, "id": 1})}
+    for a in itens:   # ✅ números sempre numéricos e saldo coerente (recebido/cancelado = 0)
+        a["comissao_orfa"] = bool(a.get("comissao_id")) and a["comissao_id"] not in ids_com   # comissão excluída antes da v2.8.1
+        a["valor"] = round(_to_float(a.get("valor")), 2)
+        a["valor_recebido"] = round(_to_float(a.get("valor_recebido")), 2)
+        a["saldo_pendente"] = _saldo_ar(a)
+    return itens
 
 @api.post("/contas-receber")
 async def create_ar(body: ARIn, current=Depends(get_active_user)):
