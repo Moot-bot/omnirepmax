@@ -171,8 +171,8 @@ export default function AppShell() {
               src="/logo2.png" alt="OmniRepMax"
               className="h-11 w-auto max-w-[210px] object-contain"
               onError={(e) => {
-                const ordem = ["/logo2.png", "/logo2.svg", "/logo2.webp", "/logo2.jpg", "/logo.png"];
-                const atual = ordem.findIndex(src => e.currentTarget.src.endsWith(src));
+                const ordem = ["/logo2.png", "/logo2.svg", "/logo2.webp", "/logo2.jpg", "/logo2.jpeg", "/logo2.PNG", "/Logo2.png", "/logo.png"];
+                const atual = ordem.findIndex(src => new URL(e.currentTarget.src).pathname === src);
                 if (atual >= 0 && atual < ordem.length - 1) e.currentTarget.src = ordem[atual + 1];
               }}
             />
