@@ -5,7 +5,9 @@ import { fmtBRL } from "../lib/format";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Percent, TrendingUp, DollarSign, Clock, Building2, ListChecks, AlertCircle } from "lucide-react";
+import { Percent, TrendingUp, DollarSign, Clock, Building2, ListChecks, AlertCircle, Unlock, Loader2, History, Undo2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import ComissaoDetalhe from "../components/ComissaoDetalhe";
 import { toast } from "sonner";
 
 // "2026-12-01" é data local (sem isso o navegador mostra 30/11 por causa do fuso)
@@ -14,6 +16,8 @@ const fmtData = (v) => {
   const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : new Date(v).toLocaleDateString("pt-BR");
 };
+
+const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
 export default function Comissoes() {
   const [list, setList] = useState([]);
@@ -24,6 +28,11 @@ export default function Comissoes() {
   const [selectedCom, setSelectedCom] = useState(null);
   const [parcelas, setParcelas] = useState([]);
   const [loadingParcelas, setLoadingParcelas] = useState(false);
+  // ✅ ações direto no modal (antes só mandava ir para Contas a Receber)
+  const [baixa, setBaixa] = useState(null);          // {id, valor, data}
+  const [dataLiberacao, setDataLiberacao] = useState(hojeISO());
+  const [salvando, setSalvando] = useState(false);
+  const [detalheId, setDetalheId] = useState(null);  // status e histórico
 
   const load = useCallback(async () => {
     try {
@@ -53,9 +62,9 @@ export default function Comissoes() {
   const recebido = ativas.reduce((acc, c) => acc + n(c.valor_recebido), 0);
   const hoje = new Date();
   
-  // Comissões vencidas ignoram as que estão aguardando liquidez (pois a data prevista ainda pode ser futura)
-  const vencidas = ativas.filter(c => c.status !== "aguardando_liquidez" && n(c.saldo_pendente) > 0 && c.data_prevista && new Date(c.data_prevista) < hoje)
-                      .reduce((acc, c) => acc + n(c.saldo_pendente), 0);
+  void hoje;
+  // ✅ Vencidas = parcelas em aberto com vencimento antes de hoje (o servidor calcula; é o mesmo número do card "Em atraso" do Dashboard)
+  const vencidas = ativas.filter(c => c.status !== "aguardando_liquidez").reduce((acc, c) => acc + n(c.saldo_vencido), 0);
 
   // --- Agrupamento por Representada ---
   const resumoPorFabrica = reps.map(rep => {
@@ -74,8 +83,43 @@ export default function Comissoes() {
   }).filter(Boolean);
 
   // --- Função para abrir o Modal de Parcelas ---
+  const recarregarModal = async (comissao) => {
+    const [resAr, resCom] = await Promise.all([api.get("/contas-receber"), api.get("/comissoes")]);
+    setList(resCom.data);
+    const atual = resCom.data.find(c => c.id === comissao.id) || comissao;
+    setSelectedCom(atual);
+    setParcelas(resAr.data.filter(ar => ar.comissao_id === comissao.id).sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento))));
+  };
+
+  const darBaixa = async () => {
+    const v = parseFloat(String(baixa.valor).replace(",", "."));
+    if (!(v > 0)) return toast.error("Informe o valor recebido.");
+    setSalvando(true);
+    try {
+      await api.post(`/contas-receber/${baixa.id}/receber`, { valor: v, data: baixa.data });
+      toast.success("Recebimento registrado.");
+      setBaixa(null); await recarregarModal(selectedCom);
+    } catch (e) { toast.error(e.response?.data?.detail || "Erro ao registrar."); } finally { setSalvando(false); }
+  };
+
+  const estornar = async (p) => {
+    if (!window.confirm("Desfazer o último recebimento desta parcela?")) return;
+    try { await api.post(`/contas-receber/${p.id}/estornar`); toast.success("Recebimento estornado."); await recarregarModal(selectedCom); }
+    catch (e) { toast.error(e.response?.data?.detail || "Erro ao estornar."); }
+  };
+
+  const liberarComissao = async () => {
+    setSalvando(true);
+    try {
+      await api.post(`/comissoes/${selectedCom.id}/status`, { status: "liberada", data: dataLiberacao, observacao: "Fábrica recebeu do cliente" });
+      toast.success("Comissão liberada — as parcelas já podem receber baixa.");
+      await recarregarModal(selectedCom);
+    } catch (e) { toast.error(e.response?.data?.detail || "Erro ao liberar."); } finally { setSalvando(false); }
+  };
+
   const verParcelas = async (comissao) => {
     setSelectedCom(comissao);
+    setBaixa(null); setDataLiberacao(hojeISO());
     setModalOpen(true);
     setLoadingParcelas(true);
     try {
@@ -208,7 +252,7 @@ export default function Comissoes() {
       </div>
 
       {/* 4. Modal de Parcelas */}
-      <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+      <Dialog open={modalOpen} onOpenChange={(v) => { setModalOpen(v); if (!v) load(); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Parcelas do Pedido {selectedCom?.pedido_numero}</DialogTitle></DialogHeader>
           
@@ -224,57 +268,94 @@ export default function Comissoes() {
               </div>
             </div>
 
-            <h4 className="text-sm font-semibold mb-2">Parcelas Geradas</h4>
+            <h4 className="text-sm font-semibold mb-2">Parcelas</h4>
             {loadingParcelas ? (
               <p className="text-sm text-slate-500 text-center py-4">Carregando...</p>
-            ) : selectedCom?.status === "aguardando_liquidez" ? (
-              // NOVO AVISO DE LIQUIDEZ
-              <div className="space-y-2">
-                <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/30">
-                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-                  <p className="text-xs text-amber-700 dark:text-amber-300">
-                    <b>Aguardando liquidez:</b> as parcelas já aparecem em Contas a Receber, mas só podem receber baixa depois
-                    que você confirmar que a fábrica recebeu do cliente.
-                  </p>
-                </div>
-                {parcelas.map((p, i) => (
-                  <div key={p.id} className="flex justify-between items-center p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900">
-                    <div>
-                      <p className="text-sm font-semibold">Parcela {i + 1}</p>
-                      <p className="text-xs text-slate-500">Vencimento: {fmtData(p.vencimento)}</p>
-                    </div>
-                    <p className="text-sm font-mono font-bold text-slate-700 dark:text-slate-300">{fmtBRL(p.valor)}</p>
-                  </div>
-                ))}
-              </div>
-            ) : parcelas.length === 0 ? (
-              <p className="text-sm text-slate-500 text-center py-4">Nenhuma parcela encontrada no Contas a Receber.</p>
             ) : (
               <div className="space-y-2">
-                {parcelas.map((p, i) => (
-                  <div key={p.id} className="flex justify-between items-center p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900">
-                    <div>
-                      <p className="text-sm font-semibold">Parcela {i + 1}</p>
-                      <p className="text-xs text-slate-500">Vencimento: {fmtData(p.vencimento)}</p>
+                {selectedCom?.status === "aguardando_liquidez" && (
+                  <div className="p-4 bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/30">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-700 dark:text-amber-300">
+                        <b>Aguardando liquidez:</b> a comissão só pode receber baixa depois que a fábrica receber do cliente.
+                      </p>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-mono font-bold text-slate-700 dark:text-slate-300">{fmtBRL(p.valor)}</p>
-                      {n(p.valor_recebido) > 0 && p.status !== "recebido" && (
-                        <p className="text-[11px] text-emerald-600">recebido {fmtBRL(p.valor_recebido)} · falta {fmtBRL(p.saldo_pendente)}</p>
-                      )}
-                      <div className="mt-1"><StatusBadge status={p.status === "recebido" ? "pago" : p.status} /></div>
+                    <div className="mt-3 flex flex-wrap items-end gap-2">
+                      <label className="text-xs text-amber-800 dark:text-amber-200">
+                        Data em que a fábrica recebeu
+                        <input type="date" value={dataLiberacao} onChange={e => setDataLiberacao(e.target.value)}
+                               className="block mt-1 h-8 rounded-md border border-amber-300 bg-white dark:bg-slate-900 px-2 text-sm text-slate-900 dark:text-white" />
+                      </label>
+                      <Button size="sm" onClick={liberarComissao} disabled={salvando} className="h-8 bg-amber-500 hover:bg-amber-600 text-white">
+                        {salvando ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Unlock className="w-3.5 h-3.5 mr-1" />} Fábrica recebeu — liberar
+                      </Button>
                     </div>
                   </div>
-                ))}
+                )}
+                {parcelas.length === 0 && <p className="text-sm text-slate-500 text-center py-4">Nenhuma parcela encontrada no Contas a Receber.</p>}
+                {parcelas.map((p, i) => {
+                  const podeBaixar = p.status === "aberto" || p.status === "vencido";
+                  return (
+                    <div key={p.id} className="p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900">
+                      <div className="flex justify-between items-center gap-3">
+                        <div>
+                          <p className="text-sm font-semibold">Parcela {i + 1}</p>
+                          <p className="text-xs text-slate-500">Vencimento: {fmtData(p.vencimento)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-mono font-bold text-slate-700 dark:text-slate-300">{fmtBRL(p.valor)}</p>
+                          {n(p.valor_recebido) > 0 && p.status !== "recebido" && (
+                            <p className="text-[11px] text-emerald-600">recebido {fmtBRL(p.valor_recebido)} · falta {fmtBRL(p.saldo_pendente)}</p>
+                          )}
+                          <div className="mt-1"><StatusBadge status={p.status === "recebido" ? "pago" : p.status} /></div>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex justify-end gap-2">
+                        {n(p.valor_recebido) > 0 && (
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => estornar(p)}><Undo2 className="w-3 h-3 mr-1" />Estornar</Button>
+                        )}
+                        {podeBaixar && baixa?.id !== p.id && (
+                          <Button size="sm" className="h-7 text-xs bg-[#075BFF]" onClick={() => setBaixa({ id: p.id, valor: p.saldo_pendente, data: hojeISO() })}>
+                            <DollarSign className="w-3 h-3 mr-1" />Dar baixa
+                          </Button>
+                        )}
+                      </div>
+                      {baixa?.id === p.id && (
+                        <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 dark:bg-slate-800 p-2">
+                          <label className="text-xs text-slate-500">Valor recebido
+                            <input type="number" step="0.01" value={baixa.valor} onChange={e => setBaixa({ ...baixa, valor: e.target.value })}
+                                   className="block mt-1 h-8 w-32 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-sm text-slate-900 dark:text-white" />
+                          </label>
+                          <label className="text-xs text-slate-500">Data
+                            <input type="date" value={baixa.data} onChange={e => setBaixa({ ...baixa, data: e.target.value })}
+                                   className="block mt-1 h-8 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-sm text-slate-900 dark:text-white" />
+                          </label>
+                          <Button size="sm" className="h-8 bg-[#075BFF]" disabled={salvando} onClick={darBaixa}>
+                            {salvando && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}Confirmar
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-8" onClick={() => setBaixa(null)}>Cancelar</Button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
-            
-            <p className="text-xs text-slate-500 mt-4 text-center">
-              Para dar baixa e registrar o recebimento, acesse a aba <strong>Contas a Receber</strong>.
-            </p>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <button className="inline-flex items-center gap-1 font-semibold text-[#075BFF] hover:underline"
+                      onClick={() => { setDetalheId(selectedCom?.id); setModalOpen(false); }}>
+                <History className="w-3.5 h-3.5" /> Status e histórico
+              </button>
+              <Link to="/contas-receber" className="text-slate-500 hover:text-[#075BFF] underline">Abrir Contas a Receber</Link>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Status manual + histórico */}
+      <ComissaoDetalhe comissaoId={detalheId} open={!!detalheId} onOpenChange={v => !v && setDetalheId(null)} onChanged={load} />
     </div>
   );
 }

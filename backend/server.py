@@ -82,7 +82,7 @@ ALLOWED_ORIGINS = sorted({
 })
 
 app = FastAPI(
-    title="OMNIREPMAX API", version="2.9.0",
+    title="OMNIREPMAX API", version="2.9.1",
     # ✅ Em produção não publica o mapa completo da API
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None,
@@ -1713,6 +1713,24 @@ async def pedidos_aguardando_faturamento(
     result.sort(key=lambda x: -x["dias_aguardando"])
     return result
 
+async def _carteira(tid: str) -> List[dict]:
+    """Pedidos com saldo a faturar — a MESMA regra da tela 'Aguardando faturamento' e da Projeção do Dashboard."""
+    pedidos = await db.pedidos.find({"tenant_id": tid, "status": {"$in": ["rascunho", "aprovado", "enviado", "faturado_parcial"]}},
+                                    {"_id": 0, "id": 1, "total": 1, "comissao_percentual": 1, "comissao_valor": 1, "status": 1}).to_list(5000)
+    ids = [p["id"] for p in pedidos]
+    fat: Dict[str, float] = {}
+    async for f in db.faturamentos.find({"tenant_id": tid, "pedido_id": {"$in": ids}}, {"_id": 0, "pedido_id": 1, "valor_faturado": 1}):
+        fat[f["pedido_id"]] = fat.get(f["pedido_id"], 0) + _to_float(f.get("valor_faturado"))
+    out = []
+    for p in pedidos:
+        saldo = round(_to_float(p.get("total")) - fat.get(p["id"], 0), 2)
+        if saldo <= 0.01: continue
+        perc = _to_float(p.get("comissao_percentual"))
+        if not perc and _to_float(p.get("total")):
+            perc = _to_float(p.get("comissao_valor")) / _to_float(p.get("total")) * 100
+        out.append({**p, "saldo_a_faturar": saldo, "comissao_projetada": round(saldo * perc / 100, 2)})
+    return out
+
 @api.post("/pedidos")
 async def create_pedido(body: PedidoIn, current=Depends(get_active_user)):
     tid = tid_of(current)
@@ -2025,11 +2043,12 @@ async def get_comissoes(status: Optional[str] = None, representada_id: Optional[
     if status: f["status"] = status
     if representada_id: f["representada_id"] = representada_id
     itens = await t_list("comissoes", current, f)
+    hoje = hoje_br()
     # ✅ saldo e recebido calculados AO VIVO pelas parcelas em Contas a Receber (as duas telas sempre batem)
     ars_por_com: Dict[str, List[dict]] = {}
     async for a in db.contas_receber.find({"tenant_id": tid_of(current), "comissao_id": {"$nin": [None, ""]},
                                            "status": {"$ne": "cancelado"}},
-                                          {"_id": 0, "comissao_id": 1, "valor": 1, "valor_recebido": 1, "status": 1}):
+                                          {"_id": 0, "comissao_id": 1, "valor": 1, "valor_recebido": 1, "status": 1, "vencimento": 1}):
         ars_por_com.setdefault(a["comissao_id"], []).append(a)
     for c in itens:
         c["status_label"] = STATUS_COMISSAO.get(c.get("status"), c.get("status"))
@@ -2042,6 +2061,10 @@ async def get_comissoes(status: Optional[str] = None, representada_id: Optional[
             c["valor_recebido"] = round(sum(_to_float(a.get("valor_recebido")) for a in ars), 2)
             c["saldo_pendente"] = round(sum(_saldo_ar(a) for a in ars), 2)
         c["qtd_parcelas"] = len(ars or [])
+        # ✅ vencido = parcelas em aberto com vencimento antes de hoje (mesma regra do card "Em atraso" do Dashboard)
+        c["saldo_vencido"] = 0.0 if c.get("status") == "cancelada" else round(sum(
+            _saldo_ar(a) for a in (ars or []) if a.get("status") in ("aberto", "vencido")
+            and (lambda d: d is not None and d < hoje)(_data_local(a.get("vencimento")))), 2)
     return itens
 
 class ComissaoStatusIn(BaseModel):
@@ -2184,6 +2207,33 @@ async def get_ar(current=Depends(get_active_user)):
 @api.post("/contas-receber")
 async def create_ar(body: ARIn, current=Depends(get_active_user)):
     return await t_insert("contas_receber", current, body.model_dump())
+
+@api.post("/contas-receber/{rid}/estornar")
+async def estornar_recebimento(rid: str, current=Depends(get_active_user)):
+    """Desfaz o ÚLTIMO recebimento do lançamento (e da comissão ligada). Para corrigir baixa feita errada."""
+    tid = tid_of(current)
+    ar = await db.contas_receber.find_one({"id": rid, "tenant_id": tid}, {"_id": 0})
+    if not ar: raise HTTPException(404, "Conta não encontrada")
+    hist = list(ar.get("historico_recebimentos") or [])
+    if not hist and _to_float(ar.get("valor_recebido")) <= 0:
+        raise HTTPException(400, "Este lançamento não tem recebimento para estornar.")
+    ultimo = hist.pop() if hist else {"valor": _to_float(ar.get("valor_recebido")), "data": ar.get("data_recebimento")}
+    v = _to_float(ultimo.get("valor"))
+    novo_receb = round(max(0.0, _to_float(ar.get("valor_recebido")) - v), 2)
+    await db.contas_receber.update_one({"id": rid, "tenant_id": tid}, {"$set": {
+        "valor_recebido": novo_receb, "saldo_pendente": round(max(0.0, _to_float(ar.get("valor")) - novo_receb), 2),
+        "status": "aberto", "data_recebimento": "", "historico_recebimentos": hist, "updated_at": iso(now_utc())}})
+    if ar.get("comissao_id"):
+        com = await db.comissoes.find_one({"id": ar["comissao_id"], "tenant_id": tid}, {"_id": 0})
+        if com:
+            ch = list(com.get("historico_recebimentos") or [])
+            for i in range(len(ch) - 1, -1, -1):
+                if abs(_to_float(ch[i].get("valor")) - v) < 0.01 and str(ch[i].get("data")) == str(ultimo.get("data")):
+                    ch.pop(i); break
+            await db.comissoes.update_one({"id": com["id"], "tenant_id": tid}, {"$set": {"historico_recebimentos": ch}})
+            await _sincronizar_comissao(tid, com["id"], current.get("email", ""), origem="estorno")
+    await _log_auditoria(current, "estorno_recebimento", "contas_receber", rid, extra={"valor": v, "data": ultimo.get("data")})
+    return {"ok": True, "estornado": v}
 
 @api.put("/contas-receber/{rid}")
 async def update_ar(rid: str, body: ARIn, current=Depends(get_active_user)):
@@ -2569,10 +2619,12 @@ async def _indicadores_comerciais(tid: str, ano: int, mes: int, representada_id:
 
     # 4) EM ATRASO — títulos de comissão vencidos e com saldo (a regra atual: vencido até hoje)
     atr = {**zero(), "total": 0.0, "qtd": 0}
-    async for a in db.contas_receber.find({"tenant_id": tid, "status": {"$in": ["aberto", "vencido"]}},
-                                          {"_id": 0, "valor": 1, "valor_recebido": 1, "saldo_pendente": 1,
+    ids_com_validos = {c["id"] async for c in db.comissoes.find({"tenant_id": tid, "status": {"$ne": "cancelada"}}, {"_id": 0, "id": 1})}
+    async for a in db.contas_receber.find({"tenant_id": tid, "status": {"$in": ["aberto", "vencido"]},
+                                           "comissao_id": {"$nin": [None, ""]}},
+                                          {"_id": 0, "valor": 1, "valor_recebido": 1, "saldo_pendente": 1, "comissao_id": 1,
                                            "vencimento": 1, "representada_id": 1, "cliente_id": 1}):
-        if not filtra(a): continue
+        if a.get("comissao_id") not in ids_com_validos or not filtra(a): continue
         saldo = _to_float(a.get("saldo_pendente"), _to_float(a.get("valor")) - _to_float(a.get("valor_recebido")))
         venc = _data_local(a.get("vencimento"))
         if saldo <= 0.009 or not venc or venc >= hoje: continue
@@ -2792,11 +2844,19 @@ async def dashboard(current=Depends(get_active_user)):
             "faturado": round(v_fat, 2)
         })
 
-    com_recebidas = sum(c.get("valor_recebido", 0) for c in comissoes)
-    com_abertas = _comissoes_a_receber(comissoes, ar)   # ✅ mesma conta do Contas a Receber
+    # ✅ v2.9.1: cada número do Dashboard é a MESMA conta da tela para onde ele leva
+    ids_com_ativas = {c["id"] for c in comissoes if c.get("status") != "cancelada"}
+    ar_com = [a for a in ar if a.get("comissao_id") in ids_com_ativas and a.get("status") != "cancelado"]
+    com_recebidas = sum(_to_float(a.get("valor_recebido")) for a in ar_com)          # = Comissões › "Já recebido"
+    com_recebidas += sum(_to_float(c.get("valor_recebido")) for c in comissoes        # comissões antigas sem parcela
+                         if c["id"] in ids_com_ativas and not any(a.get("comissao_id") == c["id"] for a in ar_com))
+    com_recebidas_mes = sum(_to_float(h.get("valor")) for a in ar_com for h in (a.get("historico_recebimentos") or [])
+                            if (lambda d: d is not None and d.year == ano and d.month == mes)(_data_local(h.get("data"))))
+    com_abertas = _comissoes_a_receber(comissoes, ar)   # = Comissões › "Saldo a receber" = Contas a Receber › "Comissões pendentes"
 
-    ap_abertas = sum(a.get("valor", 0) for a in ap if a.get("status") == "aberto")
-    ar_abertas = sum(a.get("saldo_pendente", a.get("valor", 0)) for a in ar if a.get("status") == "aberto")
+    ap_abertas = sum(max(0.0, _to_float(a.get("valor")) - _to_float(a.get("valor_pago"))) for a in ap
+                     if a.get("status") not in ("pago", "cancelado"))
+    ar_abertas = sum(_saldo_ar(a) for a in ar if a.get("status") not in ("recebido", "cancelado"))   # = total da tela Contas a Receber
 
     despesas_mes = sum(a.get("valor", 0) for a in ap if a.get("status") == "pago" and _in_month(a.get("vencimento"), ano, mes))
 
@@ -2805,8 +2865,9 @@ async def dashboard(current=Depends(get_active_user)):
     # ✅ FIX: Em Atraso = comissões vencidas e não recebidas (antes somava também Contas a Pagar)
     em_atraso_valor = ind["em_atraso"]["total"]; em_atraso_count = ind["em_atraso"]["qtd"]
 
-    projecao_valor = sum(p.get("total", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
-    projecao_comissao = sum(p.get("comissao_valor", 0) for p in pedidos if p.get("status") in ("aprovado", "enviado"))
+    carteira = await _carteira(tid_of(current))      # = tela "Aguardando faturamento"
+    projecao_valor = sum(p["saldo_a_faturar"] for p in carteira)
+    projecao_comissao = sum(p["comissao_projetada"] for p in carteira)
 
     clientes_ativos = sum(1 for c in clientes if c.get("status") == "ativo")
     novos = sum(1 for c in clientes if _in_month(c.get("created_at"), ano, mes))
@@ -2871,6 +2932,8 @@ async def dashboard(current=Depends(get_active_user)):
         "comissoes_previstas": ind["comissoes_previstas"]["mes"],          # ✅ do mês (data de referência da comissão)
         "comissoes_a_receber": round(com_abertas, 2),                        # saldo em aberto (todas as datas)
         "comissoes_recebidas": round(com_recebidas, 2),
+        "comissoes_recebidas_mes": round(com_recebidas_mes, 2),
+        "pedidos_em_carteira": len(carteira),
         "comissoes_abertas": round(com_abertas, 2),
         "contas_pagar_abertas": round(ap_abertas, 2),
         "contas_receber_abertas": round(ar_abertas, 2),
@@ -3424,13 +3487,25 @@ async def _mapear_colunas_ia(cab: List[str], amostra: List[List[Any]]) -> Dict[s
             f"Colunas da planilha: {json.dumps(cab, ensure_ascii=False)}\n"
             f"Primeiras linhas: {json.dumps([[str(c)[:40] for c in l] for l in amostra[:5]], ensure_ascii=False)}")
     resp = await _groq_json(system, user, 1500)
+    if isinstance(resp, dict) and len(resp) == 1 and isinstance(next(iter(resp.values())), dict):
+        resp = next(iter(resp.values()))          # {"mapeamento": {...}}
     pos = {c: i for i, c in enumerate(cab)}
     pos_norm = {_norm_txt(c): i for i, c in enumerate(cab)}
     mapa: Dict[str, Optional[int]] = {}; usado: set = set()
     for campo in CAMPOS_NOTA_PLANILHA:
         col = resp.get(campo) if isinstance(resp, dict) else None
-        i = pos.get(col) if isinstance(col, str) else None
-        if i is None and isinstance(col, str): i = pos_norm.get(_norm_txt(col))
+        i = None
+        if isinstance(col, bool): col = None
+        if isinstance(col, int) and 0 <= col < len(cab): i = col                     # devolveu o índice
+        elif isinstance(col, str) and col.strip():
+            i = pos.get(col)
+            if i is None: i = pos_norm.get(_norm_txt(col))
+            if i is None and re.fullmatch(r"[A-Za-z]", col.strip()) and col.strip().upper() not in pos:
+                k = ord(col.strip().upper()) - 65                                    # letra da coluna (A, B, C…)
+                i = k if k < len(cab) else None
+            if i is None:   # nome parecido (IA "corrigiu" acento/caixa/pontuação)
+                alvo = _norm_txt(col)
+                i = next((j for j, c in enumerate(cab) if alvo and (alvo in _norm_txt(c) or _norm_txt(c) in alvo) and _norm_txt(c)), None)
         mapa[campo] = i if i is not None and i not in usado else None
         if mapa[campo] is not None: usado.add(mapa[campo])
     return mapa

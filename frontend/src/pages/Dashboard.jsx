@@ -24,7 +24,7 @@ const MESES = {
   January: "Janeiro", February: "Fevereiro", March: "Março", April: "Abril",
   May: "Maio", June: "Junho", July: "Julho", August: "Agosto",
   September: "Setembro", October: "Outubro", November: "Novembro", December: "Dezembro",
-  Jan: "Jan", Feb: "Fev", Mar: "Mar", Apr: "Abr", May: "Mai", Jun: "Jun",
+  Jan: "Jan", Feb: "Fev", Mar: "Mar", Apr: "Abr", Jun: "Jun",
   Jul: "Jul", Aug: "Ago", Sep: "Set", Oct: "Out", Nov: "Nov", Dec: "Dez"
 };
 const traduzirTexto = (txt) => {
@@ -222,7 +222,7 @@ export default function Dashboard() {
           color="teal" 
           icon={Percent} 
           isZero={cards ? semRegistrosNoMes(cards.comissoes_previstas) : d.comissoes_previstas === 0}
-          subtitle={!filtrado && d.comissoes_recebidas ? `Recebido: ${fmtBRL(d.comissoes_recebidas)}` : undefined}
+          subtitle={!filtrado && d.comissoes_recebidas_mes ? `Recebido no mês: ${fmtBRL(d.comissoes_recebidas_mes)}` : undefined}
           onClick={() => navigate("/comissoes")}
         >
           <Comparativos dados={cards?.comissoes_previstas} variante="chip" />
@@ -247,12 +247,15 @@ export default function Dashboard() {
           <Gauge score={d.saude_financeira} label={d.saude_label} />
         </div>
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-shadow hover:shadow-md">
-          <div className="flex items-center gap-2 text-sm font-semibold mb-5"><BarChart3 className="w-4 h-4 text-[#08D5F5]" />Projeção do mês</div>
+          <div className="flex items-center gap-2 text-sm font-semibold mb-1"><BarChart3 className="w-4 h-4 text-[#08D5F5]" />Projeção</div>
+          <div className="text-xs text-slate-500 mb-4">Cada linha é o mesmo total da tela para onde ela leva.</div>
           <div className="space-y-3">
-            <Row label="Pedidos em carteira (não faturados)" value={fmtBRL(d.projecao_valor)} good onClick={() => navigate("/pedidos")} />
-            <Row label="Comissão projetada" value={fmtBRL(d.projecao_comissao)} good onClick={() => navigate("/comissoes")} />
-            <Row label="A receber (abertas)" value={fmtBRL(d.contas_receber_abertas)} onClick={() => navigate("/contas-receber")} />
-            <Row label="A pagar (abertas)" value={fmtBRL(d.contas_pagar_abertas)} bad onClick={() => navigate("/contas-pagar")} />
+            {/* ✅ mesmos números das telas: Aguardando faturamento, Comissões, Contas a Receber e Contas a Pagar */}
+            <Row label={`Pedidos aguardando faturamento${d.pedidos_em_carteira ? ` (${d.pedidos_em_carteira})` : ""}`} value={fmtBRL(d.projecao_valor)} good onClick={() => navigate("/pedidos/aguardando-faturamento")} />
+            <Row label="Comissão desses pedidos (quando faturar)" value={fmtBRL(d.projecao_comissao)} good onClick={() => navigate("/pedidos/aguardando-faturamento")} />
+            <Row label="Comissões a receber" value={fmtBRL(d.comissoes_a_receber ?? d.comissoes_abertas)} onClick={() => navigate("/comissoes")} />
+            <Row label="Total em Contas a Receber" value={fmtBRL(d.contas_receber_abertas)} onClick={() => navigate("/contas-receber")} />
+            <Row label="Contas a pagar em aberto" value={fmtBRL(d.contas_pagar_abertas)} bad onClick={() => navigate("/contas-pagar")} />
           </div>
         </div>
       </div>
@@ -294,8 +297,9 @@ export default function Dashboard() {
             <ResumoRow icon={<Wallet className="w-4 h-4 text-blue-500" />} label="Diferença (Saldo)" value={fmtBRL(d.saldo_mes)} valueClass={d.saldo_mes >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"} />
             <ResumoRow icon={<Users className="w-4 h-4 text-indigo-500" />} label="Clientes ativos / Novos" value={`${fmtNum(d.clientes_ativos)} / ${fmtNum(d.novos_clientes)}`} onClick={() => navigate("/clientes")} />
             <ResumoRow icon={<ShoppingCart className="w-4 h-4 text-amber-500" />} label="Pedidos abertos / Faturados" value={`${fmtNum(d.pedidos_abertos)} / ${fmtNum(d.pedidos_faturados)}`} onClick={() => navigate("/pedidos")} />
-            <ResumoRow icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} label="Comissão recebida" value={fmtBRL(d.comissoes_recebidas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
-            <ResumoRow icon={<Percent className="w-4 h-4 text-emerald-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_a_receber ?? d.comissoes_abertas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
+            <ResumoRow icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} label="Comissão recebida no mês" value={fmtBRL(d.comissoes_recebidas_mes ?? 0)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/contas-receber")} />
+            <ResumoRow icon={<Wallet className="w-4 h-4 text-emerald-500" />} label="Comissão já recebida (total)" value={fmtBRL(d.comissoes_recebidas)} valueClass="text-emerald-600 dark:text-emerald-400" onClick={() => navigate("/comissoes")} />
+            <ResumoRow icon={<Percent className="w-4 h-4 text-amber-500" />} label="Comissão a receber" value={fmtBRL(d.comissoes_a_receber ?? d.comissoes_abertas)} valueClass="text-amber-600 dark:text-amber-400" onClick={() => navigate("/comissoes")} />
           </div>
         </div>
 

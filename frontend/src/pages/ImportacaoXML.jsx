@@ -83,6 +83,8 @@ export default function ImportacaoXML() {
   const [analise, setAnalise] = useState(null);
   const [escolhas, setEscolhas] = useState({});      // id_temp -> {incluir, rep, cli, comissao}
   const [mapa, setMapa] = useState(null);            // mapeamento editado
+  const [linhaCab, setLinhaCab] = useState(null);    // linha do cabeçalho escolhida
+  const timerMapa = useRef(null);
   const [busy, setBusy] = useState(null);            // "analisar" | "ia" | "importar"
   const [resultado, setResultado] = useState(null);
   const [aberta, setAberta] = useState(null);
@@ -108,8 +110,8 @@ export default function ImportacaoXML() {
     if (!novosXml.length && !novaPlanilha) return;
     const xs = [...xmls.filter(x => !novosXml.some(n => n.nome === x.nome)), ...novosXml];
     const pl = novaPlanilha || planilha;
-    setXmls(xs); if (novaPlanilha) { setPlanilha(novaPlanilha); setMapa(null); }
-    analisar({ xs, pl, mapeamento: novaPlanilha ? null : mapa });
+    setXmls(xs); if (novaPlanilha) { setPlanilha(novaPlanilha); setMapa(null); setLinhaCab(null); }
+    analisar({ xs, pl, mapeamento: novaPlanilha ? null : mapa, cab: novaPlanilha ? null : linhaCab });
   };
 
   const adicionarColado = () => {
@@ -126,15 +128,16 @@ export default function ImportacaoXML() {
   };
 
   // ---------- análise (prévia) ----------
-  const analisar = async ({ xs = xmls, pl = planilha, mapeamento = null, usarIa = false } = {}) => {
+  const analisar = async ({ xs = xmls, pl = planilha, mapeamento = null, usarIa = false, cab = linhaCab } = {}) => {
     if (!xs.length && !pl) { setAnalise(null); return; }
     setBusy(usarIa ? "ia" : "analisar"); setResultado(null);
     try {
       const body = { xmls: xs };
-      if (pl) body.planilha = { nome: pl.nome, linhas: pl.linhas, mapeamento: mapeamento || null, usar_ia: usarIa };
+      if (pl) body.planilha = { nome: pl.nome, linhas: pl.linhas, mapeamento: mapeamento || null, usar_ia: usarIa,
+                                linha_cabecalho: cab ?? null };
       const { data } = await api.post("/importar-notas/analisar", body);
       setAnalise(data);
-      if (data.planilha) setMapa(data.planilha.mapeamento);
+      if (data.planilha) { setMapa(data.planilha.mapeamento); setLinhaCab(data.planilha.linha_cabecalho); }
       const esc = {};
       const unicaRep = data.representadas.length === 1 ? data.representadas[0].id : "";
       for (const n of data.notas) {
@@ -148,11 +151,33 @@ export default function ImportacaoXML() {
       }
       setEscolhas(esc);
       if (data.planilha?.origem_mapeamento === "ia") toast.success("A IA identificou as colunas da planilha. Confira antes de importar.");
-      if (data.planilha?.erro_ia) toast.warning(data.planilha.erro_ia);
+      if (data.planilha?.erro_ia) toast.error(`A IA não conseguiu mapear: ${data.planilha.erro_ia}`);
     } catch (e) {
       toast.error(e.response?.data?.detail || "Não foi possível analisar os arquivos.");
     } finally { setBusy(null); }
   };
+
+  // ---------- colunas: validação ao vivo + aplica sozinho ao trocar ----------
+  const faltandoAoVivo = (m) => {
+    if (!m) return [];
+    const tem = (k) => m[k] !== null && m[k] !== undefined && m[k] !== "";
+    const f = [];
+    if (!tem("nf_numero")) f.push("Número da NF");
+    if (!tem("data_emissao")) f.push("Data de emissão");
+    if (!tem("cliente_cnpj") && !tem("cliente_nome")) f.push("Cliente (CNPJ ou nome)");
+    if (!tem("valor_total") && !tem("valor_item") && !(tem("quantidade") && tem("preco_unitario")))
+      f.push("Valor (total da nota, do item ou quantidade × preço)");
+    return f;
+  };
+  const trocarColuna = (campo, valor) => {
+    const novo = { ...(mapa || {}), [campo]: valor === "" ? null : Number(valor) };
+    // a mesma coluna não pode ir para dois campos
+    if (novo[campo] !== null) for (const k of Object.keys(novo)) if (k !== campo && novo[k] === novo[campo]) novo[k] = null;
+    setMapa(novo);
+    clearTimeout(timerMapa.current);
+    if (!faltandoAoVivo(novo).length) timerMapa.current = setTimeout(() => analisar({ mapeamento: novo }), 450);
+  };
+  const trocarCabecalho = (idx) => { setLinhaCab(idx); setMapa(null); analisar({ mapeamento: null, cab: idx }); };
 
   // ---------- confirmar ----------
   const notas = analise?.notas || [];
@@ -284,32 +309,52 @@ export default function ImportacaoXML() {
                   {pl.origem_mapeamento === "ia" ? "mapeado pela IA" : pl.origem_mapeamento === "usuario" ? "ajustado por você" : "automático"}
                 </span>
               </p>
-              <p className="text-xs text-slate-500">{pl.total_linhas} linha(s) · cabeçalho na linha {pl.linha_cabecalho + 1}. Ajuste se alguma coluna estiver errada.</p>
+              <div className="text-xs text-slate-500 flex flex-wrap items-center gap-1">
+                {pl.total_linhas} linha(s) de dados · cabeçalho na
+                <select className="h-6 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs px-1 max-w-[260px]"
+                        value={linhaCab ?? pl.linha_cabecalho} onChange={(e) => trocarCabecalho(Number(e.target.value))}>
+                  {(planilha?.linhas || []).slice(0, 15).map((l, i) => (
+                    <option key={i} value={i}>linha {i + 1}: {TRUNC((l || []).filter(c => String(c).trim()).slice(0, 4).join(" | "), 50)}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" disabled={!!busy} onClick={() => analisar({ mapeamento: null, usarIa: true })}>
+              <Button size="sm" variant="outline" disabled={!!busy} onClick={() => analisar({ mapeamento: mapa, usarIa: true })}>
                 {busy === "ia" ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1 text-violet-500" />} Mapear com IA
               </Button>
-              <Button size="sm" disabled={!!busy} onClick={() => analisar({ mapeamento: mapa })} className="bg-[#075BFF] hover:bg-blue-600">
-                <RefreshCw className="w-3.5 h-3.5 mr-1" /> Aplicar colunas
+              <Button size="sm" variant="outline" disabled={!!busy || faltandoAoVivo(mapa).length > 0} onClick={() => analisar({ mapeamento: mapa })}>
+                {busy === "analisar" ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />} Recalcular
               </Button>
             </div>
           </div>
-          {pl.faltando?.length > 0 && (
+          {pl.erro_ia && (
+            <div className="mb-3 rounded-lg bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 p-3 text-xs text-rose-700 dark:text-rose-300">
+              <b>A IA não respondeu:</b> {pl.erro_ia} Escolha as colunas abaixo — a prévia atualiza sozinha.
+            </div>
+          )}
+          {faltandoAoVivo(mapa).length > 0 ? (
             <div className="mb-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 p-3 text-xs text-amber-800 dark:text-amber-200">
-              <b>Faltam colunas para montar as notas:</b> {pl.faltando.join(", ")}. Escolha abaixo ou clique em “Mapear com IA”.
-              {pl.erro_ia && <div className="mt-1 opacity-80">IA: {pl.erro_ia}</div>}
+              <b>Falta escolher:</b> {faltandoAoVivo(mapa).join(", ")}. Escolha abaixo ou clique em “Mapear com IA”.
+            </div>
+          ) : (
+            <div className="mb-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 p-3 text-xs text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4" /> Colunas ok — {notas.filter(x => x.origem === "planilha").length} nota(s) montada(s) da planilha. Trocou alguma coluna? A prévia se atualiza sozinha.
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2">
             {pl.campos.map(c => (
               <label key={c.id} className="text-xs">
                 <span className="text-slate-500">{c.rotulo}</span>
-                <select className={selCls} value={mapa?.[c.id] ?? ""}
-                        onChange={(e) => setMapa(m => ({ ...m, [c.id]: e.target.value === "" ? null : Number(e.target.value) }))}>
+                <select className={selCls} value={mapa?.[c.id] ?? ""} onChange={(e) => trocarColuna(c.id, e.target.value)}>
                   <option value="">— não usar —</option>
                   {pl.colunas.map((col, i) => <option key={i} value={i}>{col || `(coluna ${i + 1})`}</option>)}
                 </select>
+                {mapa?.[c.id] !== null && mapa?.[c.id] !== undefined && (
+                  <span className="block truncate text-[10px] text-slate-400 mt-0.5">
+                    ex.: {String(((planilha?.linhas || [])[(linhaCab ?? pl.linha_cabecalho) + 1] || [])[mapa[c.id]] ?? "") || "(vazio)"}
+                  </span>
+                )}
               </label>
             ))}
           </div>
