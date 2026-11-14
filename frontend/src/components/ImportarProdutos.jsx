@@ -19,7 +19,7 @@ import {
 const LOTE = 1000;
 const MAX_MB = 25;
 
-export default function ImportarProdutos({ open, onOpenChange, representadas = [], representadaId, onImported }) {
+export default function ImportarProdutos({ open, onOpenChange, representadas = [], representadaId, onImported, arquivoInicial }) {
   const [repId, setRepId] = useState(representadaId || "");
   const [modo, setModo] = useState("atualizar");
   const [arquivo, setArquivo] = useState(null);
@@ -32,7 +32,15 @@ export default function ImportarProdutos({ open, onOpenChange, representadas = [
   const [arrastando, setArrastando] = useState(false);
   const inputRef = useRef(null);
 
-  useEffect(() => { if (open) { setRepId(representadaId || ""); limpar(); } }, [open, representadaId]); // eslint-disable-line
+  useEffect(() => {
+    if (!open) return;
+    setRepId(representadaId || ""); limpar();
+    // ✅ arquivo já escolhido em outra tela (ex.: Importar notas detectou um catálogo de produtos)
+    if (arquivoInicial) {
+      if (representadaId) analisar(arquivoInicial, representadaId);
+      else setArquivo(arquivoInicial);
+    }
+  }, [open, representadaId, arquivoInicial]); // eslint-disable-line
 
   const limpar = () => {
     setArquivo(null); setLeitura(null); setAnalise(null); setErroLeitura("");
@@ -61,7 +69,7 @@ export default function ImportarProdutos({ open, onOpenChange, representadas = [
 
   // refaz a análise se trocar a representada ou o modo depois de escolher o arquivo
   useEffect(() => {
-    if (arquivo && (etapa === "previa" || etapa === "escolher") && leitura) analisar(arquivo, repId, modo);
+    if (arquivo && repId && (etapa === "previa" || etapa === "escolher")) analisar(arquivo, repId, modo);
   }, [repId, modo]); // eslint-disable-line
 
   const confirmar = async () => {

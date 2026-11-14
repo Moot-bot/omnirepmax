@@ -12,6 +12,7 @@ import { fmtBRL, fmtDate } from "../lib/format";
 import { decodificarTexto, lerCSV } from "../lib/planilhaProdutos";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
+import ImportarProdutos from "../components/ImportarProdutos";
 
 /**
  * Importação de notas — XML NF-e (vários arquivos de uma vez) e planilhas CSV/Excel.
@@ -46,6 +47,24 @@ const MODELO_LINHAS = [
     "REF-200", "", "Sandália modelo 200", "6", "45,50", "1.351,80", ""],
 ];
 
+// Planilha de CATÁLOGO (Nome, Código, EAN, Preço…) e não de notas? → vai para a importação de produtos.
+const normCab = (v) => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function pareceCatalogo(linhas) {
+  for (const l of (linhas || []).slice(0, 10)) {
+    const cab = (l || []).map(normCab).filter(Boolean);
+    if (cab.length < 2) continue;
+    const tem = (...ws) => cab.some(c => ws.some(w => c === w || c.startsWith(w + " ")));
+    const ehProduto = tem("preco", "valor unitario", "preco unitario") && tem("nome", "descricao", "produto", "ean", "codigo", "referencia");
+    const ehNota = tem("nf", "nfe", "nota", "nota fiscal", "numero nf", "emissao", "data emissao", "cliente", "cnpj");
+    if (ehProduto && !ehNota) {
+      const iMarca = cab.findIndex(c => ["marca", "fabricante", "representada"].includes(c));
+      return { indiceCab: (linhas || []).indexOf(l), iMarca };
+    }
+    if (ehProduto || ehNota) return null;
+  }
+  return null;
+}
+
 function baixarModelo() {
   const esc = (v) => (/[;"\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v);
   const csv = [MODELO_CABECALHO, ...MODELO_LINHAS].map(l => l.map(esc).join(";")).join("\r\n");
@@ -58,7 +77,7 @@ async function lerArquivo(f) {
   const ext = (f.name.split(".").pop() || "").toLowerCase();
   const buf = await f.arrayBuffer();
   if (ext === "xml") return { tipo: "xml", nome: f.name, conteudo: decodificarTexto(buf) };
-  if (ext === "csv" || ext === "txt") return { tipo: "planilha", nome: f.name, linhas: lerCSV(decodificarTexto(buf)).linhas };
+  if (ext === "csv" || ext === "txt") return { tipo: "planilha", nome: f.name, arquivo: f, linhas: lerCSV(decodificarTexto(buf)).linhas };
   if (["xlsx", "xls", "xlsm", "ods"].includes(ext)) {
     const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
     // aba com mais linhas preenchidas
@@ -68,7 +87,7 @@ async function lerArquivo(f) {
       const cheias = linhas.filter(l => l.some(c => String(c).trim())).length;
       if (!melhor || cheias > melhor.cheias) melhor = { linhas, cheias };
     }
-    return { tipo: "planilha", nome: f.name, linhas: melhor ? melhor.linhas : [] };
+    return { tipo: "planilha", nome: f.name, arquivo: f, linhas: melhor ? melhor.linhas : [] };
   }
   if (ext === "pdf") throw new Error(`${f.name}: PDF (DANFE) não tem os dados estruturados — envie o arquivo XML da nota.`);
   if (ext === "zip") throw new Error(`${f.name}: descompacte o ZIP e envie os XMLs (pode selecionar vários de uma vez).`);
@@ -90,6 +109,8 @@ export default function ImportacaoXML() {
   const [aberta, setAberta] = useState(null);
   const [historico, setHistorico] = useState([]);
   const [arrastando, setArrastando] = useState(false);
+  const [produtosAberto, setProdutosAberto] = useState(false);
+  const [repsCat, setRepsCat] = useState([]);
   const inputRef = useRef(null);
 
   const carregarHistorico = useCallback(() => {
@@ -104,7 +125,7 @@ export default function ImportacaoXML() {
       try {
         const a = await lerArquivo(f);
         if (a.tipo === "xml") novosXml.push({ nome: a.nome, conteudo: a.conteudo });
-        else novaPlanilha = { nome: a.nome, linhas: a.linhas };
+        else novaPlanilha = { nome: a.nome, linhas: a.linhas, arquivo: a.arquivo };
       } catch (e) { toast.error(e.message); }
     }
     if (!novosXml.length && !novaPlanilha) return;
@@ -156,6 +177,16 @@ export default function ImportacaoXML() {
       toast.error(e.response?.data?.detail || "Não foi possível analisar os arquivos.");
     } finally { setBusy(null); }
   };
+
+  // ---------- catálogo de produtos detectado ----------
+  const catalogo = useMemo(() => (planilha ? pareceCatalogo(planilha.linhas) : null), [planilha]);
+  useEffect(() => { if (catalogo) api.get("/representadas").then(r => setRepsCat(r.data || [])).catch(() => {}); }, [catalogo]);
+  const repSugerida = useMemo(() => {
+    if (!catalogo || catalogo.iMarca < 0 || !repsCat.length) return repsCat.length === 1 ? repsCat[0].id : "";
+    const marcas = new Set(planilha.linhas.slice(catalogo.indiceCab + 1).map(l => normCab((l || [])[catalogo.iMarca])).filter(Boolean));
+    const r = repsCat.find(x => marcas.has(normCab(x.nome_fantasia)) || marcas.has(normCab(x.razao_social)));
+    return r ? r.id : (repsCat.length === 1 ? repsCat[0].id : "");
+  }, [catalogo, repsCat, planilha]);
 
   // ---------- colunas: validação ao vivo + aplica sozinho ao trocar ----------
   const faltandoAoVivo = (m) => {
@@ -298,8 +329,27 @@ export default function ImportacaoXML() {
         </div>
       )}
 
+      {catalogo && (
+        <div className="mt-6 rounded-2xl border border-[#075BFF]/30 bg-[#075BFF]/5 p-5">
+          <p className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <FileSpreadsheet className="w-4 h-4 text-[#075BFF]" /> Esta planilha é um catálogo de produtos
+          </p>
+          <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
+            Ela tem colunas de produto (nome, código, EAN, preço…), mas não tem número de nota, data nem cliente — então não dá para
+            criar pedidos com ela. Importe como <b>produtos da representada</b> (eles aparecem na hora de lançar pedidos).
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button onClick={() => setProdutosAberto(true)} className="bg-[#075BFF] hover:bg-blue-600">Importar como produtos</Button>
+            <Button variant="outline" onClick={() => { setPlanilha(null); setMapa(null); analisar({ xs: xmls, pl: null }); }}>Remover planilha</Button>
+          </div>
+        </div>
+      )}
+
+      <ImportarProdutos open={produtosAberto} onOpenChange={setProdutosAberto} representadas={repsCat}
+                        representadaId={repSugerida} arquivoInicial={planilha?.arquivo} />
+
       {/* ===== 2. Colunas da planilha ===== */}
-      {pl && (
+      {pl && !catalogo && (
         <div className="mt-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <div>
@@ -540,7 +590,7 @@ export default function ImportacaoXML() {
         </div>
       )}
 
-      {analise && !notas.length && !resultado && !busy && (analise.erros.length > 0 || pl) && (
+      {analise && !notas.length && !resultado && !busy && !catalogo && (analise.erros.length > 0 || pl) && (
         <p className="mt-4 text-sm text-slate-500">Nenhuma nota para importar{pl?.faltando?.length ? " — ajuste as colunas da planilha acima." : "."}</p>
       )}
 
